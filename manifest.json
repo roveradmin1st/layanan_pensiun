@@ -1,0 +1,10 @@
+{
+  "name": "Layanan Pensiunan — Enterprise Financial Platform",
+  "short_name": "Layanan Pensiunan",
+  "description": "Platform Operasional & Simulasi Kredit Pensiunan (AMS2, BSI Prapensiun, Simas Jiwa, & Mitra Bank)",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f4f6fb",
+  "theme_color": "#351078",
+  "orientation": "portrait-primary"
+}

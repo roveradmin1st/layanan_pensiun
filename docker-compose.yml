@@ -1,0 +1,48 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: lp_enterprise_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: lp_admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lp_secret_2026}
+      POSTGRES_DB: layanan_pensiunan
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/schema.postgres.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    ports:
+      - "5432:5432"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: lp_enterprise_api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      JWT_SECRET: ${JWT_SECRET:-lp_enterprise_jwt_secret_2026_ams2_bsi}
+      DATABASE_URL: postgresql://lp_admin:${POSTGRES_PASSWORD:-lp_secret_2026}@postgres:5432/layanan_pensiunan
+    volumes:
+      - ./backend/data:/app/data
+    ports:
+      - "4000:4000"
+    depends_on:
+      - postgres
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: lp_enterprise_web
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5" />
+  <meta name="theme-color" content="#351080" />
+  <meta name="description" content="LAYANAN PENSIUNAN — Solusi Kredit Pensiun. Amanah • Terpercaya • Dekat dengan Anda. CALC PLATINUM Simulasi Kredit Platinum & Multi-Mitra Bank." />
+  <link rel="icon" href="./assets/img/favicon.png" />
+  <link rel="manifest" href="./manifest.json" />
+  <title>layananpensiunan.com — LAYANAN PENSIUNAN | Solusi Kredit Pensiun</title>
+  <link rel="stylesheet" href="./assets/css/emergent.css" />
+  <link rel="stylesheet" href="./assets/css/styles.css" />
+</head>
+<body>
+  <!-- ==================== LOGIN SCREEN (AUTH SHELL IDENTIK EMERGENT) ==================== -->
+  <div id="authScreen" class="grid min-h-screen bg-white lg:grid-cols-2" style="display:none">
+    <div class="flex flex-col px-6 py-10 sm:px-12 lg:px-20">
+      <div class="flex flex-1 flex-col justify-center">
+        <div class="mx-auto w-full max-w-[400px] lp-fade">
+          <img id="loginLogoVert" src="./assets/img/layanan-pensiunan-logo-vertical.png" alt="LAYANAN PENSIUNAN" class="lp-logo w-auto h-28 mb-8 hidden sm:block" />
+          <img id="loginLogoHoriz" src="./assets/img/layanan-pensiunan-logo-horizontal.png" alt="LAYANAN PENSIUNAN" class="lp-logo w-auto h-14 mb-8 sm:hidden" />
+          <p class="lp-eyebrow">Portal Internal</p>
+          <h1 class="mt-2 font-display text-3xl font-bold text-[#17223B]">Masuk ke akun Anda</h1>
+          <p class="mt-2 text-sm text-slate-500">Akun dibuat dan diundang oleh administrator yang berwenang.</p>
+
+          <form id="loginForm" class="mt-8 space-y-5">
+            <div id="loginErrorBox" class="hidden items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700"></div>
+            <div class="space-y-2">
+              <label for="loginEmail" class="text-sm font-medium text-[#17223B]">Email</label>
+              <input id="loginEmail" type="email" required value="teguh@layananpensiunan.com" class="lp-input h-11" />
+            </div>
+            <div class="space-y-2">
+              <div class="flex items-center justify-between">
+                <label for="loginPassword" class="text-sm font-medium text-[#17223B]">Kata Sandi</label>
+                <span class="text-xs font-semibold text-[#5720B8]">Akses RBAC Terenkripsi</span>
+              </div>
+              <div class="relative">
+                <input id="loginPassword" type="password" required value="enterprise2026" class="lp-input h-11 pr-11" />
+                <button type="button" id="btnTogglePwd" class="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1.5 text-slate-500 hover:text-[#351080]">👁</button>
+              </div>
+            </div>
+            <button type="submit" class="lp-btn lp-btn-cta h-11 w-full text-[15px] font-semibold">Masuk</button>
+
+            <div class="rounded-xl border border-slate-200 bg-[#F5F6FA] p-3.5 space-y-2">
+              <p class="text-[11px] font-bold uppercase tracking-wider text-[#351080]">Pilih Mode Role Cepat (1-Klik):</p>
+              <div class="grid grid-cols-3 gap-1.5">
+                <button type="button" onclick="App.quickLoginRole('super_admin')" class="rounded-lg bg-[#351080] px-2 py-2 text-[11px] font-semibold text-white hover:opacity-90">Super Admin</button>
+                <button type="button" onclick="App.quickLoginRole('admin_ops')" class="rounded-lg bg-[#078D67] px-2 py-2 text-[11px] font-semibold text-white hover:opacity-90">Admin Ops</button>
+                <button type="button" onclick="App.quickLoginRole('marketing')" class="rounded-lg bg-[#F28A19] px-2 py-2 text-[11px] font-semibold text-white hover:opacity-90">Marketing</button>
+              </div>
+            </div>
+
+            <p class="flex items-center justify-center gap-1.5 text-xs text-slate-400">
+              <span class="text-[#078D67]">✔</span> Koneksi aman • Akses berbasis peran
+            </p>
+          </form>
+        </div>
+      </div>
+      <div class="mt-10 text-center text-[11px] leading-relaxed text-slate-500">
+        <p class="font-semibold text-[#351080]">© by Teguh Pranada-Layanan Pensiunan Pematangsiantar</p>
+        <p>Prompt by Koperasi Asia Madani Sejahtera, Build Application by Teguh Pranada-Layanan Pensiunan Pematangsiantar, Sumatera Utara.</p>
+      </div>
+    </div>
+    <div class="relative hidden overflow-hidden lg:block">
+      <img src="https://images.pexels.com/photos/7424584/pexels-photo-7424584.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=1100&w=1100" alt="" class="absolute inset-0 h-full w-full object-cover" />
+      <div class="absolute inset-0 bg-[#351080]/55"></div>
+      <div class="absolute inset-x-0 bottom-0 p-14 text-white">
+        <p class="mb-4 text-xs font-semibold uppercase tracking-[0.2em] text-white/80">Solusi Kredit Pensiun</p>
+        <h2 class="font-display text-4xl font-bold leading-tight">Amanah • Terpercaya •<br />Dekat dengan Anda</h2>
+        <p class="mt-4 max-w-md text-sm text-white/80">Portal internal untuk pengelolaan leads, simulasi Calc Platinum & Mitra Bank, dan pendampingan para pensiunan.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== MAIN APP SHELL (IDENTIK EMERGENT APPLAYOUT) ==================== -->
+  <div id="appShell" class="min-h-screen bg-[#F5F6FA]">
+    <!-- Desktop Fixed Left Sidebar (264px) -->
+    <aside class="fixed inset-y-0 left-0 z-30 hidden w-[264px] flex-col border-r border-slate-200/70 bg-white lg:flex">
+      <div class="px-6 pb-6 pt-7">
+        <img id="sidebarLogoDesktop" src="./assets/img/layanan-pensiunan-logo-horizontal.png" alt="LAYANAN PENSIUNAN" class="lp-logo w-auto h-11" />
+      </div>
+      <div class="flex-1 overflow-y-auto px-4">
+        <nav id="desktopNav" class="flex flex-col gap-1" aria-label="Navigasi utama"></nav>
+      </div>
+      <div class="p-4">
+        <div id="desktopUserBox" class="flex items-center gap-3 rounded-xl border border-slate-100 bg-[#F5F6FA] p-3"></div>
+      </div>
+    </aside>
+
+    <!-- Mobile Sticky Header -->
+    <header class="sticky top-0 z-20 flex items-center justify-between border-b border-slate-200/70 bg-white px-4 py-3 lg:hidden">
+      <img id="headerLogoMobile" src="./assets/img/layanan-pensiunan-logo-horizontal.png" alt="LAYANAN PENSIUNAN" class="lp-logo w-auto h-9" />
+      <button id="btnOpenMobileDrawer" type="button" class="rounded-md p-2 text-[#351080]" aria-label="Buka menu">
+        <svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+      </button>
+    </header>
+
+    <!-- Mobile Left Sheet Drawer -->
+    <div id="mobileDrawerBackdrop" class="lp-sheet-backdrop"></div>
+    <aside id="mobileDrawerPanel" class="lp-sheet-left">
+      <div class="flex items-center justify-between mb-6">
+        <img id="sidebarLogoMobile" src="./assets/img/layanan-pensiunan-logo-horizontal.png" alt="LAYANAN PENSIUNAN" class="lp-logo w-auto h-11" />
+        <button id="btnCloseMobileDrawer" type="button" class="rounded-md p-1.5 text-slate-400 hover:text-[#351080]">✕</button>
+      </div>
+      <div class="flex-1 overflow-y-auto">
+        <nav id="mobileDrawerNav" class="flex flex-col gap-1"></nav>
+      </div>
+      <div id="mobileDrawerUserBox" class="mt-4 flex items-center gap-3 rounded-xl border border-slate-100 bg-[#F5F6FA] p-3"></div>
+    </aside>
+
+    <!-- Content Area Wrapper -->
+    <div class="lg:pl-[264px] lp-main-wrapper">
+      <!-- Top Role Switcher Strip for Instant Testing of the 3 Roles -->
+      <div class="lp-role-strip">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="font-semibold opacity-90">Simulasi Hak Akses Role (RBAC):</span>
+          <button type="button" class="lp-role-pill" data-role-switch="super_admin" onclick="App.switchRole('super_admin')">🛡️ Super Admin</button>
+          <button type="button" class="lp-role-pill" data-role-switch="admin_ops" onclick="App.switchRole('admin_ops')">📋 Admin Operasional</button>
+          <button type="button" class="lp-role-pill" data-role-switch="marketing" onclick="App.switchRole('marketing')">📱 Marketing</button>
+        </div>
+        <div class="flex items-center gap-2 text-xs">
+          <span class="opacity-80">Akun Aktif:</span>
+          <select id="topUserSwitcher" class="rounded-md bg-white/15 px-2 py-1 text-xs font-semibold text-white border border-white/25"></select>
+        </div>
+      </div>
+
+      <!-- Main Dynamic Route Outlet -->
+      <main id="mainOutlet" class="mx-auto max-w-[1360px] px-4 py-8 sm:px-6 lg:px-10 lg:py-10"></main>
+
+      <!-- Official Footer (Identik Emergent) -->
+      <footer class="mx-auto flex max-w-[1360px] flex-col items-center gap-3 border-t border-slate-200/70 px-4 py-8 sm:px-6 lg:px-10">
+        <img id="footerLogo" src="./assets/img/layanan-pensiunan-logo-horizontal.png" alt="LAYANAN PENSIUNAN" class="lp-logo w-auto h-9" />
+        <div class="text-center text-[11px] leading-relaxed text-slate-500">
+          <p class="font-semibold text-[#351080]">© by Teguh Pranada-Layanan Pensiunan Pematangsiantar</p>
+          <p>Prompt by Koperasi Asia Madani Sejahtera, Build Application by Teguh Pranada-Layanan Pensiunan Pematangsiantar, Sumatera Utara.</p>
+        </div>
+      </footer>
+    </div>
+
+    <!-- Mobile Bottom Navigation -->
+    <nav id="mobileBottomBar" class="lp-mobile-bottom-nav"></nav>
+  </div>
+
+  <!-- ==================== RIGHT SLIDE-OVER SHEET (LeadDetailSheet & AppDetail) ==================== -->
+  <div id="rightSheetBackdrop" class="lp-sheet-backdrop" onclick="App.closeRightSheet()"></div>
+  <aside id="rightSheetPanel" class="lp-sheet-panel"></aside>
+
+  <!-- ==================== MODAL DIALOG (LeadForm, Assign, SimDetail, Claim, User) ==================== -->
+  <div id="modalDialogBackdrop" class="lp-dialog-backdrop">
+    <div id="modalDialogBox" class="lp-dialog-box"></div>
+  </div>
+
+  <!-- ==================== TOAST CONTAINER ==================== -->
+  <div id="toastStack" class="lp-toast-stack"></div>
+
+  <!-- Scripts -->
+  <script src="./assets/js/config/brand-assets.js"></script>
+  <script src="./assets/js/config/default-parameters.js"></script>
+  <script src="./assets/js/core/rbac-guard.js"></script>
+  <script src="./assets/js/core/storage-service.js"></script>
+  <script src="./assets/js/engines/ams2-engine.js"></script>
+  <script src="./assets/js/engines/bsi-simas-engine.js"></script>
+  <script src="./assets/js/engines/partner-bank-engine.js"></script>
+  <script src="./assets/js/core/pdf-generator.js"></script>
+  <script src="./assets/js/app.js"></script>
+</body>
+</html>
