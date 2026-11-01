@@ -501,18 +501,18 @@ function createInitialState() {
       booking_date: "2026-10-23",
       credit_no: "PK-AMS2-2026-08891",
       amount: 2200000,
-      status: "REVIEW",
+      status: "PAID",
       notes: "Pengajuan klaim insentif pencairan Platinum Rp110 Juta.",
       revision_note: null,
       reject_reason: null,
       booking_proof: "foto_akad_endang.pdf",
-      payment_proof: null,
-      paid_at: null,
-      paid_by: null,
-      payment_note: null,
+      payment_proof: "bukti_transfer_endang.pdf",
+      paid_at: "2026-10-24T10:00:00.000Z",
+      paid_by: "RINA KARTIKA SARI",
+      payment_note: "Lunas ditransfer ke rekening Budi/Andi.",
       history: [
         { id: "ch-1", action: "SUBMITTED", note: "Klaim diajukan oleh Marketing beserta foto akad", user_name: "ANDI PRATAMA", at: "2026-10-23T14:00:00.000Z" },
-        { id: "ch-2", action: "REVIEW", note: "Sedang diverifikasi oleh Admin Operasional", user_name: "RINA KARTIKA SARI", at: "2026-10-24T09:15:00.000Z" }
+        { id: "ch-2", action: "PAID", note: "Klaim disetujui & dibayarkan (PAID)", user_name: "RINA KARTIKA SARI", at: "2026-10-24T10:00:00.000Z" }
       ],
       created_at: "2026-10-23T13:50:00.000Z"
     }

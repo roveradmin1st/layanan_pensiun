@@ -470,34 +470,23 @@ try {
   assert.equal(unchangedClaim.status, "SUBMITTED", "Status klaim harus tetap SUBMITTED setelah request gagal");
   assert.equal(unchangedClaim.amount, defaultClaimAmount, "Nominal klaim harus tetap utuh setelah request gagal");
 
-  // Admin Ops approves claim -> 200 OK
+  // Admin Ops approves claim -> directly sets status to PAID (disetujui & lunas) -> 200 OK
   const okApproveClaim = await api("POST", `/api/claims/${activeClaimId}/action`, {
     token: adminOpsToken,
-    body: { action: "approve", note: "Disetujui Admin Operasional" }
+    body: { action: "approve", note: "Disetujui & Dibayarkan Admin Operasional" }
   });
   assert.equal(okApproveClaim.status, 200);
-  assert.equal(okApproveClaim.data.status, "APPROVED");
+  assert.equal(okApproveClaim.data.status, "PAID");
+  assert.ok(okApproveClaim.data.paid_at, "paid_at harus terisi saat klaim disetujui/PAID");
+  assert.equal(okApproveClaim.data.paid_by, "RINA KARTIKA SARI", "paid_by harus mencatat user yang menyetujui");
 
-  // Admin Ops attempting to pay APPROVED claim WITHOUT payment proof -> 400 Bad Request
-  const payWithoutProof = await api("POST", `/api/claims/${activeClaimId}/pay`, {
+  // Attempting to approve or pay already PAID claim -> 400/409 rejected
+  const dupApproveClaim = await api("POST", `/api/claims/${activeClaimId}/action`, {
     token: adminOpsToken,
-    body: { note: "Tanpa bukti transfer" }
+    body: { action: "approve", note: "Approve ulang" }
   });
-  assert.equal(payWithoutProof.status, 400, "Pembayaran klaim tanpa bukti transfer wajib ditolak (400)");
+  assert.equal(dupApproveClaim.status, 400, "Persetujuan ulang pada klaim yang sudah PAID harus ditolak (400)");
 
-  // Admin Ops pays APPROVED claim WITH payment proof -> 200 OK
-  const form = new FormData();
-  form.append("file", new Blob(["%PDF-1.4 Bukti Transfer Insentif"], { type: "application/pdf" }), "bukti_transfer.pdf");
-  form.append("note", "Lunas via Transfer Bank");
-  const okPayClaim = await api("POST", `/api/claims/${activeClaimId}/pay`, {
-    token: adminOpsToken,
-    body: form,
-    isForm: true
-  });
-  assert.equal(okPayClaim.status, 200);
-  assert.equal(okPayClaim.data.status, "PAID");
-
-  // Duplicate payment attempt -> 409 Conflict
   const formDup = new FormData();
   formDup.append("file", new Blob(["%PDF-1.4 Bukti Transfer"], { type: "application/pdf" }), "bukti_transfer.pdf");
   const dupPayClaim = await api("POST", `/api/claims/${activeClaimId}/pay`, {
@@ -505,7 +494,7 @@ try {
     body: formDup,
     isForm: true
   });
-  assert.equal(dupPayClaim.status, 409, "Pembayaran klaim ganda harus ditolak (409)");
+  assert.equal(dupPayClaim.status, 409, "Pembayaran ulang pada klaim yang sudah PAID harus ditolak (409)");
 
   console.log("  ✓ PASS: Seluruh aturan bisnis & integritas transaksional terverifikasi.");
 } finally {

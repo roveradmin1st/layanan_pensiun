@@ -21,7 +21,24 @@ const sel = "h-10 rounded-md border border-input bg-white px-3 text-sm";
 export const PendingBadge = ({ app }) => {
   if (app.rejected) return <span className="rounded-md bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-700">DITOLAK BANK</span>;
   const p = app.pending;
-  if (!p && app.stage === "booking_live") return <span className="rounded-md bg-[#078D67] px-2 py-0.5 text-xs font-semibold text-white">BOOKING/LIVE</span>;
+  if (!p && app.stage === "booking_live") {
+    if (app.claim?.status === "PAID") {
+      return (
+        <span className="inline-flex items-center gap-1.5 rounded-md bg-[#078D67] px-2.5 py-0.5 text-xs font-bold text-white shadow-sm" data-testid="badge-booking-paid">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-200" />
+          BOOKING • PAID
+        </span>
+      );
+    }
+    if (app.claim?.status) {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-md bg-[#5720B8] px-2 py-0.5 text-xs font-semibold text-white">
+          BOOKING • {app.claim.status}
+        </span>
+      );
+    }
+    return <span className="rounded-md bg-[#078D67] px-2 py-0.5 text-xs font-semibold text-white">BOOKING/LIVE</span>;
+  }
   if (!p) return <span className="rounded-md bg-[#078D67]/10 px-2 py-0.5 text-xs font-semibold text-[#078D67]">Diproses bank</span>;
   const cls = p.type === "revisi" ? "bg-[#F28A19]/12 text-[#B5620A]" : p.type === "validate" ? "bg-red-50 text-red-700" : "bg-[#5720B8]/10 text-[#5720B8]";
   return <span className={`rounded-md px-2 py-0.5 text-xs font-semibold ${cls}`}>{p.type.replace("_", " ").toUpperCase()} • {PARTY[p.party]}</span>;
@@ -286,24 +303,40 @@ function AppDetail({ appId, onClose, onChanged }) {
             </div>
 
             {app.booking && (
-              <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50/80 p-3.5 text-xs text-emerald-900" data-testid="booking-info">
-                <div className="rounded-full bg-emerald-200/70 p-1 text-emerald-800 shrink-0 mt-0.5">
-                  <Check className="h-4 w-4" />
+              <div className="space-y-2" data-testid="booking-info">
+                <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50/80 p-3.5 text-xs text-emerald-900">
+                  <div className="rounded-full bg-emerald-200/70 p-1 text-emerald-800 shrink-0 mt-0.5">
+                    <Check className="h-4 w-4" />
+                  </div>
+                  <div className="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-3">
+                    <div>
+                      <span className="block text-[10px] font-semibold uppercase tracking-wider text-emerald-700">Tanggal Booking</span>
+                      <b className="mt-0.5 block text-xs font-bold text-emerald-950">{fmtDate(app.booking.date)}</b>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] font-semibold uppercase tracking-wider text-emerald-700">Nomor Kredit Bank</span>
+                      <b className="mt-0.5 block font-mono text-xs font-bold text-emerald-950">{app.booking.credit_no}</b>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] font-semibold uppercase tracking-wider text-emerald-700">Dikonfirmasi Oleh</span>
+                      <b className="mt-0.5 block truncate text-xs font-bold text-emerald-950" title={app.booking.confirmed_by}>{app.booking.confirmed_by}</b>
+                    </div>
+                  </div>
                 </div>
-                <div className="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-3">
-                  <div>
-                    <span className="block text-[10px] font-semibold uppercase tracking-wider text-emerald-700">Tanggal Booking</span>
-                    <b className="mt-0.5 block text-xs font-bold text-emerald-950">{fmtDate(app.booking.date)}</b>
+                {app.claim && (
+                  <div className="flex items-center justify-between rounded-lg border border-emerald-100 bg-white px-3 py-2 text-xs">
+                    <span className="text-slate-600 font-medium">
+                      Status Insentif Marketing:
+                    </span>
+                    <span className={`font-bold px-2 py-0.5 rounded text-[11px] ${
+                      app.claim.status === "PAID"
+                        ? "bg-emerald-100 text-emerald-800"
+                        : "bg-purple-100 text-purple-800"
+                    }`}>
+                      {app.claim.status === "PAID" ? "LUNAS (PAID)" : app.claim.status} • {rp(app.claim.amount)}
+                    </span>
                   </div>
-                  <div>
-                    <span className="block text-[10px] font-semibold uppercase tracking-wider text-emerald-700">Nomor Kredit Bank</span>
-                    <b className="mt-0.5 block font-mono text-xs font-bold text-emerald-950">{app.booking.credit_no}</b>
-                  </div>
-                  <div>
-                    <span className="block text-[10px] font-semibold uppercase tracking-wider text-emerald-700">Dikonfirmasi Oleh</span>
-                    <b className="mt-0.5 block truncate text-xs font-bold text-emerald-950" title={app.booking.confirmed_by}>{app.booking.confirmed_by}</b>
-                  </div>
-                </div>
+                )}
               </div>
             )}
 
