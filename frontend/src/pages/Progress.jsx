@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { Search, Loader2, Check, FileUp, FileText, AlertTriangle } from "lucide-react";
+import { Search, Loader2, Check, FileUp, FileText, AlertTriangle, AlertCircle } from "lucide-react";
 import { api, errMsg, openFile } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { fmtDate, fmtDateTime, isAdmin, rp } from "../lib/format";
@@ -27,20 +27,62 @@ export const PendingBadge = ({ app }) => {
   return <span className={`rounded-md px-2 py-0.5 text-xs font-semibold ${cls}`}>{p.type.replace("_", " ").toUpperCase()} • {PARTY[p.party]}</span>;
 };
 
-export const StageTracker = ({ app }) => (
-  <ol className="grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="stage-tracker">
-    {app.stages.map((s, i) => {
-      const done = i < app.stage_index || (i === app.stage_index && s.key === "booking_live");
-      const cur = i === app.stage_index;
-      return (
-        <li key={s.key} className={`rounded-lg border px-3 py-2 text-[11px] font-semibold ${done ? "border-[#078D67]/30 bg-[#078D67]/8 text-[#078D67]" : cur ? (app.rejected ? "border-red-300 bg-red-50 text-red-700" : "border-[#5720B8] bg-[#5720B8]/8 text-[#351080]") : "border-slate-200 text-slate-400"}`} data-testid={`stage-${s.key}`}>
-          <span className="flex items-center gap-1">{done && <Check className="h-3 w-3" />}{i + 1}. {s.label}</span>
-          {app.stage_data?.[s.key] && <span className="mt-0.5 block font-normal">{app.stage_data[s.key].by_name} • {fmtDate(app.stage_data[s.key].date || app.stage_data[s.key].at)}</span>}
-        </li>
-      );
-    })}
-  </ol>
-);
+export const StageTracker = ({ app }) => {
+  const normalStages = (app.stages || []).filter((s) => s.key !== "ditolak");
+  return (
+    <div className="space-y-3" data-testid="stage-tracker">
+      {app.rejected && (
+        <div className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+          <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-red-600" />
+          <div>
+            <p className="font-bold text-red-800">Pengajuan Ditolak Bank</p>
+            <p className="mt-0.5 text-red-700">{app.reject_reason || "Tidak ada rincian alasan penolakan."}</p>
+          </div>
+        </div>
+      )}
+      <ol className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {normalStages.map((s, i) => {
+          const done = i < app.stage_index || (i === app.stage_index && s.key === "booking_live");
+          const cur = i === app.stage_index && !done;
+          return (
+            <li
+              key={s.key}
+              className={`flex flex-col justify-between rounded-xl border p-2.5 text-xs transition ${
+                done
+                  ? "border-emerald-200 bg-emerald-50/70 text-emerald-800"
+                  : cur
+                  ? app.rejected
+                    ? "border-red-300 bg-red-50 text-red-700"
+                    : "border-[#5720B8] bg-[#5720B8]/10 text-[#351080] shadow-sm"
+                  : "border-slate-200 bg-slate-50/60 text-slate-400"
+              }`}
+              data-testid={`stage-${s.key}`}
+            >
+              <div className="flex items-center gap-1.5 font-bold">
+                {done && <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600" />}
+                <span className="truncate">{i + 1}. {s.label}</span>
+              </div>
+              <div className="mt-2 border-t border-slate-100/80 pt-1.5 text-[10px] leading-tight">
+                {app.stage_data?.[s.key] ? (
+                  <>
+                    <p className="truncate font-medium text-slate-700" title={app.stage_data[s.key].by_name}>
+                      {app.stage_data[s.key].by_name}
+                    </p>
+                    <p className="text-slate-400 mt-0.5">
+                      {fmtDate(app.stage_data[s.key].date || app.stage_data[s.key].at)}
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-slate-400 font-normal">Belum diproses</p>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+};
 
 function DocChecklist({ app, admin, canUpload, onChanged }) {
   const ref = useRef();
@@ -61,23 +103,66 @@ function DocChecklist({ app, admin, canUpload, onChanged }) {
   return (
     <div data-testid="doc-checklist">
       <input ref={ref} type="file" accept="application/pdf,.pdf" className="hidden" onChange={(e) => upload(e.target.files[0])} data-testid="app-doc-file-input" />
-      <p className="mb-2 text-xs text-slate-500" data-testid="doc-progress">Kelengkapan: <b className="text-[#17223B]">{done}/{app.checklist.length}</b> dokumen (PDF)</p>
-      <ul className="divide-y rounded-lg border">
+      <p className="mb-2 text-xs text-slate-500" data-testid="doc-progress">
+        Kelengkapan Berkas: <b className="font-semibold text-slate-800">{done}/{app.checklist.length}</b> dokumen (PDF)
+      </p>
+      <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white">
         {app.checklist.map((d) => (
-          <li key={d.key} className="flex flex-col gap-2 px-3 py-2.5 text-sm sm:flex-row sm:items-center sm:justify-between" data-testid={`doc-row-${d.key}`}>
-            <div className="min-w-0">
-              <p className="font-medium text-[#17223B]">{d.label} <span className="text-[11px] font-normal text-slate-400">• {d.group}</span></p>
-              {d.filename ? <button onClick={() => openFile(`/applications/${app.id}/documents/${d.key}`)} className="flex items-center gap-1 text-xs text-[#5720B8] hover:underline"><FileText className="h-3 w-3" />{d.filename} • {fmtDateTime(d.uploaded_at)}{d.versions > 1 && ` • v${d.versions}`}</button>
-                : <p className="text-xs text-slate-400">Belum diunggah</p>}
-              {d.status === "ditolak" && <p className="text-xs text-red-600">Revisi: {d.note}</p>}
+          <li key={d.key} className="flex flex-col gap-2 p-3 text-sm sm:flex-row sm:items-center sm:justify-between" data-testid={`doc-row-${d.key}`}>
+            <div className="min-w-0 flex-1 pr-2">
+              <p className="font-semibold text-[#17223B]">
+                {d.label} <span className="text-[11px] font-normal text-slate-400">• {d.group}</span>
+              </p>
+              {d.filename ? (
+                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+                  <button
+                    onClick={() => openFile(`/applications/${app.id}/documents/${d.key}`)}
+                    className="flex max-w-[280px] items-center gap-1 truncate font-medium text-[#5720B8] hover:underline"
+                    title={d.filename}
+                  >
+                    <FileText className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">{d.filename}</span>
+                  </button>
+                  <span className="text-slate-400">•</span>
+                  <span className="whitespace-nowrap">{fmtDateTime(d.uploaded_at)}</span>
+                  {d.versions > 1 && (
+                    <span className="rounded bg-slate-100 px-1.5 py-0.2 text-[10px] font-medium text-slate-600">
+                      v{d.versions}
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <p className="mt-0.5 text-xs text-slate-400">Belum diunggah</p>
+              )}
+              {d.status === "ditolak" && <p className="mt-1 text-xs font-semibold text-red-600">Revisi: {d.note}</p>}
             </div>
-            <div className="flex shrink-0 items-center gap-1.5">
-              <span className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ${d.status === "diterima" ? "bg-[#078D67]/10 text-[#078D67]" : d.status === "ditolak" ? "bg-red-50 text-red-700" : d.status ? "bg-[#5720B8]/10 text-[#5720B8]" : "bg-slate-100 text-slate-500"}`}>{d.status || "kosong"}</span>
-              {canUpload && <Button size="sm" variant="outline" onClick={() => { setTarget(d.key); ref.current.click(); }} data-testid={`upload-${d.key}`}><FileUp className="h-3.5 w-3.5" /></Button>}
-              {admin && d.status && app.stage === "upload_dokumen" && <>
-                <Button size="sm" variant="ghost" className="text-[#078D67]" onClick={() => review(d.key, "diterima")} data-testid={`accept-${d.key}`}>Terima</Button>
-                <Button size="sm" variant="ghost" className="text-red-600" onClick={() => review(d.key, "ditolak")} data-testid={`reject-${d.key}`}>Tolak</Button>
-              </>}
+            <div className="flex shrink-0 items-center gap-2">
+              <span className={`rounded-md px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider ${
+                d.status === "diterima"
+                  ? "bg-[#078D67]/10 text-[#078D67]"
+                  : d.status === "ditolak"
+                  ? "bg-red-50 text-red-700"
+                  : d.status
+                  ? "bg-[#5720B8]/10 text-[#5720B8]"
+                  : "bg-slate-100 text-slate-500"
+              }`}>
+                {d.status ? d.status.toUpperCase() : "KOSONG"}
+              </span>
+              {canUpload && (
+                <Button size="sm" variant="outline" onClick={() => { setTarget(d.key); ref.current.click(); }} data-testid={`upload-${d.key}`} title="Unggah PDF" className="h-8 px-2.5">
+                  <FileUp className="h-3.5 w-3.5" />
+                </Button>
+              )}
+              {admin && d.status && app.stage === "upload_dokumen" && (
+                <>
+                  <Button size="sm" variant="ghost" className="h-8 text-[#078D67] hover:bg-emerald-50 px-2 font-medium" onClick={() => review(d.key, "diterima")} data-testid={`accept-${d.key}`}>
+                    Terima
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-8 text-red-600 hover:bg-red-50 px-2 font-medium" onClick={() => review(d.key, "ditolak")} data-testid={`reject-${d.key}`}>
+                    Tolak
+                  </Button>
+                </>
+              )}
             </div>
           </li>
         ))}
@@ -97,7 +182,7 @@ function ActionPanel({ app, user, onChanged }) {
   };
   const acts = [];
   const pre = app.stage === "upload_dokumen";
-  if (app.rejected) return <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">Ditolak bank: {app.reject_reason}</p>;
+  if (app.rejected) return <p className="rounded-xl bg-red-50 p-3 text-sm text-red-700">Ditolak bank: {app.reject_reason}</p>;
   if (pre && p.party === "marketing" && (role === "marketing" || isAdmin(user))) acts.push(["submit", "Ajukan untuk Pemeriksaan", "bg-[#351080]"]);
   if (isAdmin(user) && pre && !["validate", "pemeriksaan_validate"].includes(p.type)) acts.push(["request_revision", "Kembalikan ke Marketing (Revisi)", "bg-[#F28A19]"]);
   if (isAdmin(user) && pre && p.party === "admin_ops" && p.type === "pemeriksaan") acts.push(["forward", `Teruskan ke ${app.bank_name}`, "bg-[#078D67]", `Teruskan pengajuan ke ${app.bank_name}?`]);
@@ -124,7 +209,7 @@ function ActionPanel({ app, user, onChanged }) {
         </>}
       </div>}
       <div className="flex flex-wrap gap-2">
-        {acts.map(([a, label, cls, conf]) => <Button key={a} disabled={busy} onClick={() => run(a, conf)} className={`${cls} text-white hover:opacity-90`} data-testid={`action-${a}`}>{label}</Button>)}
+        {acts.map(([a, label, cls, conf]) => <Button key={a} disabled={busy} onClick={() => run(a, conf)} className={`${cls} text-white hover:opacity-90 font-medium`} data-testid={`action-${a}`}>{label}</Button>)}
       </div>
     </div>
   );
@@ -142,20 +227,112 @@ function AppDetail({ appId, onClose, onChanged }) {
       <SheetContent className="w-full overflow-y-auto bg-white sm:max-w-2xl" data-testid="app-detail-sheet">
         {!app ? <div className="flex justify-center py-20"><Loader2 className="h-6 w-6 animate-spin text-[#5720B8]" /></div> : (
           <div className="space-y-6">
-            <SheetHeader className="text-left">
-              <p className="lp-eyebrow">{app.app_no} • {app.bank_name}</p>
-              <SheetTitle className="font-display text-2xl text-[#17223B]" data-testid="app-detail-name">{app.lead_name}</SheetTitle>
-              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500"><PendingBadge app={app} /><span>{app.debtor_type}{app.dapem && ` • ${app.dapem}`}</span><span>• {app.marketing_name} • {app.branch}</span><span>• {rp(app.plafond)} / {app.tenor} bln</span></div>
+            <SheetHeader className="text-left border-b border-slate-100 pb-4">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-mono text-xs font-bold text-[#5720B8]">{app.app_no}</span>
+                <PendingBadge app={app} />
+              </div>
+              <SheetTitle className="font-display text-2xl font-bold uppercase text-[#17223B]" data-testid="app-detail-name">
+                {app.lead_name}
+              </SheetTitle>
+
+              {/* Stat & Info Cards */}
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-2.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Plafond Pengajuan</p>
+                  <p className="mt-0.5 text-sm font-bold text-[#17223B] lp-num">{rp(app.plafond)}</p>
+                </div>
+                <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-2.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Tenor Kredit</p>
+                  <p className="mt-0.5 text-sm font-bold text-[#17223B]">{app.tenor} Bulan</p>
+                </div>
+                <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-2.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Mitra Pembiayaan</p>
+                  <p className="mt-0.5 truncate text-xs font-bold text-slate-800" title={app.bank_name}>{app.bank_name}</p>
+                </div>
+                <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-2.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Marketing / Cabang</p>
+                  <p className="mt-0.5 truncate text-xs font-bold text-slate-800" title={`${app.marketing_name} (${app.branch})`}>
+                    {app.marketing_name} • {app.branch}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+                <span className="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                  {app.debtor_type}
+                </span>
+                {app.dapem && (
+                  <span className="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
+                    Dapem: <b>{app.dapem}</b>
+                  </span>
+                )}
+              </div>
             </SheetHeader>
-            {app.pending?.note && <div className="flex gap-2 rounded-lg border border-[#F28A19]/30 bg-[#F28A19]/8 p-3 text-sm text-[#9A5200]" data-testid="pending-note"><AlertTriangle className="h-4 w-4 shrink-0" /><span><b>{PARTY[app.pending.party]}</b> perlu menindaklanjuti: {app.pending.note}</span></div>}
-            <StageTracker app={app} />
-            {app.booking && <p className="text-sm" data-testid="booking-info">Booking: <b>{fmtDate(app.booking.date)}</b> • No. kredit <b>{app.booking.credit_no}</b> • dikonfirmasi {app.booking.confirmed_by}</p>}
-            <div><p className="mb-2 font-display text-sm font-bold">Dokumen Calon Debitur</p><DocChecklist app={app} admin={isAdmin(user)} canUpload={canUpload} onChanged={changed} /></div>
-            <div className="rounded-xl border p-4"><p className="mb-3 font-display text-sm font-bold">Tindakan</p><ActionPanel app={app} user={user} onChanged={changed} /></div>
-            <div><p className="mb-3 font-display text-sm font-bold">Riwayat Aktivitas</p>
-              <ul className="space-y-3" data-testid="app-history">{[...app.history].reverse().map((h) => (
-                <li key={h.id} className="border-l-2 border-[#5720B8]/30 pl-3 text-sm"><p className="text-[#17223B]"><b className="capitalize">{h.action.replaceAll("_", " ")}</b>{h.note && ` — ${h.note}`}</p>
-                  <p className="text-[11px] text-slate-400">{h.user_name} ({PARTY[h.role]}) • {fmtDateTime(h.at)}</p></li>))}</ul></div>
+
+            {app.pending?.note && (
+              <div className="flex gap-2.5 rounded-xl border border-[#F28A19]/30 bg-[#F28A19]/8 p-3.5 text-sm text-[#9A5200]" data-testid="pending-note">
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold">{PARTY[app.pending.party] || "Petugas"} perlu menindaklanjuti:</span>
+                  <p className="mt-0.5">{app.pending.note}</p>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <p className="font-display text-sm font-bold text-[#17223B]">Progres 7 Tahapan Pengajuan</p>
+              <StageTracker app={app} />
+            </div>
+
+            {app.booking && (
+              <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50/80 p-3.5 text-xs text-emerald-900" data-testid="booking-info">
+                <div className="rounded-full bg-emerald-200/70 p-1 text-emerald-800 shrink-0 mt-0.5">
+                  <Check className="h-4 w-4" />
+                </div>
+                <div className="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-3">
+                  <div>
+                    <span className="block text-[10px] font-semibold uppercase tracking-wider text-emerald-700">Tanggal Booking</span>
+                    <b className="mt-0.5 block text-xs font-bold text-emerald-950">{fmtDate(app.booking.date)}</b>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] font-semibold uppercase tracking-wider text-emerald-700">Nomor Kredit Bank</span>
+                    <b className="mt-0.5 block font-mono text-xs font-bold text-emerald-950">{app.booking.credit_no}</b>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] font-semibold uppercase tracking-wider text-emerald-700">Dikonfirmasi Oleh</span>
+                    <b className="mt-0.5 block truncate text-xs font-bold text-emerald-950" title={app.booking.confirmed_by}>{app.booking.confirmed_by}</b>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <p className="font-display text-sm font-bold text-[#17223B]">Dokumen Calon Debitur</p>
+              <DocChecklist app={app} admin={isAdmin(user)} canUpload={canUpload} onChanged={changed} />
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-2">
+              <p className="font-display text-sm font-bold text-[#17223B]">Tindakan Tahapan</p>
+              <ActionPanel app={app} user={user} onChanged={changed} />
+            </div>
+
+            <div className="space-y-2">
+              <p className="font-display text-sm font-bold text-[#17223B]">Riwayat Aktivitas</p>
+              <ul className="space-y-2.5" data-testid="app-history">
+                {[...app.history].reverse().map((h) => (
+                  <li key={h.id} className="border-l-2 border-[#5720B8]/40 pl-3 text-sm">
+                    <p className="text-[#17223B]">
+                      <b className="capitalize font-semibold">{h.action.replaceAll("_", " ")}</b>
+                      {h.note && ` — ${h.note}`}
+                    </p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      {h.user_name} ({PARTY[h.role] || h.role}) • {fmtDateTime(h.at)}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
         )}
       </SheetContent>
@@ -177,7 +354,11 @@ export default function Progress() {
 
   return (
     <div>
-      <PageHeader eyebrow="Pengajuan" title="List Progress Leads" desc={user.role === "marketing" ? "Progress pengajuan calon debitur milik Anda." : user.role === "admin_ops" ? `Pengajuan marketing cabang ${user.branch}.` : "Seluruh pengajuan di semua cabang."} />
+      <PageHeader
+        eyebrow="Pengajuan"
+        title="List Progress Leads"
+        desc={user.role === "marketing" ? "Progress pengajuan calon debitur milik Anda." : user.role === "admin_ops" ? `Pengajuan marketing cabang ${user.branch}.` : "Seluruh pengajuan di semua cabang."}
+      />
       <div className="lp-card">
         <FilterBar>
           <div className="relative min-w-0 flex-1 sm:min-w-[220px]">
@@ -211,16 +392,16 @@ export default function Progress() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>ID</TableHead>
-                <TableHead>Calon Nasabah</TableHead>
-                {user.role !== "marketing" && <TableHead>Marketing</TableHead>}
-                <TableHead>Cabang</TableHead>
-                <TableHead>Bank Mitra</TableHead>
-                <TableHead>Jenis</TableHead>
-                <TableHead>Tgl Pengajuan</TableHead>
-                <TableHead>Tahap</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Catatan</TableHead>
+                <TableHead className="w-[130px] whitespace-nowrap">ID Pengajuan</TableHead>
+                <TableHead className="min-w-[150px]">Calon Nasabah</TableHead>
+                <TableHead className="w-[160px] whitespace-nowrap">Tahap Proses</TableHead>
+                <TableHead className="w-[140px] whitespace-nowrap">Status</TableHead>
+                <TableHead className="w-[140px] whitespace-nowrap">Plafond & Tenor</TableHead>
+                <TableHead className="w-[160px]">Bank Mitra</TableHead>
+                {user.role !== "marketing" && <TableHead className="w-[140px]">Marketing</TableHead>}
+                <TableHead className="w-[110px] whitespace-nowrap">Cabang</TableHead>
+                <TableHead className="w-[110px] whitespace-nowrap">Tgl Masuk</TableHead>
+                <TableHead className="min-w-[160px]">Catatan / Alasan</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -231,24 +412,58 @@ export default function Progress() {
                   onClick={() => setOpenId(a.id)}
                   data-testid={`progress-row-${a.id}`}
                 >
-                  <TableCell className="text-xs font-semibold text-[#351080]">
+                  <TableCell className="whitespace-nowrap font-mono text-xs font-bold text-[#351080]">
                     {a.app_no}
-                    <span className="block font-normal text-slate-400">Lead {a.lead_id.slice(0, 8)}</span>
                   </TableCell>
-                  <TableCell className="font-semibold text-[#17223B]">{a.lead_name}</TableCell>
-                  {user.role !== "marketing" && <TableCell>{a.marketing_name}</TableCell>}
-                  <TableCell>{a.branch}</TableCell>
-                  <TableCell>{a.bank_name}</TableCell>
-                  <TableCell>{a.debtor_type}</TableCell>
-                  <TableCell className="lp-num">{fmtDate(a.created_at)}</TableCell>
                   <TableCell>
-                    <span className="text-xs font-semibold">{a.stage_index + 1}/8 • {a.stages[a.stage_index].label}</span>
-                    <div className="mt-1 h-1.5 w-24 rounded bg-slate-100">
-                      <div className="h-1.5 rounded bg-[#5720B8]" style={{ width: `${((a.stage_index + 1) / 8) * 100}%` }} />
-                    </div>
+                    <p className="font-bold text-[#17223B] uppercase">{a.lead_name}</p>
+                    <p className="text-[11px] text-slate-500 font-normal">{a.debtor_type}</p>
                   </TableCell>
-                  <TableCell><PendingBadge app={a} /></TableCell>
-                  <TableCell className="max-w-[200px] truncate text-xs text-slate-500">{a.reject_reason || a.pending?.note || "-"}</TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    {a.rejected ? (
+                      <span className="text-xs font-bold text-red-600">Ditolak Bank</span>
+                    ) : (
+                      <>
+                        <span className="text-xs font-semibold text-slate-800">
+                          {Math.min(7, a.stage_index + 1)}/7 • {a.stages[a.stage_index]?.label || a.stage}
+                        </span>
+                        <div className="mt-1 h-1.5 w-24 rounded-full bg-slate-100 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${a.stage === "booking_live" ? "bg-[#078D67]" : "bg-[#5720B8]"}`}
+                            style={{ width: `${Math.min(100, ((a.stage_index + 1) / 7) * 100)}%` }}
+                          />
+                        </div>
+                      </>
+                    )}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    <PendingBadge app={a} />
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    <p className="text-xs font-bold text-[#17223B] lp-num">{rp(a.plafond)}</p>
+                    <p className="text-[11px] text-slate-500">{a.tenor} Bulan</p>
+                  </TableCell>
+                  <TableCell className="max-w-[160px]">
+                    <span className="block truncate text-xs font-medium text-slate-800" title={a.bank_name}>
+                      {a.bank_name}
+                    </span>
+                  </TableCell>
+                  {user.role !== "marketing" && (
+                    <TableCell className="max-w-[140px]">
+                      <span className="block truncate text-xs font-medium text-slate-700" title={a.marketing_name}>
+                        {a.marketing_name}
+                      </span>
+                    </TableCell>
+                  )}
+                  <TableCell className="whitespace-nowrap text-xs text-slate-600">
+                    {a.branch}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs text-slate-600 lp-num">
+                    {fmtDate(a.created_at)}
+                  </TableCell>
+                  <TableCell className="max-w-[200px] truncate text-xs text-slate-500" title={a.reject_reason || a.pending?.note || ""}>
+                    {a.reject_reason || a.pending?.note || "-"}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -267,18 +482,23 @@ export default function Progress() {
               badge={<PendingBadge app={a} />}
               meta={[
                 user.role !== "marketing" ? `${a.marketing_name} (${a.branch})` : a.branch,
-                fmtDate(a.created_at),
+                `${rp(a.plafond)} / ${a.tenor} bln`,
+                fmtDate(a.created_at)
               ]}
             >
               <div className="mt-2 space-y-1.5">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-500">Tahap {a.stage_index + 1} dari 8</span>
-                  <span className="font-semibold text-[#351080]">{a.stages[a.stage_index].label}</span>
+                  <span className="text-slate-500">
+                    {a.rejected ? "Status Penolakan" : `Tahap ${Math.min(7, a.stage_index + 1)} dari 7`}
+                  </span>
+                  <span className={`font-semibold ${a.rejected ? "text-red-600" : "text-[#351080]"}`}>
+                    {a.rejected ? "Ditolak Bank" : a.stages[a.stage_index]?.label}
+                  </span>
                 </div>
                 <div className="h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
                   <div
-                    className="h-full rounded-full bg-[#5720B8]"
-                    style={{ width: `${((a.stage_index + 1) / 8) * 100}%` }}
+                    className={`h-full rounded-full ${a.rejected ? "bg-red-500" : a.stage === "booking_live" ? "bg-[#078D67]" : "bg-[#5720B8]"}`}
+                    style={{ width: `${Math.min(100, ((a.stage_index + 1) / 7) * 100)}%` }}
                   />
                 </div>
                 {(a.reject_reason || a.pending?.note) && (
