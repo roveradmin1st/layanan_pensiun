@@ -37,6 +37,8 @@ const JWT_SECRET = process.env.JWT_SECRET || "lp_enterprise_jwt_secret_2026_ams2
 const ROLE_LABEL = {
   super_admin: "Super Admin",
   admin_ops: "Admin Operasional",
+  admin_branch: "Admin Cabang/Mitra",
+  sales_manager: "Sales Manager",
   marketing: "Marketing"
 };
 
@@ -52,6 +54,7 @@ app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive, nosnippet");
   next();
 });
 
@@ -113,8 +116,8 @@ function requireRoles(...roles) {
 }
 
 function scopeLeads(store, user) {
-  if (user.role === "super_admin") return store.leads;
-  if (user.role === "admin_ops") {
+  if (user.role === "super_admin" || user.role === "admin_ops") return store.leads;
+  if (user.role === "admin_branch" || user.role === "sales_manager") {
     return store.leads.filter((l) => !user.branch || !l.branch || l.branch.toUpperCase() === user.branch.toUpperCase());
   }
   return store.leads.filter((l) => l.assigned_to === user.id);
@@ -141,6 +144,22 @@ app.post("/api/auth/login", (req, res) => {
 });
 
 app.post("/api/auth/quick-role", (req, res) => {
+  const hostHeader = String(req.headers["x-forwarded-host"] || req.headers.host || "").toLowerCase();
+  const originHeader = String(req.headers.origin || req.headers.referer || "").toLowerCase();
+  const isExternalTunnel =
+    hostHeader.includes("ngrok") ||
+    hostHeader.includes("trycloudflare") ||
+    originHeader.includes("ngrok") ||
+    originHeader.includes("trycloudflare") ||
+    Boolean(req.headers["x-forwarded-for"]);
+  const isDemoOverride = originHeader.includes("demo=1");
+
+  if (isExternalTunnel && !isDemoOverride) {
+    return res.status(403).json({
+      detail: "Fitur beralih peran cepat (Quick Role) dinonaktifkan pada akses eksternal demi keamanan."
+    });
+  }
+
   const { role } = req.body || {};
   const store = getStore();
   const user = store.users.find((u) => u.role === role && u.active) || store.users[0];
@@ -223,7 +242,9 @@ app.get("/api/dashboard", requireAuth, (req, res) => {
     });
   }
 
-  const marketers = store.users.filter((u) => u.role === "marketing" && (req.user.role === "super_admin" || u.branch === req.user.branch));
+  const marketers = store.users.filter(
+    (u) => u.role === "marketing" && (req.user.role === "super_admin" || req.user.role === "admin_ops" || u.branch === req.user.branch)
+  );
   const marketing_stats = marketers.map((m) => {
     const mLeads = store.leads.filter((l) => l.assigned_to === m.id);
     const berhasil = mLeads.filter((l) => l.status === "berhasil").length;
@@ -256,7 +277,7 @@ app.get("/api/dashboard", requireAuth, (req, res) => {
 app.get("/api/banks", requireAuth, (req, res) => {
   const store = getStore();
   const p = store.partner_parameters;
-  const order = ["ams2", "bsi_prapen", "bank_capital", "bank_mantap", "bank_mnc", "bank_bni", "bank_mestika"];
+  const order = ["ams2", "bsi_prapen", "bank_capital", "bank_mestika", "bank_mantap", "bank_mnc", "bank_bni"];
   const banks = order.map((key) => {
     const item = p[key];
     return {
@@ -400,7 +421,7 @@ app.get("/api/simulations", requireAuth, (req, res) => {
   let list = store.simulations;
   if (req.user.role === "marketing") {
     list = list.filter((s) => s.created_by === req.user.id);
-  } else if (req.user.role === "admin_ops" && req.user.branch) {
+  } else if ((req.user.role === "admin_branch" || req.user.role === "sales_manager") && req.user.branch) {
     list = list.filter((s) => !s.branch || s.branch === req.user.branch);
   }
   if (q) {
@@ -476,11 +497,43 @@ app.post("/api/simulations/:id/ai-summary", requireAuth, (req, res) => {
   if (!sim) return res.status(404).json({ detail: "Simulasi tidak ditemukan" });
   const r = sim.result;
   const isBsi = r.bank_key === "bsi_prapen" || !!r.bsi_details;
+  const isCapital = r.bank_key === "bank_capital" || !!r.capital_details;
+  const isMestika = r.bank_key === "bank_mestika" || !!r.mestika_details;
   const isAms2 = r.bank_key === "ams2";
   const bsi = r.bsi_details || {};
+  const cap = r.capital_details || {};
+  const mst = r.mestika_details || {};
 
   let summary = "";
-  if (isBsi) {
+  if (isMestika) {
+    const gajiDesc = mst.salary_type === "pensiun"
+      ? `Sesuai Gaji Pensiun Rp${(mst.salary_input ?? r.salary).toLocaleString("id-ID")} (Estimasi Gaji Pokok -${mst.pension_deduction_pct ?? 13}% = Rp${(mst.basic_salary ?? r.salary).toLocaleString("id-ID")})`
+      : `Sesuai Gaji IDPB Rp${(mst.basic_salary ?? r.salary).toLocaleString("id-ID")}`;
+    summary = [
+      `RINGKASAN EKSEKUTIF SIMULASI TIGA BERMUDA AMANAH • BANK MESTIKA (${sim.sim_no})`,
+      `• Debitur: ${r.name || "-"} (Usia ${mst.age_label || `${r.age} tahun`}) — Produk Otomatis: Kredit Pensiun ${mst.product_label || r.category} (Bunga ${r.bank_rate}% p.a.).`,
+      `• Dasar Gaji & Tanggungan: ${gajiDesc} • ${mst.dependent_label || "Tidak Ada Tanggungan"} (DSR ${mst.dsr_pct ?? 99}%).`,
+      `• Parameter Maksimal: Tenor Maks ${mst.max_tenor ?? r.tenor} bln (s.d. usia 79 thn 11 bln / ${mst.end_age_date || "-"}), Plafond Maks Rp${(mst.max_plafond ?? r.plafond).toLocaleString("id-ID")} (Alternatif Plafond PV: Rp${(mst.alt_plafond ?? r.plafond).toLocaleString("id-ID")}).`,
+      `• Pengajuan & Angsuran: Plafond Rp${r.plafond.toLocaleString("id-ID")}, Tenor ${r.tenor} bulan, Angsuran Rp${r.coop_installment.toLocaleString("id-ID")}/bln (DSR Aktual ${r.ratio_pct}%).`,
+      `• Potongan Pencairan: Biaya Pencairan (${mst.cost_rate_pct ?? 22}%) Rp${r.total_fees.toLocaleString("id-ID")}, Retensi Angsuran (${mst.retention_multiplier ?? 3}x) Rp${r.retention.toLocaleString("id-ID")}${r.take_over > 0 ? `, Pelunasan Take Over Rp${r.take_over.toLocaleString("id-ID")}` : ""}.`,
+      `• Hasil Akhir: Sisa Bersih Rp${r.net_disbursement.toLocaleString("id-ID")} dengan Sisa Gaji Rp${r.remaining_salary.toLocaleString("id-ID")}.`,
+      `• Status Validasi: ${r.overall_ok ? "LAYAK DIPROSES — Seluruh parameter TBA-MSTK 1.0 Bank Mestika terpenuhi." : (r.issues || []).join(" ") || "Periksa catatan validasi."}`
+    ].join("\n");
+  } else if (isCapital) {
+    const isCapPensiun = cap.product === "pensiun";
+    const maxTenorVal = cap.max_credit_months || cap.credit_months || r.tenor || 0;
+    const reqTenorVal = cap.credit_months ?? r.tenor ?? 0;
+    const retLabel = isCapPensiun ? "Total Retensi (2x Angsuran)" : "Total Retensi";
+    summary = [
+      `RINGKASAN EKSEKUTIF SIMULASI CALC CAPITAL — PS3 CAPITAL (${sim.sim_no})`,
+      `• Debitur: ${r.name || "-"} pada produk ${cap.product_label || (isCapPensiun ? "Pensiun" : "Pra Pensiun")}.`,
+      `• Rincian Tenor: Tenor Kredit Maksimal ${maxTenorVal} bln, Tenor Diajukan ${reqTenorVal} bln.`,
+      `• Hasil Simulasi: Batas Angsuran Maksimal Rp${(cap.payment_cap ?? Math.round((r.salary || 0) * 0.9)).toLocaleString("id-ID")}, Angsuran Aktual Rp${(cap.actual_payment ?? r.coop_installment).toLocaleString("id-ID")}/bln, Plafon Maksimal Rp${(cap.recommendation_max_loan ?? r.plafond).toLocaleString("id-ID")}, Plafon Diajukan Rp${(cap.loan ?? r.plafond).toLocaleString("id-ID")}.`,
+      `• Biaya & Retensi: Biaya Kredit Rp${(cap.cost ?? r.total_fees).toLocaleString("id-ID")}, ${retLabel} Rp${(cap.total_retention ?? r.retention).toLocaleString("id-ID")}.`,
+      `• Highlight Point: Plafon Rp${(cap.loan ?? r.plafond).toLocaleString("id-ID")} | Tenor ${reqTenorVal} bln | Sisa Bersih Rp${(cap.net_cash ?? r.net_disbursement).toLocaleString("id-ID")} | Sisa Gaji Rp${(cap.salary_left ?? r.remaining_salary).toLocaleString("id-ID")}.`,
+      `• Status Validasi: ${r.overall_ok ? "Simulasi valid berdasarkan data dan parameter PS3 CAPITAL." : (cap.warnings || []).join(" ") || "Periksa catatan validasi."}`
+    ].join("\n");
+  } else if (isBsi) {
     const sisaGajiPensiun = bsi.sisa_gaji_pensiun || (r.pension_salary - r.coop_installment);
     summary = [
       `RINGKASAN EKSEKUTIF SIMULASI BSI PRAPENSIUN (${sim.sim_no})`,
@@ -664,7 +717,7 @@ app.get("/api/leads", requireAuth, (req, res) => {
   res.json({ items, total, page, page_size: pageSize });
 });
 
-app.post("/api/leads", requireAuth, requireRoles("super_admin", "admin_ops"), (req, res) => {
+app.post("/api/leads", requireAuth, requireRoles("super_admin", "admin_ops", "admin_branch", "sales_manager"), (req, res) => {
   const store = getStore();
   const body = req.body || {};
   const marketer = store.users.find((u) => u.id === body.assigned_to);
@@ -697,7 +750,7 @@ app.post("/api/leads", requireAuth, requireRoles("super_admin", "admin_ops"), (r
   res.json(lead);
 });
 
-app.post("/api/leads/assign", requireAuth, requireRoles("super_admin", "admin_ops"), (req, res) => {
+app.post("/api/leads/assign", requireAuth, requireRoles("super_admin", "admin_ops", "admin_branch", "sales_manager"), (req, res) => {
   const { lead_ids = [], user_id } = req.body || {};
   const store = getStore();
   const marketer = store.users.find((u) => u.id === user_id);
@@ -809,7 +862,7 @@ app.get("/api/imports/template", requireAuth, (req, res) => {
   res.send(csv);
 });
 
-app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops"), upload.single("file"), (req, res) => {
+app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "admin_branch"), upload.single("file"), (req, res) => {
   if (!req.file) return res.status(400).json({ detail: "Pilih file terlebih dahulu" });
   const store = getStore();
   const text = req.file.buffer.toString("utf8");
@@ -879,7 +932,7 @@ app.get("/api/applications", requireAuth, (req, res) => {
   let list = store.applications;
   if (req.user.role === "marketing") {
     list = list.filter((a) => a.marketing_id === req.user.id);
-  } else if (req.user.role === "admin_ops" && req.user.branch) {
+  } else if ((req.user.role === "admin_branch" || req.user.role === "sales_manager") && req.user.branch) {
     list = list.filter((a) => !a.branch || a.branch === req.user.branch);
   }
 
@@ -961,7 +1014,7 @@ app.get("/api/applications/:id/documents/:key", requireAuth, (req, res) => {
   res.send(pdfBuf);
 });
 
-app.post("/api/applications/:id/documents/:key/review", requireAuth, requireRoles("super_admin", "admin_ops"), (req, res) => {
+app.post("/api/applications/:id/documents/:key/review", requireAuth, requireRoles("super_admin", "admin_ops", "admin_branch"), (req, res) => {
   const store = getStore();
   const appItem = store.applications.find((a) => a.id === req.params.id);
   if (!appItem) return res.status(404).json({ detail: "Pengajuan tidak ditemukan" });
@@ -1067,7 +1120,7 @@ app.get("/api/claims", requireAuth, (req, res) => {
   let list = store.claims;
   if (req.user.role === "marketing") {
     list = list.filter((c) => c.marketing_id === req.user.id);
-  } else if (req.user.role === "admin_ops" && req.user.branch) {
+  } else if ((req.user.role === "admin_branch" || req.user.role === "sales_manager") && req.user.branch) {
     list = list.filter((c) => !c.branch || c.branch === req.user.branch);
   }
   const { q, status } = req.query;
@@ -1182,20 +1235,28 @@ app.get("/api/claims/:id/file/:type", requireAuth, (req, res) => {
 // ============================================================================
 // 8. USERS, AUDIT LOGS & BACKUP
 // ============================================================================
-app.get("/api/users", requireAuth, requireRoles("super_admin", "admin_ops"), (req, res) => {
+app.get("/api/users", requireAuth, requireRoles("super_admin", "admin_ops", "admin_branch", "sales_manager"), (req, res) => {
   const store = getStore();
-  const list = store.users.map((u) => ({
+  let users = store.users;
+  if ((req.user.role === "admin_branch" || req.user.role === "sales_manager") && req.user.branch) {
+    users = users.filter((u) => !u.branch || u.branch === req.user.branch);
+  }
+  const list = users.map((u) => ({
     ...sanitizeUser(u),
     lead_count: store.leads.filter((l) => l.assigned_to === u.id).length
   }));
   res.json(list);
 });
 
-app.post("/api/users", requireAuth, requireRoles("super_admin", "admin_ops"), (req, res) => {
+app.post("/api/users", requireAuth, requireRoles("super_admin", "admin_ops", "admin_branch", "sales_manager"), (req, res) => {
   const store = getStore();
   const body = req.body || {};
-  if (req.user.role === "admin_ops" && body.role !== "marketing") {
-    return res.status(403).json({ detail: "Admin Operasional hanya dapat membuat akun Marketing." });
+  const targetRole = body.role || "marketing";
+  if (req.user.role === "admin_ops" && !["admin_branch", "sales_manager", "marketing"].includes(targetRole)) {
+    return res.status(403).json({ detail: "Admin Operasional hanya dapat membuat akun Admin Cabang/Mitra, Sales Manager, atau Marketing." });
+  }
+  if ((req.user.role === "admin_branch" || req.user.role === "sales_manager") && targetRole !== "marketing") {
+    return res.status(403).json({ detail: `${ROLE_LABEL[req.user.role]} hanya dapat membuat akun Marketing.` });
   }
   if (store.users.some((u) => u.email.toLowerCase() === String(body.email || "").toLowerCase())) {
     return res.status(400).json({ detail: "Email sudah terdaftar." });
@@ -1205,7 +1266,7 @@ app.post("/api/users", requireAuth, requireRoles("super_admin", "admin_ops"), (r
     name: body.name,
     email: body.email,
     password_hash: hashPassword(body.password || "Password123!"),
-    role: body.role || "marketing",
+    role: targetRole,
     branch: body.branch || req.user.branch || "BANDUNG",
     phone: body.phone || "",
     active: true,
@@ -1217,16 +1278,21 @@ app.post("/api/users", requireAuth, requireRoles("super_admin", "admin_ops"), (r
   res.json(sanitizeUser(newUser));
 });
 
-app.patch("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops"), (req, res) => {
+app.patch("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops", "admin_branch", "sales_manager"), (req, res) => {
   const store = getStore();
   const target = store.users.find((u) => u.id === req.params.id);
   if (!target) return res.status(404).json({ detail: "Pengguna tidak ditemukan" });
-  if (req.user.role === "admin_ops" && target.role !== "marketing") {
-    return res.status(403).json({ detail: "Admin Operasional hanya dapat mengubah akun Marketing." });
+  if (req.user.role === "admin_ops" && !["admin_branch", "sales_manager", "marketing"].includes(target.role)) {
+    return res.status(403).json({ detail: "Admin Operasional hanya dapat mengubah akun Admin Cabang/Mitra, Sales Manager, atau Marketing." });
+  }
+  if ((req.user.role === "admin_branch" || req.user.role === "sales_manager") && target.role !== "marketing") {
+    return res.status(403).json({ detail: `${ROLE_LABEL[req.user.role]} hanya dapat mengubah akun Marketing.` });
   }
   const { name, role, branch, phone, active, password } = req.body || {};
   if (name !== undefined) target.name = name;
-  if (role !== undefined && req.user.role === "super_admin") target.role = role;
+  if (role !== undefined && (req.user.role === "super_admin" || (req.user.role === "admin_ops" && ["admin_branch", "sales_manager", "marketing"].includes(role)))) {
+    target.role = role;
+  }
   if (branch !== undefined) target.branch = branch;
   if (phone !== undefined) target.phone = phone;
   if (active !== undefined) target.active = active;
@@ -1289,9 +1355,24 @@ app.post("/api/backup/restore", requireAuth, requireRoles("super_admin"), upload
 // Serve built React frontend in production if `frontend/dist` exists
 const FRONTEND_DIST = path.resolve(__dirname, "../../frontend/dist");
 if (fs.existsSync(FRONTEND_DIST)) {
-  app.use(express.static(FRONTEND_DIST));
+  app.use(
+    express.static(FRONTEND_DIST, {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith("sw.js") || filePath.endsWith("index.html")) {
+          res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+          if (filePath.endsWith("sw.js")) {
+            res.setHeader("Service-Worker-Allowed", "/");
+          }
+        } else if (filePath.endsWith(".webmanifest")) {
+          res.setHeader("Content-Type", "application/manifest+json; charset=utf-8");
+          res.setHeader("Cache-Control", "no-cache");
+        }
+      }
+    })
+  );
   app.get("*", (req, res, next) => {
     if (req.path.startsWith("/api")) return next();
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     res.sendFile(path.join(FRONTEND_DIST, "index.html"));
   });
 }

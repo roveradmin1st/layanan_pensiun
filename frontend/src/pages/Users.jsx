@@ -15,8 +15,13 @@ import { Button } from "../components/ui/button";
 
 function UserDialog({ open, onOpenChange, editing, onSaved, me }) {
   const [v, setV] = useState({});
-  useEffect(() => { setV(editing ? { ...editing, password: "" } : { name: "", email: "", role: "marketing", branch: "", phone: "", password: "" }); }, [editing, open]);
-  const roles = me.role === "super_admin" ? ["super_admin", "admin_ops", "marketing"] : ["marketing"];
+  useEffect(() => { setV(editing ? { ...editing, password: "" } : { name: "", email: "", role: "marketing", branch: me?.branch || "", phone: "", password: "" }); }, [editing, open, me]);
+  const roles =
+    me.role === "super_admin"
+      ? ["super_admin", "admin_ops", "admin_branch", "sales_manager", "marketing"]
+      : me.role === "admin_ops"
+      ? ["admin_branch", "sales_manager", "marketing"]
+      : ["marketing"];
   const submit = async (e) => {
     e.preventDefault();
     try {
@@ -59,7 +64,11 @@ export default function UsersPage() {
   const [editing, setEditing] = useState(null);
   const load = () => api.get("/users").then((r) => setList(r.data));
   useEffect(() => { load(); }, []);
-  const canEdit = (u) => user.role === "super_admin" || u.role === "marketing";
+  const canEdit = (u) => {
+    if (user.role === "super_admin") return true;
+    if (user.role === "admin_ops") return ["admin_branch", "sales_manager", "marketing"].includes(u.role);
+    return u.role === "marketing";
+  };
 
   return (
     <div>

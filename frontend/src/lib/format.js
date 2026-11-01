@@ -11,7 +11,12 @@ export const fmtDateTime = (iso) =>
   iso ? new Date(iso).toLocaleString("id-ID", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "-";
 
 export const ddmmyyyyToIso = (s) => {
-  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec((s || "").trim());
+  const str = (s || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    const d = new Date(`${str}T00:00:00`);
+    return isNaN(d.getTime()) ? null : str;
+  }
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(str);
   if (!m) return null;
   const iso = `${m[3]}-${m[2]}-${m[1]}`;
   const d = new Date(iso);
@@ -26,10 +31,16 @@ export const STATUS = {
   gagal: { label: "Gagal", cls: "bg-red-50 text-red-700 ring-1 ring-inset ring-red-200" },
 };
 
-export const ROLE_LABEL = { super_admin: "Super Admin", admin_ops: "Admin Operasional", marketing: "Marketing" };
-export const isAdmin = (u) => u && (u.role === "super_admin" || u.role === "admin_ops");
+export const ROLE_LABEL = {
+  super_admin: "Super Admin",
+  admin_ops: "Admin Operasional",
+  admin_branch: "Admin Cabang/Mitra",
+  sales_manager: "Sales Manager",
+  marketing: "Marketing",
+};
+export const isAdmin = (u) => u && ["super_admin", "admin_ops", "admin_branch", "sales_manager"].includes(u.role);
+export const isCentralAdmin = (u) => u && (u.role === "super_admin" || u.role === "admin_ops");
 
-export const COPYRIGHT_1 = "© by Teguh Pranada-Layanan Pensiunan Pematangsiantar";
-export const COPYRIGHT_2 =
-  "Prompt by Koperasi Asia Madani Sejahtera, Build Aplication by Teguh Pranada-Layanan Pensiunan Pematangsiantar, Sumatera Utara.";
+export const COPYRIGHT_1 = "© Layanan Pensiunan";
+export const COPYRIGHT_2 = "";
 

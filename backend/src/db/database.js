@@ -111,6 +111,28 @@ function createInitialState() {
       created_at: "2026-01-15T09:00:00.000Z"
     },
     {
+      id: "u-branch-1",
+      name: "DEDY KURNIAWAN",
+      email: "admincabang@layananpensiunan.id",
+      password_hash: defaultPwdHash,
+      role: "admin_branch",
+      branch: "BANDUNG",
+      phone: "081265001122",
+      active: true,
+      created_at: "2026-01-16T09:00:00.000Z"
+    },
+    {
+      id: "u-sm-1",
+      name: "HENDRA WIJAYA",
+      email: "salesmanager@layananpensiunan.id",
+      password_hash: defaultPwdHash,
+      role: "sales_manager",
+      branch: "BANDUNG",
+      phone: "081322003344",
+      active: true,
+      created_at: "2026-01-18T09:00:00.000Z"
+    },
+    {
       id: "u-mkt-1",
       name: "ANDI PRATAMA",
       email: "marketing@layananpensiunan.id",
@@ -545,12 +567,86 @@ function createInitialState() {
 
 let stateCache = null;
 
+function ensureStoreUpgrades(state) {
+  let changed = false;
+  const defaultPwdHash = hashPassword("Password123!");
+
+  if (!state.users.some((u) => u.role === "admin_branch")) {
+    state.users.push({
+      id: "u-branch-1",
+      name: "DEDY KURNIAWAN",
+      email: "admincabang@layananpensiunan.id",
+      password_hash: defaultPwdHash,
+      role: "admin_branch",
+      branch: "BANDUNG",
+      phone: "081265001122",
+      active: true,
+      created_at: "2026-01-16T09:00:00.000Z"
+    });
+    changed = true;
+  }
+
+  if (!state.users.some((u) => u.role === "sales_manager")) {
+    state.users.push({
+      id: "u-sm-1",
+      name: "HENDRA WIJAYA",
+      email: "salesmanager@layananpensiunan.id",
+      password_hash: defaultPwdHash,
+      role: "sales_manager",
+      branch: "BANDUNG",
+      phone: "081322003344",
+      active: true,
+      created_at: "2026-01-18T09:00:00.000Z"
+    });
+    changed = true;
+  }
+
+  if (
+    !state.partner_parameters?.bank_capital ||
+    state.partner_parameters.bank_capital.engine !== "capital_ps3"
+  ) {
+    state.partner_parameters = state.partner_parameters || {};
+    state.partner_parameters.bank_capital = structuredClone(DEFAULT_PARTNER_PARAMETERS.bank_capital);
+    changed = true;
+  }
+
+  if (
+    !state.partner_parameters?.ams2 ||
+    state.partner_parameters.ams2.plafondRoundingStep !== 100000
+  ) {
+    state.partner_parameters = state.partner_parameters || {};
+    state.partner_parameters.ams2 = structuredClone(DEFAULT_PARTNER_PARAMETERS.ams2);
+    changed = true;
+  }
+
+  if (
+    !state.partner_parameters?.bank_mestika ||
+    state.partner_parameters.bank_mestika.engine !== "mestika_tba"
+  ) {
+    state.partner_parameters = state.partner_parameters || {};
+    state.partner_parameters.bank_mestika = structuredClone(DEFAULT_PARTNER_PARAMETERS.bank_mestika);
+    changed = true;
+  }
+
+  for (const inactiveKey of ["bank_mantap", "bank_mnc", "bank_bni"]) {
+    if (state.partner_parameters?.[inactiveKey]?.active !== false) {
+      state.partner_parameters[inactiveKey].active = false;
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
 export function getStore() {
   if (stateCache) return stateCache;
   const row = db.prepare("SELECT payload FROM kv_store WHERE collection = 'enterprise_state'").get();
   if (row && row.payload) {
     try {
       stateCache = JSON.parse(row.payload);
+      if (ensureStoreUpgrades(stateCache)) {
+        saveStore();
+      }
       return stateCache;
     } catch {
       // fallback to re-seed

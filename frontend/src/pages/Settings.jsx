@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { Download, Upload, ShieldCheck, Save, RotateCcw, CheckCircle2, XCircle, Sliders } from "lucide-react";
+import { Download, Upload, ShieldCheck, Save, RotateCcw, CheckCircle2, XCircle, Sliders, LogOut } from "lucide-react";
 import { api, errMsg, downloadFile } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { rp, ROLE_LABEL } from "../lib/format";
 import { PageHeader, CtaButton } from "../components/common";
+import { PartnerLogo } from "../components/brand/Logo";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Button } from "../components/ui/button";
@@ -13,10 +15,10 @@ const PARTNER_KEYS = [
   "ams2",
   "bsi_prapen",
   "bank_capital",
+  "bank_mestika",
   "bank_mantap",
   "bank_mnc",
   "bank_bni",
-  "bank_mestika",
 ];
 
 function DynamicPartnerParams({ user }) {
@@ -128,32 +130,55 @@ function DynamicPartnerParams({ user }) {
             : " Sebagai Marketing, Anda memiliki akses baca (View Only) pada parameter aktif."}
         </p>
 
-        <div className="mb-6 flex gap-2 border-b border-slate-100 pb-4 lp-scroll-x -mx-4 px-4 sm:mx-0 sm:px-0">
+        <div className="mb-6 flex gap-2.5 border-b border-slate-100 pb-4 lp-scroll-x -mx-4 px-4 sm:mx-0 sm:px-0">
           {PARTNER_KEYS.map((k) => {
             const item = data.partners?.[k];
             if (!item) return null;
+            const isSelected = selectedKey === k;
             return (
               <button
                 key={k}
                 type="button"
                 onClick={() => selectPartner(k)}
                 data-testid={`param-tab-${k}`}
-                className={`shrink-0 whitespace-nowrap rounded-lg border px-3 py-2 text-xs font-bold transition ${
-                  selectedKey === k
+                className={`flex items-center gap-2 shrink-0 whitespace-nowrap rounded-xl border px-3 py-2 text-xs font-bold transition ${
+                  isSelected
                     ? "border-[#351080] bg-[#351080] text-white shadow-sm"
-                    : "border-slate-200 bg-white text-slate-600 hover:border-[#5720B8]/40"
+                    : "border-slate-200 bg-white text-slate-700 hover:border-[#351080]/40 hover:bg-slate-50"
                 }`}
               >
-                {item.shortName}
+                <PartnerLogo bankKey={k} size="xs" className={isSelected ? "ring-2 ring-white/50" : ""} />
+                <span>{item.shortName}</span>
+                {item.active === false && (
+                  <span
+                    className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${
+                      isSelected ? "bg-white/20 text-white" : "bg-slate-100 text-slate-400"
+                    }`}
+                  >
+                    Nonaktif
+                  </span>
+                )}
               </button>
             );
           })}
         </div>
 
         <form onSubmit={saveParams} className="space-y-5">
-          <div className="rounded-xl bg-[#F5F6FA] p-4">
-            <p className="font-display text-base font-bold text-[#351080]">{draft.name}</p>
-            <p className="mt-1 text-xs text-slate-500">{draft.description}</p>
+          <div className="flex items-center gap-3.5 rounded-xl border border-slate-200/80 bg-slate-50/80 p-4">
+            <PartnerLogo bankKey={selectedKey} size="lg" />
+            <div>
+              <div className="flex items-center gap-2">
+                <p className="font-display text-base font-bold text-[#17223B]">{draft.name}</p>
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                    draft.active !== false ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-600"
+                  }`}
+                >
+                  {draft.active !== false ? "Aktif" : "Menunggu Rumus"}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-slate-500">{draft.description}</p>
+            </div>
           </div>
 
           {/* 1. KOPERASI AMS2 */}
@@ -217,8 +242,26 @@ function DynamicPartnerParams({ user }) {
             </div>
           )}
 
+          {/* 2b. TIGA BERMUDA AMANAH • BANK MESTIKA (TBA-MSTK 1.0) */}
+          {selectedKey === "bank_mestika" && (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <div><Label>Bunga Reguler &lt; 65 Thn (% p.a.)</Label><Input type="number" step="0.1" disabled={!canEdit} value={draft.interestRateAnnual} onChange={(e) => setNum("interestRateAnnual", e.target.value)} className="lp-num" data-testid="param-interest-input" /></div>
+              <div><Label>Bunga Reguler Plus &lt; 69 Thn (% p.a.)</Label><Input type="number" step="0.1" disabled={!canEdit} value={draft.interestRatePlusAnnual ?? 12} onChange={(e) => setNum("interestRatePlusAnnual", e.target.value)} className="lp-num" /></div>
+              <div><Label>DSR Gaji Pokok / IDPB (%)</Label><Input type="number" step="0.5" disabled={!canEdit} value={draft.maxInstallmentRatio} onChange={(e) => setNum("maxInstallmentRatio", e.target.value)} className="lp-num" /></div>
+              <div><Label>Potongan Estimasi Gaji Pokok (%)</Label><Input type="number" step="0.5" disabled={!canEdit} value={draft.pensionDeductionPercent ?? 13} onChange={(e) => setNum("pensionDeductionPercent", e.target.value)} className="lp-num" /></div>
+              <div><Label>Batas Plafond Maksimal (Rp)</Label><Input type="number" step="10000000" disabled={!canEdit} value={draft.maxPlafondAbsolute} onChange={(e) => setNum("maxPlafondAbsolute", e.target.value)} className="lp-num" /></div>
+              <div><Label>Tenor Maksimal (Bulan)</Label><Input type="number" disabled={!canEdit} value={draft.maxTenorMonths} onChange={(e) => setNum("maxTenorMonths", e.target.value)} className="lp-num" /></div>
+              <div><Label>Batas Usia Reguler (&lt; Thn)</Label><Input type="number" disabled={!canEdit} value={draft.regulerMaxAgeYears ?? 65} onChange={(e) => setNum("regulerMaxAgeYears", e.target.value)} className="lp-num" /></div>
+              <div><Label>Batas Usia Masuk (&lt; Thn)</Label><Input type="number" disabled={!canEdit} value={draft.maxEntryAgeYears} onChange={(e) => setNum("maxEntryAgeYears", e.target.value)} className="lp-num" /></div>
+              <div><Label>Usia Akhir Kredit (Tahun)</Label><Input type="number" disabled={!canEdit} value={draft.maxEndAgeYears} onChange={(e) => setNum("maxEndAgeYears", e.target.value)} className="lp-num" /></div>
+              <div><Label>Usia Akhir Kredit (+ Bulan)</Label><Input type="number" min="0" max="11" disabled={!canEdit} value={draft.maxEndAgeMonths ?? 11} onChange={(e) => setNum("maxEndAgeMonths", e.target.value)} className="lp-num" /></div>
+              <div><Label>Biaya Pencairan (%)</Label><Input type="number" step="0.5" disabled={!canEdit} value={draft.disbursementCostPercent ?? 22} onChange={(e) => { setNum("disbursementCostPercent", e.target.value); setNum("provisionRatePercent", e.target.value); }} className="lp-num" /></div>
+              <div><Label>Retensi Angsuran (×)</Label><Input type="number" disabled={!canEdit} value={draft.retentionMultiplier} onChange={(e) => setNum("retentionMultiplier", e.target.value)} className="lp-num" /></div>
+            </div>
+          )}
+
           {/* 3. MITRA BANK KONVENSIONAL */}
-          {selectedKey !== "ams2" && selectedKey !== "bsi_prapen" && (
+          {selectedKey !== "ams2" && selectedKey !== "bsi_prapen" && selectedKey !== "bank_mestika" && (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <div><Label>Suku Bunga (% per tahun)</Label><Input type="number" step="0.05" disabled={!canEdit} value={draft.interestRateAnnual} onChange={(e) => setNum("interestRateAnnual", e.target.value)} className="lp-num" data-testid="param-interest-input" /></div>
               <div><Label>DSR / Rasio Angsuran Maks (%)</Label><Input type="number" step="0.5" disabled={!canEdit} value={draft.maxInstallmentRatio} onChange={(e) => setNum("maxInstallmentRatio", e.target.value)} className="lp-num" /></div>
@@ -331,6 +374,40 @@ function Backup() {
   );
 }
 
+function AccountLogout({ user }) {
+  const { logout } = useAuth();
+  const nav = useNavigate();
+  const handleLogout = async () => {
+    await logout();
+    nav("/login");
+  };
+
+  return (
+    <section className="lp-card space-y-4 p-6" data-testid="account-logout-panel">
+      <h2 className="font-display font-bold">Akun &amp; Sesi Aktif</h2>
+      <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3.5">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#351080] text-sm font-bold text-white">
+          {user.name?.[0]}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-bold text-slate-800">{user.name}</p>
+          <p className="truncate text-xs text-slate-500">{user.email}</p>
+          <p className="mt-0.5 text-[11px] font-semibold text-[#5720B8]">{ROLE_LABEL[user.role]}</p>
+        </div>
+      </div>
+      <Button
+        variant="destructive"
+        onClick={handleLogout}
+        className="w-full flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 font-bold"
+        data-testid="settings-logout-btn"
+      >
+        <LogOut className="h-4 w-4" />
+        <span>Keluar dari Akun (Logout)</span>
+      </Button>
+    </section>
+  );
+}
+
 export default function SettingsPage() {
   const { user } = useAuth();
   return (
@@ -339,6 +416,7 @@ export default function SettingsPage() {
       <div className="grid gap-6 xl:grid-cols-[1.55fr_1fr]">
         <DynamicPartnerParams user={user} />
         <div className="space-y-6">
+          <AccountLogout user={user} />
           <ChangePassword />
           {user.role === "super_admin" && <Backup />}
         </div>

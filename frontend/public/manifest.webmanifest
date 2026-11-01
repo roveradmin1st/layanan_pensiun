@@ -1,0 +1,56 @@
+{
+  "id": "/",
+  "name": "Layanan Pensiunan",
+  "short_name": "Layanan Pensiunan",
+  "description": "Portal internal pengelolaan leads, simulasi kredit pensiun multi-mitra, dan monitoring pengajuan.",
+  "lang": "id-ID",
+  "dir": "ltr",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "categories": ["finance", "business", "productivity"],
+  "icons": [
+    {
+      "src": "/brand/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/brand/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/brand/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Kalkulator Simulasi",
+      "short_name": "Kalkulator",
+      "url": "/kalkulator",
+      "icons": [{ "src": "/brand/pwa-192x192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Database Leads",
+      "short_name": "Leads",
+      "url": "/leads",
+      "icons": [{ "src": "/brand/pwa-192x192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Progress Pengajuan",
+      "short_name": "Progress",
+      "url": "/progress",
+      "icons": [{ "src": "/brand/pwa-192x192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}

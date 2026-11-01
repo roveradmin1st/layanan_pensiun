@@ -66,11 +66,36 @@ export function AiSummary({ sim }) {
       if (format === "whatsapp") {
         const r = sim.result || {};
         const isBsi = r.bank_key === "bsi_prapen" || !!r.bsi_details;
+        const isCapital = r.bank_key === "bank_capital" || !!r.capital_details;
         const isAms2 = r.bank_key === "ams2";
         const bsi = r.bsi_details;
+        const cap = r.capital_details;
         let waText = "";
 
-        if (isBsi) {
+        if (isCapital) {
+          waText = [
+            `*APLIKASI CALC CAPITAL — DASA CIPTA BERKARYA (PS3 CAPITAL)*`,
+            `No. Referensi: ${sim.sim_no}`,
+            `Produk / Tipe Angsuran: ${cap?.product_and_type_label || r.category}`,
+            ``,
+            `Yth. Bapak/Ibu *${r.name}*,`,
+            `Berikut hasil simulasi fasilitas kredit pensiun PS3 CAPITAL Anda:`,
+            `• Gaji Bulanan: Rp${Math.round(r.salary || 0).toLocaleString("id-ID")}`,
+            `• Tenor Kredit / Tenor PP: ${cap?.credit_months ?? r.tenor} / ${cap?.pp_months ?? 0} bulan`,
+            `• Tenor GP / Tenor PV: ${cap?.gp_months ?? 0} / ${cap?.pv_months ?? r.tenor} bulan`,
+            `• Batas Angsuran Maksimal (90%): Rp${Math.round(cap?.payment_cap ?? ((r.salary || 0) * 0.9)).toLocaleString("id-ID")}`,
+            `• Plafond Maksimal (PV): Rp${Math.round(cap?.recommendation_max_loan ?? r.plafond ?? 0).toLocaleString("id-ID")}`,
+            `• Plafond Kredit yang Diajukan: Rp${Math.round(cap?.loan ?? r.plafond ?? 0).toLocaleString("id-ID")}`,
+            `• Angsuran Aktual (PMT): Rp${Math.round(cap?.actual_payment ?? r.coop_installment ?? 0).toLocaleString("id-ID")}/bulan`,
+            `• Biaya Kredit: Rp${Math.round(cap?.cost ?? r.total_fees ?? 0).toLocaleString("id-ID")}`,
+            `• Total Retensi: Rp${Math.round(cap?.total_retention ?? r.retention ?? 0).toLocaleString("id-ID")}`,
+            `• *Pencairan Bersih: Rp${Math.round(cap?.net_cash ?? r.net_disbursement ?? 0).toLocaleString("id-ID")}*`,
+            `• Sisa Gaji Setelah Angsuran: Rp${Math.round(cap?.salary_left ?? r.remaining_salary ?? 0).toLocaleString("id-ID")}`,
+            ``,
+            `Petugas Pendamping: ${sim.created_by_name || "Petugas Layanan Pensiunan"}`,
+            `_Estimasi simulasi berdasarkan parameter PS3 CAPITAL · DASA CIPTA BERKARYA_`
+          ].join("\n");
+        } else if (isBsi) {
           const sisaGajiPensiun = bsi?.sisa_gaji_pensiun ?? (r.pension_salary - r.coop_installment);
           waText = [
             `*LAYANAN PENSIUNAN — ESTIMASI BSI PRAPENSIUN (NOS v1.4.6)*`,
@@ -96,7 +121,6 @@ export function AiSummary({ sim }) {
             `Jadwal Proyeksi:`,
             `• Proyeksi Cair: ${bsi?.proyeksi_cair || "-"}`,
             `• Mulai Angsuran: ${bsi?.start_angsuran || "-"}`,
-            `• Selesai Angsuran: ${bsi?.selesai_angsuran || "-"}`,
             ``,
             `Status Analisis: ${r.overall_ok ? "MEMENUHI PERSYARATAN" : "PERLU PENYESUAIAN"}`,
             ``,

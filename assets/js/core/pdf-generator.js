@@ -215,7 +215,7 @@ window.PDFGenerator = {
     ln(27, 152, 568, 152, ORG, 1.1);
     t(27, 138, 6.5, "LAYANAN PENSIUNAN — ENTERPRISE FINANCIAL PLATFORM  |  Amanah • Terpercaya • Dekat dengan Anda", PUR, "F2");
     t(27, 126, 6.0, `PIC: ${result.officers.pic}   |   Supervisor/Admin: ${result.officers.smName}   |   Marketing: ${result.officers.marketingName}`, MUTED);
-    t(27, 114, 5.7, "Build Application by Teguh Pranada - Layanan Pensiunan Pematangsiantar, Sumatera Utara", MUTED);
+    t(27, 114, 5.7, "© Layanan Pensiunan", MUTED);
 
     // 9. Rakit Binary PDF (%PDF-1.4)
     const enc = s => new TextEncoder().encode(s);

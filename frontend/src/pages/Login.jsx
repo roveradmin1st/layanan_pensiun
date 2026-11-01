@@ -7,6 +7,7 @@ import { Logo, Copyright } from "../components/brand/Logo";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { CtaButton } from "../components/common";
+import InstallAppButton from "../components/pwa/InstallAppButton";
 
 const HERO = "https://images.pexels.com/photos/7424584/pexels-photo-7424584.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=1100&w=1100";
 
@@ -33,8 +34,13 @@ export const AuthShell = ({ children }) => (
 export default function Login() {
   const { login, quickRole } = useAuth();
   const nav = useNavigate();
-  const [email, setEmail] = useState("superadmin@layananpensiunan.id");
-  const [password, setPassword] = useState("Password123!");
+  const isDevOrDemo =
+    typeof window !== "undefined" &&
+    (window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1" ||
+      new URLSearchParams(window.location.search).get("demo") === "1");
+  const [email, setEmail] = useState(() => (isDevOrDemo ? "superadmin@layananpensiunan.id" : ""));
+  const [password, setPassword] = useState(() => (isDevOrDemo ? "Password123!" : ""));
   const [show, setShow] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -103,9 +109,14 @@ export default function Login() {
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
             <Label htmlFor="password" className="text-xs font-semibold text-slate-700">Kata Sandi</Label>
-            <Link to="/lupa-sandi" className="text-xs font-medium text-[#5720B8] hover:underline" data-testid="forgot-password-link">
+            <button
+              type="button"
+              onClick={() => nav("/lupa-sandi")}
+              className="text-xs font-medium text-[#5720B8] hover:underline"
+              data-testid="forgot-password-link"
+            >
               Lupa kata sandi?
-            </Link>
+            </button>
           </div>
           <div className="relative">
             <Input
@@ -135,50 +146,74 @@ export default function Login() {
         </CtaButton>
       </form>
 
-      {/* Panel Pilihan Peran Cepat (Testing / Demo Mode) */}
-      <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid="quick-role-panel">
-        <div className="flex items-center gap-2">
-          <Users className="h-4 w-4 text-slate-600" />
-          <p className="text-xs font-bold uppercase tracking-wider text-slate-700">Simulasi Akses Peran</p>
+      <InstallAppButton variant="login" />
+
+      {/* Panel Pilihan Peran Cepat (Hanya aktif di Localhost atau saat ada parameter ?demo=1) */}
+      {isDevOrDemo && (
+        <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid="quick-role-panel">
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4 text-slate-600" />
+            <p className="text-xs font-bold uppercase tracking-wider text-slate-700">Simulasi Akses Peran</p>
+          </div>
+          <p className="mt-1 text-xs text-slate-500">Pilih salah satu profil untuk menguji batasan hak akses operasional (RBAC):</p>
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => enterAsRole("super_admin")}
+              data-testid="quick-login-super-admin"
+              className="flex flex-col items-center justify-center rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-center transition hover:border-[#351080] hover:bg-white"
+            >
+              <span className="text-xs font-bold text-[#351080]">1. Super Admin</span>
+              <span className="mt-0.5 text-[10px] text-slate-500">Akses Penuh &amp; Konfigurasi</span>
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => enterAsRole("admin_ops")}
+              data-testid="quick-login-admin-ops"
+              className="flex flex-col items-center justify-center rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-center transition hover:border-[#078D67] hover:bg-white"
+            >
+              <span className="text-xs font-bold text-[#078D67]">2. Admin Operasional</span>
+              <span className="mt-0.5 text-[10px] text-slate-500">Operasional Terpusat</span>
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => enterAsRole("admin_branch")}
+              data-testid="quick-login-admin-branch"
+              className="flex flex-col items-center justify-center rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-center transition hover:border-[#d96200] hover:bg-white"
+            >
+              <span className="text-xs font-bold text-[#d96200]">3. Admin Cabang/Mitra</span>
+              <span className="mt-0.5 text-[10px] text-slate-500">Verifikasi &amp; Laporan Cabang</span>
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => enterAsRole("sales_manager")}
+              data-testid="quick-login-sales-manager"
+              className="flex flex-col items-center justify-center rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-center transition hover:border-[#15803d] hover:bg-white"
+            >
+              <span className="text-xs font-bold text-[#15803d]">4. Sales Manager</span>
+              <span className="mt-0.5 text-[10px] text-slate-500">Pimpin &amp; Target Marketing</span>
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => enterAsRole("marketing")}
+              data-testid="quick-login-marketing"
+              className="col-span-2 flex flex-col items-center justify-center rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-center transition hover:border-[#F28A19] hover:bg-white sm:col-span-1"
+            >
+              <span className="text-xs font-bold text-[#b46107]">5. Marketing</span>
+              <span className="mt-0.5 text-[10px] text-slate-500">Akuisisi &amp; Input Pengajuan</span>
+            </button>
+          </div>
+          <div className="mt-3 flex items-center justify-center gap-1.5 border-t border-slate-100 pt-2.5 text-[11px] text-slate-400">
+            <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
+            <span>Keamanan Enkripsi JWT • Sesi HttpOnly Terproteksi</span>
+          </div>
         </div>
-        <p className="mt-1 text-xs text-slate-500">Pilih salah satu profil untuk menguji batasan hak akses operasional (RBAC):</p>
-        <div className="mt-3 grid grid-cols-3 gap-2">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => enterAsRole("super_admin")}
-            data-testid="quick-login-super-admin"
-            className="flex flex-col items-center justify-center rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-center transition hover:border-[#351080] hover:bg-white"
-          >
-            <span className="text-xs font-bold text-[#351080]">Super Admin</span>
-            <span className="mt-0.5 text-[10px] text-slate-500">Akses Penuh</span>
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => enterAsRole("admin_ops")}
-            data-testid="quick-login-admin-ops"
-            className="flex flex-col items-center justify-center rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-center transition hover:border-[#078D67] hover:bg-white"
-          >
-            <span className="text-xs font-bold text-[#078D67]">Admin Ops</span>
-            <span className="mt-0.5 text-[10px] text-slate-500">Verifikasi Cabang</span>
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => enterAsRole("marketing")}
-            data-testid="quick-login-marketing"
-            className="flex flex-col items-center justify-center rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-center transition hover:border-[#F28A19] hover:bg-white"
-          >
-            <span className="text-xs font-bold text-[#b46107]">Marketing</span>
-            <span className="mt-0.5 text-[10px] text-slate-500">Input &amp; Simulasi</span>
-          </button>
-        </div>
-        <div className="mt-3 flex items-center justify-center gap-1.5 border-t border-slate-100 pt-2.5 text-[11px] text-slate-400">
-          <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
-          <span>Keamanan Enkripsi JWT • Sesi HttpOnly Terproteksi</span>
-        </div>
-      </div>
+      )}
     </AuthShell>
   );
 }

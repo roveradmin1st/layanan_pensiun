@@ -52,7 +52,7 @@
     @apply bg-background text-foreground antialiased;
     font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     font-feature-settings: "cv11", "ss01";
-    overflow-x: hidden;
+    overflow-x: clip;
   }
 
   h1, h2, h3, h4, .font-display {
