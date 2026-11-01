@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { CheckCircle2, XCircle, AlertTriangle, ChevronDown } from "lucide-react";
 import { rp, pct, fmtDate } from "../../lib/format";
 import { PartnerLogo } from "../brand/Logo";
@@ -383,7 +384,7 @@ export function BsiResultView({ r }) {
             {/* Kolom Kanan */}
             <div className="space-y-6 min-w-0">
               <Block title="4. Rincian Proteksi Asuransi Jiwa Syariah" accent="#078D67">
-                <Row k="Perusahaan Asuransi" v={simas.company || "PT Asuransi Simas Jiwa (Syariah)"} />
+                <Row k="Lembaga Penjaminan" v="Asuransi Jiwa Pembiayaan Syariah" />
                 <Row k="Usia Masuk Pertanggungan" v={`${simas.nearest_age ?? simas.entry_age ?? r.age} tahun`} />
                 <Row
                   k="Masa Pertanggungan (+6 Bln Buffer)"
@@ -1124,7 +1125,7 @@ export function ConventionalBankResultView({ r }) {
 // ============================================================================
 // MAIN DISPATCHER: Menampilkan UI & Terminologi sesuai Bank masing-masing
 // ============================================================================
-export default function ResultView(props) {
+const ResultView = memo(function ResultView(props) {
   const bankKey = props.r?.bank_key;
   if (bankKey === "bank_mestika" || !!props.r?.mestika_details) {
     return <MestikaResultView {...props} />;
@@ -1139,4 +1140,6 @@ export default function ResultView(props) {
     return <Ams2ResultView {...props} />;
   }
   return <ConventionalBankResultView {...props} />;
-}
+});
+
+export default ResultView;

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Search, Loader2 } from "lucide-react";
 import { api } from "../lib/api";
 import { rp, fmtDateTime } from "../lib/format";
-import { PageHeader, Pager, Empty, DesktopTable, MobileList, ListCard } from "../components/common";
+import { PageHeader, Pager, Empty, DesktopTable, MobileList, ListCard, TableSkeleton, CardListSkeleton } from "../components/common";
 import { Input } from "../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
@@ -24,7 +24,7 @@ export default function Simulations() {
 
   return (
     <div>
-      <PageHeader eyebrow="Calc Platinum" title="Riwayat Simulasi" desc="Seluruh simulasi final yang telah tersimpan beserta file PDF & gambar." />
+      <PageHeader eyebrow="Layanan Pensiunan" title="Riwayat Simulasi" desc="Arsip seluruh simulasi pembiayaan yang telah tersimpan beserta dokumen PDF & ringkasan resmi." />
       <div className="lp-card">
         <div className="border-b border-slate-100 p-4">
           <div className="relative max-w-md">
@@ -55,15 +55,7 @@ export default function Simulations() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {!data && (
-                <TableRow>
-                  <TableCell colSpan={8}>
-                    <div className="flex justify-center py-8">
-                      <Loader2 className="h-5 w-5 animate-spin" />
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )}
+              {!data && <TableSkeleton cols={8} rows={6} />}
               {data?.items.map((s) => (
                 <TableRow
                   key={s.id}
@@ -97,11 +89,7 @@ export default function Simulations() {
 
         {/* Mobile List View */}
         <MobileList testid="simulations-mobile-list">
-          {!data && (
-            <div className="flex justify-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin" />
-            </div>
-          )}
+          {!data && <CardListSkeleton rows={5} />}
           {data?.items.map((s) => (
             <ListCard
               key={s.id}

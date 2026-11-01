@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import {
@@ -45,7 +45,7 @@ const MaxRow = ({ k, v, strong, testid }) => (
   </div>
 );
 
-function MaxCard({ mx }) {
+const MaxCard = memo(function MaxCard({ mx }) {
   if (!mx.processable) return (
     <div className="flex gap-3 rounded-xl border border-red-200 bg-red-50 p-4 sm:p-5 text-sm text-red-700" data-testid="max-stop-reason">
       <AlertTriangle className="h-5 w-5 shrink-0" /><div><p className="font-semibold">Pengajuan tidak dapat diproses</p><p>{mx.stop_reason}</p></div>
@@ -147,7 +147,7 @@ function MaxCard({ mx }) {
       </div>
     </div>
   );
-}
+});
 
 function addMonthsClampedLocal(date, months) {
   const first = new Date(date.getFullYear(), date.getMonth() + months, 1);

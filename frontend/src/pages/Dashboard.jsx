@@ -5,7 +5,7 @@ import { Users, UserX, PhoneCall, BadgeCheck, Calculator, CalendarClock, Loader2
 import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { isAdmin, fmtDateTime, fmtDate } from "../lib/format";
-import { StatCard, PageHeader, CtaButton, Empty, StatusBadge } from "../components/common";
+import { StatCard, PageHeader, CtaButton, Empty, StatusBadge, DashboardSkeleton } from "../components/common";
 import { Button } from "../components/ui/button";
 
 const Panel = ({ title, action, children, className = "", testid }) => (
@@ -45,7 +45,7 @@ function AdminDashboard({ d }) {
   const s = d.by_status;
   return (
     <>
-      <PageHeader eyebrow="Dashboard Admin" title="Ringkasan Operasional" desc="Pantau perkembangan leads, aktivitas marketing, dan simulasi Calc Platinum."
+      <PageHeader eyebrow="Dashboard Eksekutif" title="Ringkasan Operasional" desc="Pantau perkembangan database leads, produktivitas tim marketing, dan realisasi simulasi pembiayaan."
         actions={<>
           <Button asChild variant="outline" data-testid="quick-import-button"><Link to="/impor"><Upload className="mr-2 h-4 w-4" />Impor Leads</Link></Button>
           <CtaButton asChild data-testid="quick-calc-button"><Link to="/kalkulator"><Calculator className="mr-2 h-4 w-4" />Buat Simulasi</Link></CtaButton>
@@ -163,7 +163,7 @@ export default function Dashboard() {
   const { user } = useAuth();
   const [d, setD] = useState(null);
   useEffect(() => { api.get("/dashboard").then((r) => setD(r.data)); }, []);
-  if (!d) return <div className="flex justify-center py-24"><Loader2 className="h-6 w-6 animate-spin text-[#5720B8]" /></div>;
+  if (!d) return <DashboardSkeleton />;
   return isAdmin(user) ? <AdminDashboard d={d} /> : <MarketingDashboard d={d} user={user} />;
 }
 

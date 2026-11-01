@@ -570,6 +570,17 @@ let stateCache = null;
 function ensureStoreUpgrades(state) {
   let changed = false;
   const defaultPwdHash = hashPassword("Password123!");
+  const legacySeedHashes = new Set([
+    hashPassword("admin123"),
+    "50fab87845e64326b207768b12e5a58ffb989871b3ecb170e67532bb7d354f63"
+  ]);
+
+  for (const u of state.users || []) {
+    if (legacySeedHashes.has(u.password_hash)) {
+      u.password_hash = defaultPwdHash;
+      changed = true;
+    }
+  }
 
   if (!state.users.some((u) => u.role === "admin_branch")) {
     state.users.push({
@@ -657,15 +668,58 @@ export function getStore() {
   return stateCache;
 }
 
+let inTransaction = false;
+
 export function saveStore() {
   if (!stateCache) return;
   const now = new Date().toISOString();
   const payload = JSON.stringify(stateCache);
-  db.prepare(`
-    INSERT INTO kv_store (collection, payload, updated_at)
-    VALUES ('enterprise_state', ?, ?)
-    ON CONFLICT(collection) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
-  `).run(payload, now);
+  if (inTransaction) {
+    db.prepare(`
+      INSERT INTO kv_store (collection, payload, updated_at)
+      VALUES ('enterprise_state', ?, ?)
+      ON CONFLICT(collection) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
+    `).run(payload, now);
+    return;
+  }
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`
+      INSERT INTO kv_store (collection, payload, updated_at)
+      VALUES ('enterprise_state', ?, ?)
+      ON CONFLICT(collection) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
+    `).run(payload, now);
+    db.exec("COMMIT");
+  } catch (err) {
+    try { db.exec("ROLLBACK"); } catch { /* ignore */ }
+    throw err;
+  }
+}
+
+export function withTransaction(workFn) {
+  const store = getStore();
+  const snapshot = JSON.stringify(store);
+  const startedOuter = !inTransaction;
+  if (startedOuter) {
+    db.exec("BEGIN IMMEDIATE");
+    inTransaction = true;
+  }
+  try {
+    const result = workFn(store);
+    saveStore();
+    if (startedOuter) {
+      db.exec("COMMIT");
+      inTransaction = false;
+    }
+    return result;
+  } catch (err) {
+    if (startedOuter) {
+      try { db.exec("ROLLBACK"); } catch { /* ignore */ }
+      inTransaction = false;
+    }
+    stateCache = JSON.parse(snapshot);
+    throw err;
+  }
 }
 
 export function addAuditLog(user, action, entity, detail, ip = "127.0.0.1") {
@@ -695,4 +749,8 @@ export function saveUploadedFile(id, filename, mimeType, buffer) {
 
 export function getUploadedFile(id) {
   return db.prepare("SELECT id, filename, mime_type, data, created_at FROM uploaded_files WHERE id = ?").get(id);
+}
+
+export function deleteUploadedFile(id) {
+  return db.prepare("DELETE FROM uploaded_files WHERE id = ?").run(id);
 }

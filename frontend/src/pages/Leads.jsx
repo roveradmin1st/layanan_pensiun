@@ -14,6 +14,8 @@ import {
   DesktopTable,
   MobileList,
   ListCard,
+  TableSkeleton,
+  CardListSkeleton,
 } from "../components/common";
 import { Input } from "../components/ui/input";
 import { Button } from "../components/ui/button";
@@ -182,15 +184,7 @@ export default function Leads() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {!data && (
-                  <TableRow>
-                    <TableCell colSpan={9}>
-                      <div className="flex justify-center py-8">
-                        <Loader2 className="h-5 w-5 animate-spin text-[#351080]" />
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                )}
+                {!data && <TableSkeleton cols={admin ? 9 : 7} rows={6} />}
                 {items.map((l) => (
                   <TableRow
                     key={l.id}
@@ -229,11 +223,7 @@ export default function Leads() {
 
         {/* Tampilan Mobile: Kartu Responsif Berorientasi Sentuhan */}
         <MobileList>
-          {!data && (
-            <div className="flex justify-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin text-[#351080]" />
-            </div>
-          )}
+          {!data && <CardListSkeleton rows={5} />}
           {items.map((l) => (
             <ListCard
               key={l.id}
