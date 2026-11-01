@@ -59,22 +59,79 @@ function ClaimDetail({ claim, onClose, onChanged }) {
   const [note, setNote] = useState("");
   const [amount, setAmount] = useState("");
   const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
   if (!claim) return null;
-  const c = claim, admin = isAdmin(user), s = c.status;
+  const c = claim;
+  const isSuperOrOps = user && ["super_admin", "admin_ops"].includes(user.role);
+  const admin = isAdmin(user);
+  const s = c.status;
+
   const act = async (action) => {
-    try { await api.post(`/claims/${c.id}/action`, { action, note, amount: amount === "" ? null : Number(amount) }); toast.success(`Klaim ${action}`); setNote(""); onChanged(); } catch (e) { toast.error(errMsg(e)); }
+    if ((action === "revision" || action === "reject") && !note.trim()) {
+      return toast.error("Catatan alasan penolakan/revisi wajib diisi.");
+    }
+    setBusy(true);
+    try {
+      await api.post(`/claims/${c.id}/action`, {
+        action,
+        note,
+        amount: amount === "" ? null : Number(amount)
+      });
+      toast.success(
+        action === "approve"
+          ? "Klaim berhasil disetujui (APPROVED)"
+          : action === "reject"
+          ? "Klaim telah ditolak (REJECTED)"
+          : action === "revision"
+          ? "Klaim dikembalikan untuk revisi (REVISION)"
+          : action === "submit"
+          ? "Klaim diajukan (SUBMITTED)"
+          : `Klaim berhasil diubah ke ${action}`
+      );
+      setNote("");
+      onChanged();
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
   };
+
   const pay = async () => {
     if (!file) return toast.error("Bukti transaksi pembayaran wajib dilampirkan");
     if (!window.confirm("Konfirmasi pembayaran benar-benar telah dilakukan?")) return;
-    const fd = new FormData(); fd.append("file", file); fd.append("note", note); if (amount !== "") fd.append("amount", amount);
-    try { await api.post(`/claims/${c.id}/pay`, fd); toast.success("Klaim ditandai PAID"); onChanged(); } catch (e) { toast.error(errMsg(e)); }
+    setBusy(true);
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("note", note);
+    if (amount !== "") fd.append("amount", amount);
+    try {
+      await api.post(`/claims/${c.id}/pay`, fd);
+      toast.success("Klaim ditandai PAID (Sudah Dibayarkan)");
+      onChanged();
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
   };
+
   const replace = async () => {
     if (!file) return toast.error("Pilih file bukti booking");
-    const fd = new FormData(); fd.append("file", file);
-    try { await api.post(`/claims/${c.id}/proof`, fd); toast.success("Bukti diperbarui"); onChanged(); } catch (e) { toast.error(errMsg(e)); }
+    setBusy(true);
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      await api.post(`/claims/${c.id}/proof`, fd);
+      toast.success("Bukti booking diperbarui");
+      onChanged();
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
   };
+
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-h-[92vh] max-w-2xl overflow-y-auto" data-testid="claim-detail-dialog">
@@ -92,18 +149,159 @@ function ClaimDetail({ claim, onClose, onChanged }) {
           {c.payment_proof && <Button size="sm" variant="outline" onClick={() => openFile(`/claims/${c.id}/file/payment`)} data-testid="view-payment-proof"><FileText className="mr-1.5 h-4 w-4" />Bukti transaksi</Button>}
         </div>
         {!["PAID", "REJECTED"].includes(s) && (
-          <div className="space-y-3 rounded-xl border p-4">
-            <Label>Catatan {admin && "(wajib untuk revisi/penolakan)"}</Label><Textarea value={note} onChange={(e) => setNote(e.target.value)} data-testid="claim-action-note" />
-            {admin && ["REVIEW", "APPROVED"].includes(s) && <div className="space-y-1.5"><Label>Nominal insentif (input berwenang)</Label><Input inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))} data-testid="claim-amount-input" /></div>}
-            {((!admin && ["DRAFT", "REVISION"].includes(s)) || (admin && s === "APPROVED")) &&
-              <div className="space-y-1.5"><Label>{admin ? "Bukti transaksi pembayaran * (JPG/PNG/PDF)" : "Ganti bukti booking"}</Label><Input type="file" accept=".jpg,.jpeg,.png,.pdf" onChange={(e) => setFile(e.target.files[0] || null)} data-testid="claim-file-input" /></div>}
-            <div className="flex flex-wrap gap-2">
-              {!admin && ["DRAFT", "REVISION"].includes(s) && <><Button variant="outline" onClick={replace} data-testid="claim-replace-proof">Simpan Bukti</Button><Button className="bg-[#351080]" onClick={() => act("submit")} data-testid="claim-submit">Ajukan Klaim</Button></>}
-              {admin && s === "SUBMITTED" && <Button className="bg-[#351080]" onClick={() => act("review")} data-testid="claim-review">Mulai Review</Button>}
-              {admin && ["SUBMITTED", "REVIEW"].includes(s) && <Button className="bg-[#F28A19]" onClick={() => act("revision")} data-testid="claim-revision">Minta Revisi</Button>}
-              {admin && s === "REVIEW" && <Button className="bg-[#078D67]" onClick={() => act("approve")} data-testid="claim-approve">Setujui</Button>}
-              {admin && s === "APPROVED" && <Button className="bg-[#078D67]" onClick={pay} data-testid="claim-pay">Konfirmasi Dibayar (PAID)</Button>}
-              {admin && ["SUBMITTED", "REVIEW", "APPROVED"].includes(s) && <Button variant="outline" className="text-red-600" onClick={() => act("reject")} data-testid="claim-reject">Tolak</Button>}
+          <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+            <Label className="text-xs font-semibold text-slate-700">
+              Catatan {(isSuperOrOps || admin) && "(wajib untuk revisi/penolakan)"}
+            </Label>
+            <Textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder={isSuperOrOps ? "Tuliskan catatan persetujuan, alasan revisi, atau penolakan..." : "Catatan pengajuan..."}
+              data-testid="claim-action-note"
+            />
+
+            {/* Input nominal insentif jika Super Admin / Admin Ops */}
+            {isSuperOrOps && (
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-slate-700">
+                  Nominal insentif (input berwenang)
+                </Label>
+                <Input
+                  inputMode="numeric"
+                  value={amount}
+                  placeholder={`Default saat ini: ${rp(c.amount)}`}
+                  onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))}
+                  data-testid="claim-amount-input"
+                />
+              </div>
+            )}
+
+            {/* Upload bukti transaksi untuk Super Admin/Ops saat APPROVED, atau upload bukti booking untuk marketing */}
+            {isSuperOrOps && s === "APPROVED" && (
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-slate-700">
+                  Bukti transfer / pembayaran * (JPG/PNG/PDF)
+                </Label>
+                <Input
+                  type="file"
+                  accept=".jpg,.jpeg,.png,.pdf"
+                  onChange={(e) => setFile(e.target.files[0] || null)}
+                  data-testid="claim-file-input"
+                />
+              </div>
+            )}
+            {!isSuperOrOps && ["DRAFT", "REVISION"].includes(s) && (
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-slate-700">
+                  Ganti bukti booking
+                </Label>
+                <Input
+                  type="file"
+                  accept=".jpg,.jpeg,.png,.pdf"
+                  onChange={(e) => setFile(e.target.files[0] || null)}
+                  data-testid="claim-file-input"
+                />
+              </div>
+            )}
+
+            {/* Tombol Aksi */}
+            <div className="flex flex-wrap items-center gap-2 pt-2">
+              {/* Marketing aksi di DRAFT/REVISION */}
+              {!isSuperOrOps && ["DRAFT", "REVISION"].includes(s) && (
+                <>
+                  <Button variant="outline" disabled={busy} onClick={replace} data-testid="claim-replace-proof">
+                    Simpan Bukti
+                  </Button>
+                  <Button className="bg-[#351080] text-white hover:bg-[#280c61]" disabled={busy} onClick={() => act("submit")} data-testid="claim-submit">
+                    Ajukan Klaim
+                  </Button>
+                </>
+              )}
+
+              {/* Super Admin & Admin Operasional */}
+              {isSuperOrOps && (
+                <>
+                  {["DRAFT", "SUBMITTED", "REVIEW", "REVISION"].includes(s) && (
+                    <Button
+                      className="bg-[#078D67] text-white hover:bg-[#067253] font-semibold"
+                      disabled={busy}
+                      onClick={() => act("approve")}
+                      data-testid="claim-approve"
+                    >
+                      Setujui Klaim
+                    </Button>
+                  )}
+                  {["DRAFT", "SUBMITTED", "REVIEW", "REVISION", "APPROVED"].includes(s) && (
+                    <Button
+                      variant="outline"
+                      className="border-red-300 text-red-600 hover:bg-red-50 hover:text-red-700 font-semibold"
+                      disabled={busy}
+                      onClick={() => act("reject")}
+                      data-testid="claim-reject"
+                    >
+                      Tolak Klaim
+                    </Button>
+                  )}
+                  {["DRAFT", "SUBMITTED", "REVIEW"].includes(s) && (
+                    <Button
+                      className="bg-[#F28A19] text-white hover:bg-[#d97706] font-semibold"
+                      disabled={busy}
+                      onClick={() => act("revision")}
+                      data-testid="claim-revision"
+                    >
+                      Minta Revisi
+                    </Button>
+                  )}
+                  {["DRAFT", "REVISION"].includes(s) && (
+                    <Button
+                      variant="secondary"
+                      className="bg-slate-100 text-slate-700 hover:bg-slate-200"
+                      disabled={busy}
+                      onClick={() => act("submit")}
+                      data-testid="claim-submit"
+                    >
+                      Ajukan (Submit)
+                    </Button>
+                  )}
+                  {s === "APPROVED" && (
+                    <Button
+                      className="bg-[#078D67] text-white hover:bg-[#067253] font-semibold"
+                      disabled={busy}
+                      onClick={pay}
+                      data-testid="claim-pay"
+                    >
+                      Konfirmasi Dibayar (PAID)
+                    </Button>
+                  )}
+                </>
+              )}
+
+              {/* Admin Cabang / Sales Manager */}
+              {(user.role === "admin_branch" || user.role === "sales_manager") && !isSuperOrOps && (
+                <>
+                  {["DRAFT", "REVISION"].includes(s) && (
+                    <Button
+                      variant="secondary"
+                      className="bg-slate-100 text-slate-700 hover:bg-slate-200"
+                      disabled={busy}
+                      onClick={() => act("submit")}
+                      data-testid="claim-submit"
+                    >
+                      Ajukan Klaim
+                    </Button>
+                  )}
+                  {["DRAFT", "SUBMITTED", "REVIEW"].includes(s) && (
+                    <Button
+                      className="bg-[#F28A19] text-white hover:bg-[#d97706]"
+                      disabled={busy}
+                      onClick={() => act("revision")}
+                      data-testid="claim-revision"
+                    >
+                      Minta Revisi
+                    </Button>
+                  )}
+                </>
+              )}
             </div>
           </div>
         )}

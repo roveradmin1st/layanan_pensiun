@@ -404,8 +404,32 @@ try {
   });
   assert.equal(dupClaimRes.status, 409, "Klaim ganda pada aplikasi yang sama harus ditolak (409)");
 
-  // Marketing submits claim (DRAFT -> SUBMITTED) -> 200 OK
-  const submitClaimRes = await api("POST", `/api/claims/${claimId}/action`, {
+  // Super Admin can reject DRAFT claim with note (without note -> 400)
+  const rejNoNote = await api("POST", `/api/claims/${claimId}/action`, {
+    token: superToken,
+    body: { action: "reject" }
+  });
+  assert.equal(rejNoNote.status, 400, "Penolakan klaim DRAFT tanpa catatan wajib ditolak (400)");
+
+  // Rejection with note from DRAFT succeeds -> 200 OK
+  const rejWithNote = await api("POST", `/api/claims/${claimId}/action`, {
+    token: superToken,
+    body: { action: "reject", note: "Dokumen bukti belum lengkap" }
+  });
+  assert.equal(rejWithNote.status, 200, "Super Admin harus dapat menolak klaim DRAFT dengan catatan");
+  assert.equal(rejWithNote.data.status, "REJECTED");
+
+  // Since previous claim was REJECTED, marketing can create a new active claim on the application
+  const activeClaimRes = await api("POST", "/api/claims", {
+    token: marketingToken,
+    body: { application_id: createdApp.id, notes: "Klaim pengganti dokumen lengkap" }
+  });
+  assert.equal(activeClaimRes.status, 200);
+  const activeClaimId = activeClaimRes.data.id;
+
+  // Super Admin can directly approve a DRAFT claim
+  // But let's first test Marketing submit (DRAFT -> SUBMITTED) -> 200 OK
+  const submitClaimRes = await api("POST", `/api/claims/${activeClaimId}/action`, {
     token: marketingToken,
     body: { action: "submit" }
   });
@@ -413,28 +437,28 @@ try {
   assert.equal(submitClaimRes.data.status, "SUBMITTED");
 
   // Marketing attempting to approve claim or alter amount -> 403 Forbidden, state unchanged
-  const mktApproveClaim = await api("POST", `/api/claims/${claimId}/action`, {
+  const mktApproveClaim = await api("POST", `/api/claims/${activeClaimId}/action`, {
     token: marketingToken,
     body: { action: "approve", amount: 50000000 }
   });
   assert.equal(mktApproveClaim.status, 403, "Marketing tidak boleh menyetujui klaim atau mengubah nominal (403)");
 
   // Sales Manager / Admin Branch attempting to approve claim -> 403 Forbidden
-  const branchApproveClaim = await api("POST", `/api/claims/${claimId}/action`, {
+  const branchApproveClaim = await api("POST", `/api/claims/${activeClaimId}/action`, {
     token: adminBranchToken,
     body: { action: "approve" }
   });
   assert.equal(branchApproveClaim.status, 403, "Admin Cabang tidak boleh menyetujui klaim (hanya Admin Ops / Super Admin)");
 
   // Payment before APPROVED status -> 400 Bad Request
-  const payBeforeApprove = await api("POST", `/api/claims/${claimId}/pay`, {
+  const payBeforeApprove = await api("POST", `/api/claims/${activeClaimId}/pay`, {
     token: adminOpsToken,
     body: { note: "Bayar sebelum approve" }
   });
   assert.equal(payBeforeApprove.status, 400, "Pembayaran klaim sebelum APPROVED harus ditolak (400)");
 
   // Admin Ops attempting negative amount -> 400 Bad Request
-  const negClaimAmt = await api("POST", `/api/claims/${claimId}/action`, {
+  const negClaimAmt = await api("POST", `/api/claims/${activeClaimId}/action`, {
     token: adminOpsToken,
     body: { action: "approve", amount: -500000 }
   });
@@ -442,12 +466,12 @@ try {
 
   // Verify claim status and amount are STILL unchanged ("SUBMITTED" & defaultClaimAmount)
   const checkClaimsList = await api("GET", "/api/claims", { token: adminOpsToken });
-  const unchangedClaim = checkClaimsList.data.items.find((c) => c.id === claimId);
+  const unchangedClaim = checkClaimsList.data.items.find((c) => c.id === activeClaimId);
   assert.equal(unchangedClaim.status, "SUBMITTED", "Status klaim harus tetap SUBMITTED setelah request gagal");
   assert.equal(unchangedClaim.amount, defaultClaimAmount, "Nominal klaim harus tetap utuh setelah request gagal");
 
   // Admin Ops approves claim -> 200 OK
-  const okApproveClaim = await api("POST", `/api/claims/${claimId}/action`, {
+  const okApproveClaim = await api("POST", `/api/claims/${activeClaimId}/action`, {
     token: adminOpsToken,
     body: { action: "approve", note: "Disetujui Admin Operasional" }
   });
@@ -455,7 +479,7 @@ try {
   assert.equal(okApproveClaim.data.status, "APPROVED");
 
   // Admin Ops attempting to pay APPROVED claim WITHOUT payment proof -> 400 Bad Request
-  const payWithoutProof = await api("POST", `/api/claims/${claimId}/pay`, {
+  const payWithoutProof = await api("POST", `/api/claims/${activeClaimId}/pay`, {
     token: adminOpsToken,
     body: { note: "Tanpa bukti transfer" }
   });
@@ -465,7 +489,7 @@ try {
   const form = new FormData();
   form.append("file", new Blob(["%PDF-1.4 Bukti Transfer Insentif"], { type: "application/pdf" }), "bukti_transfer.pdf");
   form.append("note", "Lunas via Transfer Bank");
-  const okPayClaim = await api("POST", `/api/claims/${claimId}/pay`, {
+  const okPayClaim = await api("POST", `/api/claims/${activeClaimId}/pay`, {
     token: adminOpsToken,
     body: form,
     isForm: true
@@ -476,7 +500,7 @@ try {
   // Duplicate payment attempt -> 409 Conflict
   const formDup = new FormData();
   formDup.append("file", new Blob(["%PDF-1.4 Bukti Transfer"], { type: "application/pdf" }), "bukti_transfer.pdf");
-  const dupPayClaim = await api("POST", `/api/claims/${claimId}/pay`, {
+  const dupPayClaim = await api("POST", `/api/claims/${activeClaimId}/pay`, {
     token: adminOpsToken,
     body: formDup,
     isForm: true

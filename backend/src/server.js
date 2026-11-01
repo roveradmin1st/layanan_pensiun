@@ -1698,27 +1698,45 @@ app.post("/api/claims/:id/action", requireAuth, (req, res) => {
   }
 
   if (action === "submit") {
-    if (!["marketing", "admin_ops", "super_admin"].includes(req.user.role)) {
+    if (!["marketing", "admin_branch", "admin_ops", "super_admin"].includes(req.user.role)) {
       return res.status(403).json({ detail: "Peran Anda tidak berwenang mengajukan klaim." });
     }
     if (!["DRAFT", "REVISION"].includes(claim.status)) {
       return res.status(409).json({ detail: `Klaim berstatus ${claim.status} tidak dapat diajukan ulang.` });
     }
-  } else {
-    // review, revision, approve, reject are restricted to super_admin and admin_ops
+  } else if (action === "approve") {
     if (!["super_admin", "admin_ops"].includes(req.user.role)) {
-      return res.status(403).json({ detail: "Hanya Admin Operasional atau Super Admin yang berwenang memverifikasi/menyetujui klaim." });
+      return res.status(403).json({ detail: "Hanya Admin Operasional atau Super Admin yang berwenang menyetujui klaim." });
     }
-    if (action === "approve") {
-      if (claim.status === "APPROVED") {
-        return res.status(409).json({ detail: "Klaim ini sudah disetujui sebelumnya." });
-      }
-      if (!["SUBMITTED", "REVIEW"].includes(claim.status)) {
-        return res.status(400).json({ detail: "Klaim harus berstatus SUBMITTED atau REVIEW sebelum disetujui (APPROVED)." });
-      }
+    if (claim.status === "APPROVED") {
+      return res.status(409).json({ detail: "Klaim ini sudah disetujui sebelumnya." });
     }
-    if ((action === "revision" || action === "reject") && !String(note || "").trim()) {
-      return res.status(400).json({ detail: "Catatan alasan revisi atau penolakan klaim wajib diisi." });
+    if (!["DRAFT", "SUBMITTED", "REVIEW", "REVISION"].includes(claim.status)) {
+      return res.status(400).json({ detail: `Klaim berstatus ${claim.status} tidak dapat disetujui.` });
+    }
+  } else if (action === "reject") {
+    if (!["super_admin", "admin_ops"].includes(req.user.role)) {
+      return res.status(403).json({ detail: "Hanya Admin Operasional atau Super Admin yang berwenang menolak klaim." });
+    }
+    if (claim.status === "REJECTED") {
+      return res.status(409).json({ detail: "Klaim ini sudah ditolak sebelumnya." });
+    }
+    if (!String(note || "").trim()) {
+      return res.status(400).json({ detail: "Catatan alasan penolakan klaim wajib diisi." });
+    }
+  } else if (action === "revision") {
+    if (!["super_admin", "admin_ops", "admin_branch"].includes(req.user.role)) {
+      return res.status(403).json({ detail: "Peran Anda tidak berwenang meminta revisi klaim." });
+    }
+    if (!["DRAFT", "SUBMITTED", "REVIEW"].includes(claim.status)) {
+      return res.status(400).json({ detail: `Klaim berstatus ${claim.status} tidak dapat diminta revisi.` });
+    }
+    if (!String(note || "").trim()) {
+      return res.status(400).json({ detail: "Catatan alasan revisi klaim wajib diisi." });
+    }
+  } else if (action === "review") {
+    if (!["super_admin", "admin_ops"].includes(req.user.role)) {
+      return res.status(403).json({ detail: "Peran Anda tidak berwenang mereview klaim." });
     }
   }
 
