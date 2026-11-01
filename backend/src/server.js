@@ -365,6 +365,12 @@ app.get("/api/dashboard", requireAuth, (req, res) => {
 
   const pending_claims = visibleClaims.filter((c) => ["DRAFT", "SUBMITTED", "REVIEW", "REVISION"].includes(c.status));
 
+  // Corporate Benchmark: Rp 5 Miliar / bulan
+  const monthly_target = 5000000000;
+  const target_progress_pct = Math.round((total_booking_volume / monthly_target) * 1000) / 10;
+  const remaining_target = Math.max(0, monthly_target - total_booking_volume);
+  const pipeline_target_coverage_pct = Math.round((pipeline_value / monthly_target) * 1000) / 10;
+
   if (req.user.role === "marketing") {
     const today_leads = visibleLeads.filter((l) => !l.follow_up_date || l.follow_up_date <= todayIso);
     const recent_activity = [];
@@ -386,6 +392,10 @@ app.get("/api/dashboard", requireAuth, (req, res) => {
       recent_activity: recent_activity.slice(0, 8),
       growth,
       financials: {
+        monthly_target,
+        target_progress_pct,
+        remaining_target,
+        pipeline_target_coverage_pct,
         total_booking_volume,
         est_gross_revenue,
         total_paid_incentives: myPaidIncentives,
@@ -487,6 +497,10 @@ app.get("/api/dashboard", requireAuth, (req, res) => {
     total_simulations: visibleSimulations.length,
     growth,
     financials: {
+      monthly_target,
+      target_progress_pct,
+      remaining_target,
+      pipeline_target_coverage_pct,
       total_booking_volume,
       est_gross_revenue,
       total_paid_incentives,
