@@ -6,6 +6,22 @@
 // 3. Mitra Bank Dinamis (Bank Capital/Aladin, Mandiri Taspen, Bank MNC, BNI, Mestika)
 // ============================================================================
 
+import { DEFAULT_PARTNER_PARAMETERS } from "../config/default-parameters.js";
+import { SIMAS_PENSIUN_PROFILE } from "../config/bsi-pensiun-simas-20260629.js";
+import {
+  roundExcel,
+  days360Utc,
+  nearestAgeUtc,
+  addMonthsClampedUtc,
+  medicalStatus as simasPensiunMedicalStatus,
+  payment as pensiunPayment
+} from "./bsi-pensiun-preview.js";
+
+const REGISTERED_PRODUCT_KEYS = new Set(Object.keys(DEFAULT_PARTNER_PARAMETERS).filter((key) => {
+  const cfg = DEFAULT_PARTNER_PARAMETERS[key];
+  return cfg && typeof cfg === "object" && typeof cfg.engine === "string";
+}));
+
 function pmt(rateMonthly, nper, pv) {
   if (nper <= 0 || pv <= 0) return 0;
   if (rateMonthly === 0) return pv / nper;
@@ -322,6 +338,805 @@ export function computeSimasInsurance(plafond, birthDateIso, tenorMonths, simasC
       extraKontribusi: extraKontribusiRaw,
       totalKontribusi: totalKontribusiRaw
     }
+  };
+}
+
+function isBsiPensiunMode(body) {
+  const sub = String(body?.bsi_sub_product || "").trim().toUpperCase();
+  return sub === "PENSIUN" || sub === "PENSIUN_BERKAH";
+}
+
+const BSI_PENSIUN_FLAGGING_MAP = Object.freeze({
+  TASPEN: { code: "TASPEN", label: "TASPEN", cost: 665000 },
+  TASPEN_CTP: { code: "TASPEN_CTP", label: "TASPEN (CTP)", cost: 765000 },
+  ASABRI: { code: "ASABRI", label: "ASABRI", cost: 222000 },
+  DAPEN: { code: "DAPEN", label: "DAPEN", cost: 0 }
+});
+
+function parseStrictUtcCalendarDate(val) {
+  if (!val || typeof val !== "string") return null;
+  const s = val.trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const [y, m, d] = s.split("-").map(Number);
+  if (y < 1900 || y > 2200) return null;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+  return dt;
+}
+
+function isoUtcStr(dt) {
+  return dt && !isNaN(dt.getTime()) ? dt.toISOString().slice(0, 10) : "";
+}
+
+function normalizeBsiPensiunFlagging(rawFlag, rawDapem) {
+  const f = String(rawFlag || rawDapem || "TASPEN").trim().toUpperCase().replace(/\s+/g, "_").replace(/[()]/g, "");
+  if (f === "TASPEN_CTP" || f === "CTP") return BSI_PENSIUN_FLAGGING_MAP.TASPEN_CTP;
+  if (f === "ASABRI") return BSI_PENSIUN_FLAGGING_MAP.ASABRI;
+  if (f === "DAPEN") return BSI_PENSIUN_FLAGGING_MAP.DAPEN;
+  return BSI_PENSIUN_FLAGGING_MAP.TASPEN;
+}
+
+function safeSimasPensiunTariffPermil(entryAge, months) {
+  if (
+    !Number.isInteger(entryAge) ||
+    entryAge < SIMAS_PENSIUN_PROFILE.min_entry_age ||
+    entryAge > SIMAS_PENSIUN_PROFILE.max_entry_age
+  ) {
+    return 0;
+  }
+  if (
+    !Number.isInteger(months) ||
+    months < 1 ||
+    months > SIMAS_PENSIUN_PROFILE.max_policy_months ||
+    entryAge * 12 + months > 75 * 12
+  ) {
+    return 0;
+  }
+  const row = SIMAS_PENSIUN_PROFILE.tariffs_permil[entryAge];
+  if (!Array.isArray(row)) return 0;
+  let rate = 0;
+  if (months < 12) {
+    rate = (Number(row[0]) || 0) * (SIMAS_PENSIUN_PROFILE.month_multipliers[months - 1] || 0);
+  } else {
+    const years = Math.floor(months / 12);
+    const remainder = months % 12;
+    const lower = Number(row[years - 1]);
+    const upper = remainder ? Number(row[years]) : lower;
+    if (!(lower > 0) || !(upper > 0)) return 0;
+    rate = lower + ((upper - lower) * remainder) / 12;
+  }
+  if (!(rate > 0) || !Number.isFinite(rate)) return 0;
+  return roundExcel(rate, 2);
+}
+
+function solvePensiunAnnualRate(months, principal, targetPayment) {
+  if (months <= 0 || principal <= 0 || targetPayment <= 0) return 0;
+  let low = 0;
+  let high = 0.02;
+  while (pensiunPayment(high, months, principal) < targetPayment && high < 1024) high *= 2;
+  if (pensiunPayment(high, months, principal) < targetPayment) return 0;
+  for (let k = 0; k < 70; k++) {
+    const mid = (low + high) / 2;
+    if (pensiunPayment(mid, months, principal) < targetPayment) low = mid;
+    else high = mid;
+  }
+  return roundExcel(((low + high) / 2) * 12, 4);
+}
+
+function evaluateBsiPensiunScenario(principal, months, baseRatePct, q, attributed, ctx) {
+  const validRate = q > 0 && q < 1;
+  const premiumExact =
+    principal > 0 && validRate
+      ? (attributed ? (principal * q) / (1 - q) : principal * q)
+      : 0;
+  const sumAssuredExact = principal + (attributed ? premiumExact : 0);
+  const basePayment =
+    principal > 0 && months > 0 ? pensiunPayment(baseRatePct / 1200, months, principal) : 0;
+  // Sesuai Sheet Biru Pensiun (AF6:AO755): AK dibulatkan 2 desimal sebelum RATE()
+  const candidatePayment =
+    attributed && principal > 0 && months > 0
+      ? roundExcel((basePayment * months + premiumExact) / months, 2)
+      : basePayment;
+  const annualRate =
+    attributed && principal > 0 && months > 0 && validRate
+      ? solvePensiunAnnualRate(months, principal, candidatePayment)
+      : baseRatePct / 100;
+  const annualPricePct = roundExcel(annualRate * 100, 4);
+  const installmentExact =
+    principal > 0 && months > 0 ? pensiunPayment(annualRate / 12, months, principal) : 0;
+
+  const toCents = (v) => Math.round(roundExcel(v, 2) * 100);
+  const adminCents = principal > 0 ? toCents(principal * 0.01) : 0;
+  const stampCents = principal > 0 ? toCents(100000) : 0;
+  const premiumCashCents = attributed ? 0 : toCents(premiumExact);
+  const blockedCents = attributed ? toCents(2 * installmentExact) : 0;
+  const settlementCents = toCents(ctx.pelunasanLama);
+  const netCents =
+    toCents(principal) - adminCents - stampCents - premiumCashCents - blockedCents - settlementCents;
+
+  let indicativeMax = 0;
+  if (months > 0 && validRate && ctx.capacityExact > 0) {
+    for (let cand = 1000000; cand <= SIMAS_PENSIUN_PROFILE.max_sum_assured; cand += 1000000) {
+      const candPrem = attributed ? (cand * q) / (1 - q) : cand * q;
+      const candUp = cand + (attributed ? candPrem : 0);
+      if (candUp > SIMAS_PENSIUN_PROFILE.max_sum_assured) break;
+      const candBasePmt = pensiunPayment(baseRatePct / 1200, months, cand);
+      const candTarget = attributed ? roundExcel((candBasePmt * months + candPrem) / months, 2) : candBasePmt;
+      const candAnnRate = attributed ? solvePensiunAnnualRate(months, cand, candTarget) : baseRatePct / 100;
+      const candInst = pensiunPayment(candAnnRate / 12, months, cand);
+      if (candInst <= ctx.capacityExact + 1e-7) {
+        indicativeMax = cand;
+      }
+    }
+  }
+
+  const medCode = simasPensiunMedicalStatus(ctx.entryAgeNearest, sumAssuredExact);
+  const medLabel =
+    medCode === "NON_MCU"
+      ? "Non Medical Check Up (Auto Acceptance)"
+      : medCode === "MCU"
+      ? "Wajib Medical Check Up (MCU)"
+      : "Melebihi Ketentuan Usia / Maks UP Rp350 Juta";
+
+  const remainingPensionExact =
+    (toCents(ctx.pensionSalary) - toCents(ctx.ongoingInstallments) - toCents(installmentExact)) / 100;
+  const templateRatioPct =
+    ctx.pensionSalary > 0
+      ? roundExcel(
+          (((ctx.ratioBasis === "DBR" ? ctx.ongoingInstallments : 0) + installmentExact) /
+            ctx.pensionSalary) *
+            100,
+          4
+        )
+      : 0;
+
+  return {
+    scheme: attributed ? "atribusi_premi" : "reguler",
+    source_coverage_code: attributed ? 3 : 1,
+    principal,
+    tenor_months: months,
+    annual_rate: annualRate,
+    annual_price_pct: annualPricePct,
+    installment: roundExcel(installmentExact, 2),
+    installment_rounded: Math.round(installmentExact),
+    installment_exact: installmentExact,
+    candidate_installment_before_rate_rounding: roundExcel(candidatePayment, 2),
+    premium: roundExcel(premiumExact, 2),
+    premium_exact: premiumExact,
+    sum_assured: roundExcel(sumAssuredExact, 2),
+    sum_assured_exact: sumAssuredExact,
+    medical_code: medCode,
+    medical_status: medLabel,
+    admin_fee_exact: adminCents / 100,
+    stamp_fee_exact: stampCents / 100,
+    upfront_premium_exact: premiumCashCents / 100,
+    blocked_installments_exact: blockedCents / 100,
+    settlement_amount_exact: settlementCents / 100,
+    bank_allocated_cost: roundExcel(principal * 0.025 + ctx.flaggingInfo.cost, 2),
+    net_disbursement_exact: netCents / 100,
+    remaining_pension_salary_exact: remainingPensionExact,
+    template_ratio_pct: templateRatioPct,
+    total_installments: roundExcel(installmentExact * months, 2),
+    indicative_max_principal: indicativeMax
+  };
+}
+
+function evaluateBsiPensiunCore(body, defaultProcessDate) {
+  const rawProc =
+    body.process_date && String(body.process_date).trim() !== ""
+      ? String(body.process_date).trim().slice(0, 10)
+      : body.bsi_proyeksi_cair && String(body.bsi_proyeksi_cair).trim() !== ""
+      ? String(body.bsi_proyeksi_cair).trim().slice(0, 10)
+      : defaultProcessDate || new Date().toISOString().slice(0, 10);
+  const rawPolicy =
+    body.insurance_start_date && String(body.insurance_start_date).trim() !== ""
+      ? String(body.insurance_start_date).trim().slice(0, 10)
+      : body.bsi_proyeksi_cair && String(body.bsi_proyeksi_cair).trim() !== ""
+      ? String(body.bsi_proyeksi_cair).trim().slice(0, 10)
+      : rawProc;
+
+  const procUtc = parseStrictUtcCalendarDate(rawProc);
+  const policyUtc = parseStrictUtcCalendarDate(rawPolicy) || procUtc;
+  const dobUtc = parseStrictUtcCalendarDate(String(body.birth_date || ""));
+
+  const defaultFirstUtc = policyUtc
+    ? new Date(Date.UTC(policyUtc.getUTCFullYear(), policyUtc.getUTCMonth() + 1, 1))
+    : null;
+  const rawFirst =
+    body.first_installment_date && String(body.first_installment_date).trim() !== ""
+      ? String(body.first_installment_date).trim().slice(0, 10)
+      : body.bsi_start_angsuran && String(body.bsi_start_angsuran).trim() !== ""
+      ? String(body.bsi_start_angsuran).trim().slice(0, 10)
+      : isoUtcStr(defaultFirstUtc);
+  const firstUtc = parseStrictUtcCalendarDate(rawFirst) || defaultFirstUtc;
+
+  const processDateStr = procUtc ? isoUtcStr(procUtc) : rawProc;
+  const policyStartStr = policyUtc ? isoUtcStr(policyUtc) : processDateStr;
+  const firstInstallmentStr = firstUtc ? isoUtcStr(firstUtc) : "";
+  const ageObj = computeAgeDetail(body.birth_date, processDateStr);
+
+  const retiredType =
+    String(body.bsi_retired_type || body.retired_type || "pensiunan").trim().toLowerCase() === "janda"
+      ? "janda"
+      : "pensiunan";
+  const retiredTypeLabel = retiredType === "janda" ? "2. Pensiun Janda" : "1. Pensiun Sendiri";
+  const minBankAge = retiredType === "janda" ? 48 : 50;
+
+  const spouseStatus =
+    String(body.bsi_spouse_status || body.spouse_status || "single").trim().toLowerCase() === "with_spouse"
+      ? "with_spouse"
+      : "single";
+  const spouseStatusLabel =
+    spouseStatus === "with_spouse" ? "1. Ada Pasangan (98%)" : "2. Sendiri (100%)";
+  const spouseFactor = spouseStatus === "with_spouse" ? 0.98 : 1.0;
+
+  const flaggingInfo = normalizeBsiPensiunFlagging(body.bsi_flagging || body.flagging, body.dapem);
+
+  const rawPensionSal = Number(body.pension_salary ?? body.pensiun ?? 0);
+  const rawFallbackSal = Number(body.salary ?? 0);
+  const pensionSalary = rawPensionSal > 0 ? rawPensionSal : Math.max(0, rawFallbackSal);
+
+  const hasExplicitOngoing =
+    body.ongoing_installments !== undefined &&
+    body.ongoing_installments !== null &&
+    String(body.ongoing_installments).trim() !== "";
+  const ongoingInstallments = hasExplicitOngoing
+    ? Math.max(0, Number(body.ongoing_installments) || 0)
+    : Math.max(0, Number(body.angsuran_bsi || 0)) +
+      Math.max(0, Number(body.angsuran_selain_bsi || 0)) +
+      Math.max(0, Number(body.existing_installment || 0));
+
+  const ratioBasis =
+    String(body.bsi_ratio_basis || body.ratio_basis || "DBR").trim().toUpperCase() === "DSR"
+      ? "DSR"
+      : "DBR";
+  const rawRatioPct = Number(body.bsi_ratio_pct ?? body.ratio_pct ?? 90);
+  const okRatioPct = rawRatioPct === 70 || rawRatioPct === 90;
+  const ratioPct = rawRatioPct === 70 ? 70 : 90;
+
+  const capacityExact =
+    pensionSalary * spouseFactor * (ratioPct / 100) -
+    (ratioBasis === "DBR" ? ongoingInstallments : 0);
+
+  const rawPrice = Number(body.bsi_price_pensiun ?? body.base_rate_pct ?? 10.5);
+  const baseRatePct = Number.isFinite(rawPrice) && rawPrice > 0 ? rawPrice : 10.5;
+
+  const akad = body.bsi_akad === "Murabahah" ? "Murabahah" : "MMQ";
+  const skemaRaw = String(body.bsi_skema || "Atribusi");
+  const isAtribusi =
+    !skemaRaw.toLowerCase().includes("non") &&
+    !skemaRaw.toLowerCase().includes("reguler") &&
+    !skemaRaw.toLowerCase().includes("no_atribusi") &&
+    !skemaRaw.toLowerCase().includes("1.");
+  const skema = isAtribusi ? "Atribusi" : "Reguler";
+
+  const pelunasanLama = Math.max(
+    0,
+    Number(body.pelunasan_lama ?? body.settlement_amount ?? body.take_over ?? 0) || 0
+  );
+
+  const datesChronoOk = Boolean(dobUtc && procUtc && policyUtc && dobUtc < procUtc && dobUtc < policyUtc);
+  const entryAgeNearest = datesChronoOk ? nearestAgeUtc(dobUtc, policyUtc) : 0;
+  const bankAgeDays360Floor =
+    dobUtc && procUtc && dobUtc < procUtc ? Math.floor(days360Utc(dobUtc, procUtc) / 360) : 0;
+  const okBankMinAge = Boolean(datesChronoOk && bankAgeDays360Floor >= minBankAge);
+  const okSimasEntryAge = Boolean(
+    datesChronoOk &&
+      entryAgeNearest >= SIMAS_PENSIUN_PROFILE.min_entry_age &&
+      entryAgeNearest <= SIMAS_PENSIUN_PROFILE.max_entry_age
+  );
+
+  let maxTenor = 0;
+  if (dobUtc && procUtc && okSimasEntryAge) {
+    for (let m = 1; m <= SIMAS_PENSIUN_PROFILE.max_policy_months; m++) {
+      if (entryAgeNearest * 12 + m > 75 * 12) break;
+      if (safeSimasPensiunTariffPermil(entryAgeNearest, m) <= 0) break;
+      const matUtc = new Date(
+        Date.UTC(procUtc.getUTCFullYear(), procUtc.getUTCMonth() + m, procUtc.getUTCDate())
+      );
+      if (nearestAgeUtc(dobUtc, matUtc) <= 74.5) {
+        maxTenor = m;
+      }
+    }
+  }
+  const endAgeLimitUtc = dobUtc ? addMonthsClampedUtc(dobUtc, 74 * 12 + 6) : null;
+
+  return {
+    processDateStr,
+    policyStartStr,
+    firstInstallmentStr,
+    procUtc,
+    policyUtc,
+    dobUtc,
+    firstUtc,
+    ageObj,
+    entryAgeNearest,
+    bankAgeDays360Floor,
+    minBankAge,
+    okBankMinAge,
+    okSimasEntryAge,
+    maxTenor,
+    endAgeLimitStr: isoUtcStr(endAgeLimitUtc),
+    retiredType,
+    retiredTypeLabel,
+    spouseStatus,
+    spouseStatusLabel,
+    spouseFactor,
+    flaggingInfo,
+    pensionSalary,
+    ongoingInstallments,
+    ratioBasis,
+    ratioPct,
+    okRatioPct,
+    capacityExact,
+    baseRatePct,
+    akad,
+    skema,
+    isAtribusi,
+    pelunasanLama
+  };
+}
+
+function calculateBsiPensiunMax(body, cfg, bankKey, defaultProcessDate) {
+  const core = evaluateBsiPensiunCore(body, defaultProcessDate);
+  const tenorForCap =
+    Number(body.tenor) > 0
+      ? Math.min(SIMAS_PENSIUN_PROFILE.max_policy_months, Math.floor(Number(body.tenor)))
+      : core.maxTenor;
+  const tariffPermil = tenorForCap > 0 ? safeSimasPensiunTariffPermil(core.entryAgeNearest, tenorForCap) : 0;
+  const q = tariffPermil / 1000;
+
+  const stopReasons = [];
+  if (!core.procUtc) stopReasons.push("Tanggal Proses / Proyeksi Cair tidak valid.");
+  if (!core.dobUtc) {
+    stopReasons.push("Tanggal Lahir wajib diisi dengan tanggal kalender yang sah.");
+  } else {
+    if (!core.okBankMinAge) {
+      stopReasons.push(
+        `Usia nasabah (${core.bankAgeDays360Floor} tahun DAYS360) belum mencapai usia minimum BSI Pensiun Berkah (${core.minBankAge} tahun untuk ${core.retiredTypeLabel}).`
+      );
+    }
+    if (!core.okSimasEntryAge) {
+      stopReasons.push(
+        `Usia Nearest Birthday Simas Pensiun (${core.entryAgeNearest} tahun) di luar rentang 45–74 tahun.`
+      );
+    }
+  }
+  if (core.dobUtc && core.procUtc && core.maxTenor < 1) {
+    stopReasons.push(
+      "Batas usia jatuh tempo pembiayaan (74 thn 6 bln) atau batas polis Simas (75 thn) telah terlampaui."
+    );
+  }
+  if (core.pensionSalary <= 0) {
+    stopReasons.push("Manfaat / Gaji Pensiun wajib diisi dan harus lebih dari Rp0.");
+  } else if (core.capacityExact <= 0) {
+    stopReasons.push("Kapasitas angsuran bersih bernilai nol atau negatif setelah dikurangi angsuran berjalan.");
+  }
+
+  const scenReg = evaluateBsiPensiunScenario(
+    Number(body.plafond || 0) > 0 ? Number(body.plafond) : 100000000,
+    tenorForCap,
+    core.baseRatePct,
+    q,
+    false,
+    core
+  );
+  const scenAtrib = evaluateBsiPensiunScenario(
+    Number(body.plafond || 0) > 0 ? Number(body.plafond) : 100000000,
+    tenorForCap,
+    core.baseRatePct,
+    q,
+    true,
+    core
+  );
+  const chosenScen = core.isAtribusi ? scenAtrib : scenReg;
+  const maxPlafond = chosenScen.indicative_max_principal;
+  const subProductLabel = "Pensiun Berkah (Pensiun Murni / Janda)";
+
+  return {
+    processable: stopReasons.length === 0 && maxPlafond > 0,
+    stop_reason: stopReasons.length > 0 ? stopReasons.join(" ") : null,
+    bank_key: bankKey,
+    bank_name: cfg.name,
+    name: body.name,
+    process_date: core.processDateStr,
+    age: core.ageObj.years,
+    age_months: core.ageObj.months,
+    age_days: core.ageObj.days,
+    age_exact_text: core.ageObj.exactText,
+    nearest_age: core.entryAgeNearest,
+    bank_age_days360: core.bankAgeDays360Floor,
+    end_age_limit_date: core.endAgeLimitStr,
+    max_up_allowed: SIMAS_PENSIUN_PROFILE.max_sum_assured,
+    category: `Pensiun Berkah • ${core.retiredTypeLabel} • ${core.akad} (${core.skema})`,
+    bsi_sub_product: "PENSIUN",
+    bsi_sub_product_label: subProductLabel,
+    retired_type: core.retiredType,
+    retired_type_label: core.retiredTypeLabel,
+    spouse_status: core.spouseStatus,
+    spouse_status_label: core.spouseStatusLabel,
+    ratio_basis: core.ratioBasis,
+    ratio_pct: core.ratioPct,
+    coop_rate: chosenScen.annual_price_pct,
+    bank_rate: core.baseRatePct,
+    salary: core.pensionSalary,
+    pension_salary: core.pensionSalary,
+    max_installment: Math.floor(Math.max(0, core.capacityExact)),
+    max_installment_pension: Math.floor(Math.max(0, core.capacityExact)),
+    installment_capacity_exact: roundExcel(core.capacityExact, 2),
+    max_tenor: core.maxTenor,
+    max_plafond: maxPlafond,
+    max_plafond_reguler: scenReg.indicative_max_principal,
+    max_plafond_atribusi: scenAtrib.indicative_max_principal,
+    insurance_tariff_permil: tariffPermil,
+    take_over: core.pelunasanLama
+  };
+}
+
+function calculateBsiPensiunPreview(body, cfg, bankKey, mx) {
+  const core = evaluateBsiPensiunCore(body, mx.process_date);
+  const nip = body.nip || body.nopen || "";
+
+  const hasExplicitTenor =
+    body.tenor !== undefined && body.tenor !== null && String(body.tenor).trim() !== "";
+  const rawTenorInput = hasExplicitTenor ? Number(body.tenor) : Number(mx.max_tenor || 0);
+  const okTenorInput =
+    Number.isInteger(rawTenorInput) &&
+    rawTenorInput >= 1 &&
+    rawTenorInput <= SIMAS_PENSIUN_PROFILE.max_policy_months;
+  const requestedTenor = okTenorInput
+    ? rawTenorInput
+    : hasExplicitTenor && (!Number.isFinite(rawTenorInput) || rawTenorInput <= 0)
+    ? 0
+    : Math.max(0, Math.floor(rawTenorInput || 0));
+
+  const hasExplicitPlafond =
+    body.plafond !== undefined && body.plafond !== null && String(body.plafond).trim() !== "";
+  const rawPlafondInput = hasExplicitPlafond ? Number(body.plafond) : Number(mx.max_plafond || 0);
+  const okPlafondPositive = Number.isFinite(rawPlafondInput) && rawPlafondInput > 0;
+  const evalPlafond = okPlafondPositive ? rawPlafondInput : 0;
+
+  const tariffPermil =
+    requestedTenor > 0 ? safeSimasPensiunTariffPermil(core.entryAgeNearest, requestedTenor) : 0;
+  const q = tariffPermil / 1000;
+
+  const regulerScenario = evaluateBsiPensiunScenario(
+    evalPlafond,
+    requestedTenor,
+    core.baseRatePct,
+    q,
+    false,
+    core
+  );
+  const atribusiScenario = evaluateBsiPensiunScenario(
+    evalPlafond,
+    requestedTenor,
+    core.baseRatePct,
+    q,
+    true,
+    core
+  );
+  const chosen = core.isAtribusi ? atribusiScenario : regulerScenario;
+
+  const lastInstallmentUtc =
+    core.firstUtc && requestedTenor > 0
+      ? addMonthsClampedUtc(core.firstUtc, requestedTenor - 1)
+      : null;
+  const policyEndUtc =
+    core.policyUtc && requestedTenor > 0
+      ? addMonthsClampedUtc(core.policyUtc, requestedTenor)
+      : null;
+  const sourceMaturityUtc =
+    core.procUtc && requestedTenor > 0
+      ? new Date(
+          Date.UTC(
+            core.procUtc.getUTCFullYear(),
+            core.procUtc.getUTCMonth() + requestedTenor,
+            core.procUtc.getUTCDate()
+          )
+        )
+      : null;
+
+  const sourceEndAge =
+    core.dobUtc && sourceMaturityUtc ? nearestAgeUtc(core.dobUtc, sourceMaturityUtc) : 999;
+  const sourceEndOk = Boolean(core.dobUtc && sourceMaturityUtc && sourceEndAge <= 74.5);
+  const okFirstNotBeforeProcess = Boolean(core.firstUtc && core.procUtc && core.firstUtc >= core.procUtc);
+  const okCoverageDates = Boolean(
+    okFirstNotBeforeProcess &&
+      core.policyUtc &&
+      core.procUtc &&
+      policyEndUtc &&
+      lastInstallmentUtc &&
+      core.policyUtc <= core.procUtc &&
+      policyEndUtc >= lastInstallmentUtc
+  );
+
+  const lastInstallmentStr = isoUtcStr(lastInstallmentUtc);
+  const policyEndStr = isoUtcStr(policyEndUtc);
+  const endLoanAgeDetail = lastInstallmentStr
+    ? computeAgeDetail(body.birth_date, lastInstallmentStr)
+    : { exactText: "-" };
+
+  // Jadwal Amortisasi Anuitas 1 Fase (Masa Pensiun)
+  const fullSchedule = [];
+  if (evalPlafond > 0 && requestedTenor > 0 && chosen.installment_exact > 0) {
+    let penOs = evalPlafond;
+    const monthlyRate = chosen.annual_rate / 12;
+    for (let m = 1; m <= requestedTenor; m++) {
+      if (penOs <= 1e-6) break;
+      const openingOs = penOs;
+      const marginBln = openingOs * monthlyRate;
+      let pokokBln = chosen.installment_exact - marginBln;
+      let instBln = chosen.installment_exact;
+      if (m === requestedTenor || pokokBln > openingOs + 1e-6) {
+        pokokBln = openingOs;
+        instBln = openingOs + marginBln;
+        penOs = 0;
+      } else {
+        penOs = openingOs - pokokBln;
+      }
+      const openRnd = Math.round(openingOs);
+      const closeRnd = Math.round(penOs);
+      fullSchedule.push({
+        month: m,
+        phase: "Masa Pensiun",
+        openingOs: openRnd,
+        principalPayment: openRnd - closeRnd,
+        marginPayment: Math.round(marginBln),
+        totalInstallment: Math.round(instBln),
+        closingOs: closeRnd
+      });
+    }
+  }
+  const schedulePreview = fullSchedule.filter(
+    (row) => row.month <= 6 || row.month === Math.ceil(requestedTenor / 2) || row.month === requestedTenor
+  );
+
+  const insYears = Math.floor(Math.max(0, requestedTenor) / 12);
+  const insRemMonths = Math.max(0, requestedTenor) % 12;
+  const endCoverageAge = Number((core.entryAgeNearest + insYears + insRemMonths / 12).toFixed(1));
+  const simasValid = Boolean(
+    core.okSimasEntryAge &&
+      okTenorInput &&
+      core.entryAgeNearest * 12 + requestedTenor <= 75 * 12 &&
+      tariffPermil > 0 &&
+      evalPlafond >= 1000000 &&
+      chosen.sum_assured_exact <= SIMAS_PENSIUN_PROFILE.max_sum_assured
+  );
+
+  const simas = {
+    valid: simasValid,
+    company: "PT Asuransi Simas Jiwa (Simas Pensiun)",
+    profile_version: SIMAS_PENSIUN_PROFILE.version,
+    entry_age: core.entryAgeNearest,
+    nearest_age: core.entryAgeNearest,
+    end_coverage_age: endCoverageAge,
+    insurance_months: requestedTenor,
+    ins_years: insYears,
+    ins_rem_months: insRemMonths,
+    effective_years: insYears + (insRemMonths > 0 ? 1 : 0),
+    rate_permil: tariffPermil,
+    tarif_permil: tariffPermil,
+    santunan_setelah_atribusi: Math.round(chosen.sum_assured_exact),
+    santunan_setelah_atribusi_exact: chosen.sum_assured,
+    kontribusi_sekaligus: Math.round(chosen.premium_exact),
+    extra_kontribusi: 0,
+    premium: Math.round(chosen.premium_exact),
+    total_kontribusi: Math.round(chosen.premium_exact),
+    total_kontribusi_exact: chosen.premium,
+    max_up_allowed: SIMAS_PENSIUN_PROFILE.max_sum_assured,
+    medical_code: chosen.medical_code,
+    medical_status: chosen.medical_status
+  };
+
+  const validations = [
+    {
+      key: "entry_age",
+      label: `Usia minimum bank ${core.retiredType === "janda" ? "Pensiun Janda ≥ 48" : "Pensiun Sendiri ≥ 50"} thn DAYS360 (Saat ini: ${core.bankAgeDays360Floor} thn)`,
+      ok: core.okBankMinAge
+    },
+    {
+      key: "simas_age",
+      label: `Usia masuk & tarif Simas Pensiun 45–74 thn Nearest Birthday (Saat ini: ${core.entryAgeNearest} thn • Tarif: ${tariffPermil} ‰)`,
+      ok: Boolean(core.okSimasEntryAge && okTenorInput && tariffPermil > 0)
+    },
+    {
+      key: "source_end_age",
+      label: `Usia akhir pembiayaan ≤ 74 thn 6 bln & polis ≤ 75 thn (Tenor ${requestedTenor} bln • Nearest akhir: ${sourceEndAge < 900 ? sourceEndAge : "-"} thn)`,
+      ok: Boolean(okTenorInput && sourceEndOk && core.entryAgeNearest * 12 + requestedTenor <= 75 * 12)
+    },
+    {
+      key: "coverage_dates",
+      label: `Periode polis mencakup pencairan s.d. angsuran terakhir (${core.policyStartStr} s.d. ${policyEndStr || "-"})`,
+      ok: okCoverageDates
+    },
+    {
+      key: "sum_assured",
+      label: `Plafond ≥ Rp1 Jt & Santunan Simas Pensiun ≤ Rp350.000.000 (Santunan: Rp${Math.round(chosen.sum_assured_exact).toLocaleString("id-ID")})`,
+      ok: Boolean(
+        evalPlafond >= 1000000 && chosen.sum_assured_exact <= SIMAS_PENSIUN_PROFILE.max_sum_assured
+      )
+    },
+    {
+      key: "attribution_cap",
+      label: "Atribusi premi nasabah ≤ 70% dari plafond pembiayaan",
+      ok: !core.isAtribusi || (evalPlafond > 0 && chosen.premium_exact <= evalPlafond * 0.7)
+    },
+    {
+      key: "installment_capacity",
+      label: `Angsuran dalam kapasitas ${core.ratioBasis} ${core.ratioPct}%${core.spouseStatus === "with_spouse" ? " × 98% pasangan" : ""} (Maks Rp${Math.floor(Math.max(0, core.capacityExact)).toLocaleString("id-ID")})`,
+      ok: Boolean(
+        core.okRatioPct &&
+          core.pensionSalary > 0 &&
+          core.capacityExact > 0 &&
+          chosen.installment_exact > 0 &&
+          chosen.installment_exact <= core.capacityExact + 1e-7
+      )
+    },
+    {
+      key: "net_cash",
+      label: "Terima Bersih Nasabah bernilai positif (> Rp0)",
+      ok: chosen.net_disbursement_exact > 0
+    }
+  ];
+  const overallOk = validations.every((v) => v.ok);
+  validations.push({
+    key: "overall",
+    label: "Status Kelayakan Akhir BSI Pensiun Berkah + Simas Pensiun",
+    ok: overallOk
+  });
+  const issues = validations
+    .filter((v) => !v.ok && v.key !== "overall")
+    .map((v) => `Ketentuan BSI Pensiun Berkah tidak terpenuhi: ${v.label}`);
+
+  const adminFee = Math.round(chosen.admin_fee_exact);
+  const materaiFee = Math.round(chosen.stamp_fee_exact);
+  const insuranceDeduction = Math.round(chosen.upfront_premium_exact);
+  const totalFees = adminFee + materaiFee + insuranceDeduction;
+  const blokirCount = core.isAtribusi ? 2 : 0;
+  const retention = Math.round(chosen.blocked_installments_exact);
+  const netDisbursement = Math.round(chosen.net_disbursement_exact);
+  const remainingSalary = Math.round(chosen.remaining_pension_salary_exact);
+  const pensionInstallment = Math.round(chosen.installment_exact);
+  const ratioRounded = Number(chosen.template_ratio_pct.toFixed(2));
+  const taksasiMmq =
+    evalPlafond > 0
+      ? Math.ceil((evalPlafond * (1 + (Number(cfg.fees?.taksasiMmqMarkupPercent) || 2.0) / 100)) / 1000000) * 1000000
+      : 0;
+  const subProductLabel = "Pensiun Berkah (Pensiun Murni / Janda)";
+
+  return {
+    bank_key: bankKey,
+    bank_name: cfg.name,
+    name: body.name,
+    nip,
+    birth_date: body.birth_date,
+    process_date: core.processDateStr,
+    age: core.ageObj.years,
+    category: `Pensiun Berkah • ${core.retiredTypeLabel} • ${core.akad} (${core.skema})`,
+    plafond: evalPlafond,
+    tenor: requestedTenor,
+    bank_rate: core.baseRatePct,
+    coop_rate: chosen.annual_price_pct,
+    salary: core.pensionSalary,
+    salary_raw: core.pensionSalary,
+    pension_salary: core.pensionSalary,
+    take_over: Math.round(chosen.settlement_amount_exact),
+    buka_blokir_lama: 0,
+    tata_laksana_pct: 0,
+    bank_installment: pensionInstallment,
+    coop_installment: pensionInstallment,
+    baa: 0,
+    ratio_pct: ratioRounded,
+    ratio_pension_pct: ratioRounded,
+    proaq_pct: 1.0,
+    proaq: adminFee,
+    risk_pct: core.isAtribusi ? 0 : Number((tariffPermil / 10).toFixed(2)),
+    risk: insuranceDeduction,
+    admin_fee: materaiFee,
+    tata_laksana_fee: 0,
+    total_fees: totalFees,
+    retention_multiplier: blokirCount,
+    retention,
+    net_disbursement: netDisbursement,
+    remaining_salary: remainingSalary,
+    bsi_details: {
+      is_pensiun_berkah: true,
+      sub_product: "PENSIUN",
+      sub_product_label: subProductLabel,
+      status_gaji: core.retiredType,
+      status_gaji_label: `${core.retiredTypeLabel} • ${core.spouseStatusLabel}`,
+      retired_type: core.retiredType,
+      retired_type_label: core.retiredTypeLabel,
+      spouse_status: core.spouseStatus,
+      spouse_status_label: core.spouseStatusLabel,
+      spouse_factor: core.spouseFactor,
+      flagging: core.flaggingInfo.code,
+      flagging_label: core.flaggingInfo.label,
+      flagging_cost: core.flaggingInfo.cost,
+      bank_allocated_cost: chosen.bank_allocated_cost,
+      ratio_basis: core.ratioBasis,
+      ratio_pct: core.ratioPct,
+      template_ratio_pct: chosen.template_ratio_pct,
+      ongoing_installments: core.ongoingInstallments,
+      installment_capacity_exact: roundExcel(core.capacityExact, 2),
+      akad: core.akad,
+      skema: core.skema,
+      is_atribusi: core.isAtribusi,
+      source_coverage_code: chosen.source_coverage_code,
+      age_exact_text: core.ageObj.exactText,
+      nearest_age: core.entryAgeNearest,
+      bank_age_days360: core.bankAgeDays360Floor,
+      source_end_age_nearest: sourceEndAge < 900 ? sourceEndAge : null,
+      end_loan_age_text: endLoanAgeDetail.exactText,
+      nip,
+      active_months: 0,
+      pension_months: requestedTenor,
+      base_rate_aktif: core.baseRatePct,
+      base_rate_pensiun: core.baseRatePct,
+      price_atrib_aktif_pct: chosen.annual_price_pct,
+      price_atrib_pensiun_pct: chosen.annual_price_pct,
+      margin_aktif: chosen.annual_price_pct,
+      margin_pensiun: chosen.annual_price_pct,
+      max_plafond_at_tenor: chosen.indicative_max_principal,
+      max_plafond_reguler: regulerScenario.indicative_max_principal,
+      max_plafond_atribusi: atribusiScenario.indicative_max_principal,
+      max_installment_active: Math.floor(Math.max(0, core.capacityExact)),
+      max_installment_pension: Math.floor(Math.max(0, core.capacityExact)),
+      active_installment: 0,
+      active_installment_exact: 0,
+      pension_installment: pensionInstallment,
+      pension_installment_exact: chosen.installment_exact,
+      candidate_installment_before_rate_rounding: chosen.candidate_installment_before_rate_rounding,
+      sisa_os_saat_pensiun: evalPlafond,
+      sisa_os_saat_pensiun_exact: evalPlafond,
+      sisa_gaji_pensiun: remainingSalary,
+      sisa_gaji_pensiun_exact: chosen.remaining_pension_salary_exact,
+      sisa_gaji_aktif: remainingSalary,
+      biaya_adm: adminFee,
+      biaya_adm_exact: chosen.admin_fee_exact,
+      biaya_adm_pct: 1.0,
+      biaya_asuransi: insuranceDeduction,
+      biaya_asuransi_exact: chosen.upfront_premium_exact,
+      premi_asuransi_tertanggung: Math.round(chosen.premium_exact),
+      premi_asuransi_tertanggung_exact: chosen.premium,
+      biaya_materai: materaiFee,
+      biaya_materai_exact: chosen.stamp_fee_exact,
+      blokir_active_count: 0,
+      blokir_pension_count: blokirCount,
+      blokir_aktif: 0,
+      blokir_aktif_exact: 0,
+      blokir_pensiun: retention,
+      blokir_pensiun_exact: chosen.blocked_installments_exact,
+      blokir_angsuran: retention,
+      blokir_angsuran_exact: chosen.blocked_installments_exact,
+      pelunasan_lama: Math.round(chosen.settlement_amount_exact),
+      pelunasan_lama_exact: chosen.settlement_amount_exact,
+      buka_blokir_lama: 0,
+      buka_blokir_lama_exact: 0,
+      sisa_pencairan_bersih: netDisbursement,
+      sisa_pencairan_bersih_exact: chosen.net_disbursement_exact,
+      taksasi_mmq: taksasiMmq,
+      proyeksi_cair: core.policyStartStr,
+      start_angsuran: core.firstInstallmentStr,
+      selesai_angsuran: lastInstallmentStr,
+      insurance_end_date: policyEndStr,
+      dsr_pension_rate: core.ratioPct,
+      simas,
+      pensiun_comparison: {
+        reguler: regulerScenario,
+        atribusi_premi: atribusiScenario
+      },
+      schedule_preview: schedulePreview,
+      schedule_summary: {
+        total_months: fullSchedule.length,
+        early_payoff: false,
+        sisa_os_transisi: 0
+      }
+    },
+    validations,
+    overall_ok: overallOk,
+    issues
   };
 }
 
@@ -687,9 +1502,26 @@ function evaluateAms2Core(body, cfg) {
   };
 }
 
+function registeredPartner(allParams, bankKey) {
+  if (!allParams || typeof bankKey !== "string" || !REGISTERED_PRODUCT_KEYS.has(bankKey) || !Object.hasOwn(allParams, bankKey)) return null;
+  const cfg = allParams[bankKey];
+  return cfg && typeof cfg === "object" && typeof cfg.name === "string" && typeof cfg.engine === "string" ? cfg : null;
+}
+
+function rejectUnknownPartner(bankKey) {
+  const reason = "Produk pembiayaan tidak terdaftar. BSI Pensiun memakai modul validasi tersendiri.";
+  return {
+    bank_key: typeof bankKey === "string" ? bankKey : null,
+    error_code: "UNKNOWN_PRODUCT", processable: false, valid: false, stop_reason: reason,
+    plafond: 0, tenor: 0, max_plafond: 0, max_tenor: 0,
+    validation_summary: { overall_ok: false, issues: [reason] }
+  };
+}
+
 export function calculateMax(body, allParams) {
-  const bankKey = body.bank_key || "ams2";
-  const cfg = allParams[bankKey] || allParams.ams2;
+  const bankKey = body.bank_key ?? "ams2";
+  const cfg = registeredPartner(allParams, bankKey);
+  if (!cfg) return rejectUnknownPartner(bankKey);
   const processDate = new Date().toISOString().slice(0, 10);
   const ageObj = computeAgeDetail(body.birth_date, processDate);
   const age = ageObj.years;
@@ -742,8 +1574,11 @@ export function calculateMax(body, allParams) {
     };
   }
 
-  // 2. BSI Mitraguna Prima+ Prapensiun (Dekade Berkah PP10 & Tri Berkah PP3 + Simas Jiwa)
+  // 2. BSI Mitraguna Prima+ Prapensiun (PP10/PP3) & BSI Pensiun Berkah + Simas Jiwa
   if (bankKey === "bsi_prapen" || cfg.engine === "bsi_simas") {
+    if (isBsiPensiunMode(body)) {
+      return calculateBsiPensiunMax(body, cfg, bankKey, processDate);
+    }
     const core = evaluateBsiCore(body, cfg, processDate);
     const tenorForCap = Number(body.tenor) > 0
       ? Math.min(core.maxTenor, Math.floor(Number(body.tenor)))
@@ -1166,8 +2001,9 @@ export function calculateMax(body, allParams) {
 }
 
 export function calculatePreview(body, allParams) {
-  const bankKey = body.bank_key || "ams2";
-  const cfg = allParams[bankKey] || allParams.ams2;
+  const bankKey = body.bank_key ?? "ams2";
+  const cfg = registeredPartner(allParams, bankKey);
+  if (!cfg) return rejectUnknownPartner(bankKey);
   const mx = calculateMax(body, allParams);
   const plafond = Math.max(0, Number(body.plafond || mx.max_plafond || 0));
   const tenor = Math.max(1, Number(body.tenor || mx.max_tenor || 12));
@@ -1282,8 +2118,11 @@ export function calculatePreview(body, allParams) {
     };
   }
 
-  // 2. BSI Mitraguna Prima+ Prapensiun + Simas Jiwa (Resmi NOS v1.4.6 + Simas Prapensiun)
+  // 2. BSI Mitraguna Prima+ Prapensiun (PP10/PP3) & BSI Pensiun Berkah + Simas Jiwa
   if (bankKey === "bsi_prapen" || cfg.engine === "bsi_simas") {
+    if (isBsiPensiunMode(body)) {
+      return calculateBsiPensiunPreview(body, cfg, bankKey, mx);
+    }
     const core = evaluateBsiCore(body, cfg, mx.process_date);
     const nip = body.nip || "";
     const tmtBekerja = body.bsi_tmt_bekerja || "";
@@ -2235,49 +3074,83 @@ export function generateSimulationPdfBuffer(sim) {
   const lines = [];
 
   if (isBsi) {
-    // Ringkasan Simulasi Modern Profesional BSI Prapensiun (PRA PENSIUN DEKADE BERKAH / TRI BERKAH)
+    // Ringkasan Simulasi Modern Profesional BSI (PENSIUN BERKAH / PRA PENSIUN DEKADE BERKAH / TRI BERKAH)
+    const isPensiunBerkah = bsi.sub_product === "PENSIUN";
     const isTriBerkah = bsi.sub_product === "PP3";
-    const excelHeaderTitle = isTriBerkah ? "PRA PENSIUN TRI BERKAH" : "PRA PENSIUN DEKADE BERKAH";
+    const excelHeaderTitle = isPensiunBerkah
+      ? "PENSIUN BERKAH"
+      : isTriBerkah
+      ? "PRA PENSIUN TRI BERKAH"
+      : "PRA PENSIUN DEKADE BERKAH";
     const angsAktif = bsi.active_installment_exact ?? bsi.active_installment ?? r.bank_installment ?? 0;
     const angsPensiun = bsi.pension_installment_exact ?? bsi.pension_installment ?? r.coop_installment ?? 0;
     const biayaAdm = bsi.biaya_adm_exact ?? r.proaq ?? 0;
     const biayaAsuransi = bsi.biaya_asuransi_exact ?? (bsi.is_atribusi ? 0 : (r.risk ?? 0));
     const biayaMaterai = bsi.biaya_materai_exact ?? r.admin_fee ?? 100000;
-    const bAktifCnt = bsi.blokir_active_count ?? (isTriBerkah ? (bsi.active_months || 1) : 1);
-    const bPensiunCnt = bsi.blokir_pension_count ?? 2;
-    const blokirAktif = bsi.blokir_aktif_exact ?? (angsAktif * bAktifCnt);
+    const bAktifCnt = bsi.blokir_active_count ?? (isPensiunBerkah ? 0 : isTriBerkah ? (bsi.active_months || 1) : 1);
+    const bPensiunCnt = bsi.blokir_pension_count ?? (isPensiunBerkah && !bsi.is_atribusi ? 0 : 2);
+    const blokirAktif = isPensiunBerkah ? 0 : (bsi.blokir_aktif_exact ?? (angsAktif * bAktifCnt));
     const blokirPensiun = bsi.blokir_pensiun_exact ?? (angsPensiun * bPensiunCnt);
-    const bukaBlokirLama = bsi.buka_blokir_lama_exact ?? bsi.buka_blokir_lama ?? r.buka_blokir_lama ?? 0;
+    const bukaBlokirLama = isPensiunBerkah ? 0 : (bsi.buka_blokir_lama_exact ?? bsi.buka_blokir_lama ?? r.buka_blokir_lama ?? 0);
     const pelunasanLama = bsi.pelunasan_lama_exact ?? bsi.pelunasan_lama ?? r.take_over ?? 0;
+    const sisaGajiPensiun = bsi.sisa_gaji_pensiun_exact ?? bsi.sisa_gaji_pensiun ?? r.remaining_salary ?? 0;
     const terimaBersih =
       bsi.sisa_pencairan_bersih_exact ??
       (Number(r.plafond || 0) - biayaAdm - biayaAsuransi - biayaMaterai - blokirAktif - blokirPensiun + bukaBlokirLama - pelunasanLama);
 
-    const bsiExcelRows = [
-      { type: "header", label: excelHeaderTitle },
-      { type: "blank" },
-      { type: "text", label: "Nama Nasabah", colon: ":", val: String(r.name || "-").toUpperCase() },
-      { type: "num", label: "Plafond", colon: ":", val: fmtExcelInt(r.plafond), boldVal: true },
-      { type: "num", label: "Jangka Waktu", colon: ":", val: String(r.tenor || 0) },
-      { type: "blank" },
-      { type: "num", label: "Angsuran saat Aktif PNS", colon: ":", val: fmtExcelDec2(angsAktif) },
-      { type: "num", label: "Angsuran saat Pensiun", colon: ":", val: fmtExcelDec2(angsPensiun) },
-      { type: "blank" },
-      { type: "section", label: "Biaya" },
-      { type: "num", label: `Administrasi (${r.proaq_pct ?? 1}%)`, colon: ":", val: fmtExcelDec2(biayaAdm) },
-      { type: "num", label: "Asuransi", colon: ":", val: fmtExcelDec2(biayaAsuransi, true) },
-      { type: "num", label: "Materai", colon: ":", val: fmtExcelDec2(biayaMaterai) },
-      { type: "blank" },
-      { type: "section", label: "Blokir Angsuran" },
-      { type: "num", label: `Blokir ${bAktifCnt}x Angs Masa Aktif`, colon: ":", val: fmtExcelDec2(blokirAktif) },
-      { type: "num", label: `Blokir ${bPensiunCnt}x Angs Masa Pensiun`, colon: ":", val: fmtExcelDec2(blokirPensiun) },
-      { type: "blank" },
-      { type: "num", label: "Buka Blokir Yang Lama", colon: ":", val: fmtExcelDec2(bukaBlokirLama, true) },
-      { type: "blank" },
-      { type: "num", label: "Pelunasan Yang Lama", colon: ":", val: fmtExcelDec2(pelunasanLama, true) },
-      { type: "blank" },
-      { type: "footer", label: "Terima Bersih", colon: ":", val: fmtExcelDec2(terimaBersih) }
-    ];
+    const bsiExcelRows = isPensiunBerkah
+      ? [
+          { type: "header", label: excelHeaderTitle },
+          { type: "blank" },
+          { type: "text", label: "Nama Nasabah", colon: ":", val: String(r.name || "-").toUpperCase() },
+          { type: "num", label: "Plafond", colon: ":", val: fmtExcelInt(r.plafond), boldVal: true },
+          { type: "num", label: "Jangka Waktu", colon: ":", val: String(r.tenor || 0) },
+          { type: "blank" },
+          { type: "num", label: "Angsuran per Bulan", colon: ":", val: fmtExcelDec2(angsPensiun), boldVal: true },
+          { type: "blank" },
+          { type: "section", label: "Biaya" },
+          { type: "num", label: `Administrasi (${r.proaq_pct ?? 1}%)`, colon: ":", val: fmtExcelDec2(biayaAdm) },
+          { type: "num", label: "Asuransi", colon: ":", val: fmtExcelDec2(biayaAsuransi, true) },
+          { type: "num", label: "Materai", colon: ":", val: fmtExcelDec2(biayaMaterai) },
+          { type: "blank" },
+          { type: "section", label: "Blokir Angsuran" },
+          {
+            type: "num",
+            label: bPensiunCnt > 0 ? `Blokir ${bPensiunCnt}x Angsuran` : "Blokir Angsuran",
+            colon: ":",
+            val: fmtExcelDec2(blokirPensiun, true)
+          },
+          { type: "blank" },
+          { type: "num", label: "Pelunasan Yang Lama", colon: ":", val: fmtExcelDec2(pelunasanLama, true) },
+          { type: "blank" },
+          { type: "footer", label: "Terima Bersih", colon: ":", val: fmtExcelDec2(terimaBersih) },
+          { type: "num", label: "Sisa Gaji Pensiun", colon: ":", val: fmtExcelDec2(sisaGajiPensiun), boldVal: true }
+        ]
+      : [
+          { type: "header", label: excelHeaderTitle },
+          { type: "blank" },
+          { type: "text", label: "Nama Nasabah", colon: ":", val: String(r.name || "-").toUpperCase() },
+          { type: "num", label: "Plafond", colon: ":", val: fmtExcelInt(r.plafond), boldVal: true },
+          { type: "num", label: "Jangka Waktu", colon: ":", val: String(r.tenor || 0) },
+          { type: "blank" },
+          { type: "num", label: "Angsuran saat Aktif PNS", colon: ":", val: fmtExcelDec2(angsAktif) },
+          { type: "num", label: "Angsuran saat Pensiun", colon: ":", val: fmtExcelDec2(angsPensiun) },
+          { type: "blank" },
+          { type: "section", label: "Biaya" },
+          { type: "num", label: `Administrasi (${r.proaq_pct ?? 1}%)`, colon: ":", val: fmtExcelDec2(biayaAdm) },
+          { type: "num", label: "Asuransi", colon: ":", val: fmtExcelDec2(biayaAsuransi, true) },
+          { type: "num", label: "Materai", colon: ":", val: fmtExcelDec2(biayaMaterai) },
+          { type: "blank" },
+          { type: "section", label: "Blokir Angsuran" },
+          { type: "num", label: `Blokir ${bAktifCnt}x Angs Masa Aktif`, colon: ":", val: fmtExcelDec2(blokirAktif) },
+          { type: "num", label: `Blokir ${bPensiunCnt}x Angs Masa Pensiun`, colon: ":", val: fmtExcelDec2(blokirPensiun) },
+          { type: "blank" },
+          { type: "num", label: "Buka Blokir Yang Lama", colon: ":", val: fmtExcelDec2(bukaBlokirLama, true) },
+          { type: "blank" },
+          { type: "num", label: "Pelunasan Yang Lama", colon: ":", val: fmtExcelDec2(pelunasanLama, true) },
+          { type: "blank" },
+          { type: "footer", label: "Terima Bersih", colon: ":", val: fmtExcelDec2(terimaBersih) }
+        ];
 
     const boxX = 75;
     const col1W = 220;
@@ -2645,6 +3518,33 @@ export function generateSimulationPdfBuffer(sim) {
       ["Sisa Bersih", fmtRp(cap.net_cash ?? r.net_disbursement)],
       ["Sisa Gaji Setelah Angsuran", fmtRp(cap.salary_left ?? r.remaining_salary)]
     ];
+  } else if (isBsi && bsi.sub_product === "PENSIUN") {
+    // 100% Terminologi Resmi BSI Pensiun Berkah (Blue Sheets: Akseptasi Pensiun, Pensiun, Rincain keNsb)
+    const bPensiunCnt = bsi.blokir_pension_count ?? (bsi.is_atribusi ? 2 : 0);
+    const blokirLabel = bPensiunCnt > 0 ? `Blokir Angsuran (${bPensiunCnt}x Angsuran)` : "Blokir Angsuran (Reguler 0x)";
+    rows = [
+      ["IDENTITAS DEBITUR (BSI PENSIUN BERKAH)", ""],
+      ["Nama Debitur / Nopen-NIP", `${r.name || "-"} / ${bsi.nip || "-"}`],
+      ["Tgl Lahir / Usia Exact & Simas", `${fmtDateId(r.birth_date)} (${bsi.age_exact_text || `${r.age} Tahun`} | Nearest: ${bsi.nearest_age || r.age} Thn)`],
+      ["Tipe Pensiun & Status Pasangan", `${bsi.retired_type_label || "Pensiun Sendiri"} • ${bsi.spouse_status_label || "Sendiri (100%)"}`],
+      ["Akad, Skema & Flagging", `${bsi.akad || "MMQ"} • ${bsi.is_atribusi ? "Atribusi Premi" : "Reguler"} • ${bsi.flagging || "TASPEN"}`],
+      ["PARAMETER PEMBIAYAAN & AKSEPTASI PENSIUN", ""],
+      ["Plafond Pembiayaan", fmtRp(r.plafond)],
+      ["Tenor Pembiayaan", `${r.tenor} Bulan`],
+      ["Proyeksi Cair / Mulai - Selesai", `${bsi.proyeksi_cair || "-"} / ${bsi.start_angsuran || "-"} s.d. ${bsi.selesai_angsuran || "-"}`],
+      ["Price Pembiayaan (Dasar / Akhir)", `${bsi.base_rate_pensiun ?? r.bank_rate}% / ${bsi.price_atrib_pensiun_pct ?? r.coop_rate}% p.a.`],
+      ["Manfaat Pensiun Bulanan", fmtRp(r.pension_salary || r.salary)],
+      ["RINCIAN ANGSURAN & BIAYA PENCAIRAN", ""],
+      ["Angsuran per Bulan", `${fmtRp(bsi.pension_installment || r.coop_installment)} (${bsi.ratio_basis || "DBR"} ${r.ratio_pct}% / Maks ${bsi.ratio_pct ?? 90}%)`],
+      [`Biaya Administrasi Bank (${r.proaq_pct ?? 1}%)`, fmtRp(r.proaq)],
+      [`Premi Asuransi Simas Pensiun (${bsi.simas?.tarif_permil ?? 0} per mil)`, `${fmtRp(bsi.premi_asuransi_tertanggung || 0)} (${bsi.is_atribusi ? "Atribusi Margin" : "Potong Pencairan"})`],
+      ["Biaya Materai", fmtRp(r.admin_fee)],
+      [blokirLabel, fmtRp(r.retention)],
+      ["Pelunasan Yang Lama (Take Over)", fmtRp(bsi.pelunasan_lama ?? r.take_over ?? 0)],
+      ["HASIL AKHIR PENCAIRAN", ""],
+      ["TERIMA BERSIH NASABAH (NET DISBURSEMENT)", fmtRp(r.net_disbursement)],
+      ["SISA GAJI PENSIUN SETELAH ANGSURAN", fmtRp(bsi.sisa_gaji_pensiun ?? r.remaining_salary)]
+    ];
   } else if (isBsi) {
     // 100% Terminologi Resmi BSI Prapensiun NOS v1.4.6 + Simas Jiwa
     const bAktifCnt = bsi.blokir_active_count ?? (bsi.sub_product === "PP3" ? (bsi.active_months || 1) : 1);
@@ -2956,48 +3856,82 @@ export function generateSimulationSvgBuffer(sim) {
   }
 
   if (isBsi) {
+    const isPensiunBerkah = bsi.sub_product === "PENSIUN";
     const isTriBerkah = bsi.sub_product === "PP3";
-    const excelHeaderTitle = isTriBerkah ? "PRA PENSIUN TRI BERKAH" : "PRA PENSIUN DEKADE BERKAH";
+    const excelHeaderTitle = isPensiunBerkah
+      ? "PENSIUN BERKAH"
+      : isTriBerkah
+      ? "PRA PENSIUN TRI BERKAH"
+      : "PRA PENSIUN DEKADE BERKAH";
     const angsAktif = bsi.active_installment_exact ?? bsi.active_installment ?? r.bank_installment ?? 0;
     const angsPensiun = bsi.pension_installment_exact ?? bsi.pension_installment ?? r.coop_installment ?? 0;
     const biayaAdm = bsi.biaya_adm_exact ?? r.proaq ?? 0;
     const biayaAsuransi = bsi.biaya_asuransi_exact ?? (bsi.is_atribusi ? 0 : (r.risk ?? 0));
     const biayaMaterai = bsi.biaya_materai_exact ?? r.admin_fee ?? 100000;
-    const bAktifCnt = bsi.blokir_active_count ?? (isTriBerkah ? (bsi.active_months || 1) : 1);
-    const bPensiunCnt = bsi.blokir_pension_count ?? 2;
-    const blokirAktif = bsi.blokir_aktif_exact ?? (angsAktif * bAktifCnt);
+    const bAktifCnt = bsi.blokir_active_count ?? (isPensiunBerkah ? 0 : isTriBerkah ? (bsi.active_months || 1) : 1);
+    const bPensiunCnt = bsi.blokir_pension_count ?? (isPensiunBerkah && !bsi.is_atribusi ? 0 : 2);
+    const blokirAktif = isPensiunBerkah ? 0 : (bsi.blokir_aktif_exact ?? (angsAktif * bAktifCnt));
     const blokirPensiun = bsi.blokir_pensiun_exact ?? (angsPensiun * bPensiunCnt);
-    const bukaBlokirLama = bsi.buka_blokir_lama_exact ?? bsi.buka_blokir_lama ?? r.buka_blokir_lama ?? 0;
+    const bukaBlokirLama = isPensiunBerkah ? 0 : (bsi.buka_blokir_lama_exact ?? bsi.buka_blokir_lama ?? r.buka_blokir_lama ?? 0);
     const pelunasanLama = bsi.pelunasan_lama_exact ?? bsi.pelunasan_lama ?? r.take_over ?? 0;
+    const sisaGajiPensiun = bsi.sisa_gaji_pensiun_exact ?? bsi.sisa_gaji_pensiun ?? r.remaining_salary ?? 0;
     const terimaBersih =
       bsi.sisa_pencairan_bersih_exact ??
       (Number(r.plafond || 0) - biayaAdm - biayaAsuransi - biayaMaterai - blokirAktif - blokirPensiun + bukaBlokirLama - pelunasanLama);
 
-    const bsiExcelRows = [
-      { type: "header", label: excelHeaderTitle },
-      { type: "blank" },
-      { type: "text", label: "Nama Nasabah", colon: ":", val: String(r.name || "-").toUpperCase() },
-      { type: "num", label: "Plafond", colon: ":", val: fmtExcelInt(r.plafond), boldVal: true },
-      { type: "num", label: "Jangka Waktu", colon: ":", val: String(r.tenor || 0) },
-      { type: "blank" },
-      { type: "num", label: "Angsuran saat Aktif PNS", colon: ":", val: fmtExcelDec2(angsAktif) },
-      { type: "num", label: "Angsuran saat Pensiun", colon: ":", val: fmtExcelDec2(angsPensiun) },
-      { type: "blank" },
-      { type: "section", label: "Biaya" },
-      { type: "num", label: `Administrasi (${r.proaq_pct ?? 1}%)`, colon: ":", val: fmtExcelDec2(biayaAdm) },
-      { type: "num", label: "Asuransi", colon: ":", val: fmtExcelDec2(biayaAsuransi, true) },
-      { type: "num", label: "Materai", colon: ":", val: fmtExcelDec2(biayaMaterai) },
-      { type: "blank" },
-      { type: "section", label: "Blokir Angsuran" },
-      { type: "num", label: `Blokir ${bAktifCnt}x Angs Masa Aktif`, colon: ":", val: fmtExcelDec2(blokirAktif) },
-      { type: "num", label: `Blokir ${bPensiunCnt}x Angs Masa Pensiun`, colon: ":", val: fmtExcelDec2(blokirPensiun) },
-      { type: "blank" },
-      { type: "num", label: "Buka Blokir Yang Lama", colon: ":", val: fmtExcelDec2(bukaBlokirLama, true) },
-      { type: "blank" },
-      { type: "num", label: "Pelunasan Yang Lama", colon: ":", val: fmtExcelDec2(pelunasanLama, true) },
-      { type: "blank" },
-      { type: "footer", label: "Terima Bersih", colon: ":", val: fmtExcelDec2(terimaBersih) }
-    ];
+    const bsiExcelRows = isPensiunBerkah
+      ? [
+          { type: "header", label: excelHeaderTitle },
+          { type: "blank" },
+          { type: "text", label: "Nama Nasabah", colon: ":", val: String(r.name || "-").toUpperCase() },
+          { type: "num", label: "Plafond", colon: ":", val: fmtExcelInt(r.plafond), boldVal: true },
+          { type: "num", label: "Jangka Waktu", colon: ":", val: String(r.tenor || 0) },
+          { type: "blank" },
+          { type: "num", label: "Angsuran per Bulan", colon: ":", val: fmtExcelDec2(angsPensiun), boldVal: true },
+          { type: "blank" },
+          { type: "section", label: "Biaya" },
+          { type: "num", label: `Administrasi (${r.proaq_pct ?? 1}%)`, colon: ":", val: fmtExcelDec2(biayaAdm) },
+          { type: "num", label: "Asuransi", colon: ":", val: fmtExcelDec2(biayaAsuransi, true) },
+          { type: "num", label: "Materai", colon: ":", val: fmtExcelDec2(biayaMaterai) },
+          { type: "blank" },
+          { type: "section", label: "Blokir Angsuran" },
+          {
+            type: "num",
+            label: bPensiunCnt > 0 ? `Blokir ${bPensiunCnt}x Angsuran` : "Blokir Angsuran",
+            colon: ":",
+            val: fmtExcelDec2(blokirPensiun, true)
+          },
+          { type: "blank" },
+          { type: "num", label: "Pelunasan Yang Lama", colon: ":", val: fmtExcelDec2(pelunasanLama, true) },
+          { type: "blank" },
+          { type: "footer", label: "Terima Bersih", colon: ":", val: fmtExcelDec2(terimaBersih) },
+          { type: "num", label: "Sisa Gaji Pensiun", colon: ":", val: fmtExcelDec2(sisaGajiPensiun), boldVal: true }
+        ]
+      : [
+          { type: "header", label: excelHeaderTitle },
+          { type: "blank" },
+          { type: "text", label: "Nama Nasabah", colon: ":", val: String(r.name || "-").toUpperCase() },
+          { type: "num", label: "Plafond", colon: ":", val: fmtExcelInt(r.plafond), boldVal: true },
+          { type: "num", label: "Jangka Waktu", colon: ":", val: String(r.tenor || 0) },
+          { type: "blank" },
+          { type: "num", label: "Angsuran saat Aktif PNS", colon: ":", val: fmtExcelDec2(angsAktif) },
+          { type: "num", label: "Angsuran saat Pensiun", colon: ":", val: fmtExcelDec2(angsPensiun) },
+          { type: "blank" },
+          { type: "section", label: "Biaya" },
+          { type: "num", label: `Administrasi (${r.proaq_pct ?? 1}%)`, colon: ":", val: fmtExcelDec2(biayaAdm) },
+          { type: "num", label: "Asuransi", colon: ":", val: fmtExcelDec2(biayaAsuransi, true) },
+          { type: "num", label: "Materai", colon: ":", val: fmtExcelDec2(biayaMaterai) },
+          { type: "blank" },
+          { type: "section", label: "Blokir Angsuran" },
+          { type: "num", label: `Blokir ${bAktifCnt}x Angs Masa Aktif`, colon: ":", val: fmtExcelDec2(blokirAktif) },
+          { type: "num", label: `Blokir ${bPensiunCnt}x Angs Masa Pensiun`, colon: ":", val: fmtExcelDec2(blokirPensiun) },
+          { type: "blank" },
+          { type: "num", label: "Buka Blokir Yang Lama", colon: ":", val: fmtExcelDec2(bukaBlokirLama, true) },
+          { type: "blank" },
+          { type: "num", label: "Pelunasan Yang Lama", colon: ":", val: fmtExcelDec2(pelunasanLama, true) },
+          { type: "blank" },
+          { type: "footer", label: "Terima Bersih", colon: ":", val: fmtExcelDec2(terimaBersih) }
+        ];
 
     const rowH = 28;
     const boxX = 24;

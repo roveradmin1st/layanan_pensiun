@@ -16,6 +16,7 @@ const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Leads = lazy(() => import("./pages/Leads"));
 const ImportLeads = lazy(() => import("./pages/ImportLeads"));
 const CalculatorPage = lazy(() => import("./pages/Calculator"));
+const PensionValidation = lazy(() => import("./pages/PensionValidation"));
 const Simulations = lazy(() => import("./pages/Simulations"));
 const Progress = lazy(() => import("./pages/Progress"));
 const Claims = lazy(() => import("./pages/Claims"));
@@ -101,6 +102,7 @@ export default function App() {
               <Route path="/leads" element={<Leads />} />
               <Route path="/impor" element={<Protected admin><ImportLeads /></Protected>} />
               <Route path="/kalkulator" element={<CalculatorPage />} />
+              <Route path="/kalkulator/bsi-pensiun-validasi" element={<PensionValidation />} />
               <Route path="/simulasi" element={<Simulations />} />
               <Route path="/progress" element={<Progress />} />
               <Route path="/klaim" element={<Claims />} />

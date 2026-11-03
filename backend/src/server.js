@@ -12,6 +12,7 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { DEFAULT_PARTNER_PARAMETERS } from "./config/default-parameters.js";
+import { createPensionPreviewRouter } from "./routes/bsi-pensiun-preview.js";
 import {
   calculateMax,
   calculatePreview,
@@ -522,6 +523,8 @@ app.get("/api/dashboard", requireAuth, (req, res) => {
 // ============================================================================
 // 3. BANKS & DYNAMIC PARTNER PARAMETERS (EDITABLE BY ROLE)
 // ============================================================================
+// Read-only pension validation: central admins only, flag OFF by default, unavailable in production.
+app.use("/api/bsi-pensiun", requireAuth, requireRoles("super_admin", "admin_ops"), createPensionPreviewRouter());
 app.get("/api/banks", requireAuth, (req, res) => {
   const store = getStore();
   const p = store.partner_parameters;
@@ -530,13 +533,20 @@ app.get("/api/banks", requireAuth, (req, res) => {
     .filter((key) => canAccessBank(req.user, key))
     .map((key) => {
       const item = p[key];
+      const isLegacyBsiLabel =
+        key === "bsi_prapen" &&
+        (!item?.shortName || item.shortName === "BSI · Prapensiun");
       return {
         key,
-        name: item?.shortName || item?.name || key,
-        full_name: item?.name || key,
+        name: isLegacyBsiLabel ? "BSI · Prapen & Pensiun" : (item?.shortName || item?.name || key),
+        full_name: isLegacyBsiLabel
+          ? "BSI — Mitraguna Prapensiun & Pensiun Berkah"
+          : (item?.name || key),
         engine: item?.engine || "partner_bank",
         supported: item?.active !== false,
-        description: item?.description || ""
+        description: isLegacyBsiLabel
+          ? DEFAULT_PARTNER_PARAMETERS.bsi_prapen.description
+          : (item?.description || "")
       };
     });
   res.json({ banks });
@@ -676,6 +686,8 @@ const CALC_NON_NEGATIVE_FIELDS = [
   "requested_tenor",
   "take_over",
   "pelunasan",
+  "pelunasan_lama",
+  "ongoing_installments",
   "blokir_count",
   "blokir_1_override",
   "blokir_2_override",
@@ -691,6 +703,7 @@ app.post("/api/calc/max", requireAuth, (req, res) => {
   if (err) return res.status(400).json({ detail: err });
   const store = getStore();
   const result = calculateMax(body, store.partner_parameters);
+  if (result.error_code === "UNKNOWN_PRODUCT") return res.status(400).json({ detail: result.stop_reason });
   res.json(result);
 });
 
@@ -703,6 +716,7 @@ app.post("/api/calc/preview", requireAuth, (req, res) => {
   if (err) return res.status(400).json({ detail: err });
   const store = getStore();
   const result = calculatePreview(body, store.partner_parameters);
+  if (result.error_code === "UNKNOWN_PRODUCT") return res.status(400).json({ detail: result.stop_reason });
   res.json(result);
 });
 
@@ -862,6 +876,18 @@ app.post("/api/simulations/:id/ai-summary", requireAuth, (req, res) => {
       `• Biaya & Retensi: Biaya Kredit Rp${(cap.cost ?? r.total_fees).toLocaleString("id-ID")}, ${retLabel} Rp${(cap.total_retention ?? r.retention).toLocaleString("id-ID")}.`,
       `• Highlight Point: Plafon Rp${(cap.loan ?? r.plafond).toLocaleString("id-ID")} | Tenor ${reqTenorVal} bln | Sisa Bersih Rp${(cap.net_cash ?? r.net_disbursement).toLocaleString("id-ID")} | Sisa Gaji Rp${(cap.salary_left ?? r.remaining_salary).toLocaleString("id-ID")}.`,
       `• Status Validasi: ${r.overall_ok ? "Simulasi valid berdasarkan data dan parameter PS3 CAPITAL." : (cap.warnings || []).join(" ") || "Periksa catatan validasi."}`
+    ].join("\n");
+  } else if (isBsi && bsi.sub_product === "PENSIUN") {
+    const sisaGajiPensiun = bsi.sisa_gaji_pensiun ?? (r.pension_salary - r.coop_installment);
+    summary = [
+      `RINGKASAN EKSEKUTIF SIMULASI BSI PENSIUN BERKAH (${sim.sim_no})`,
+      `• Calon Debitur: ${r.name}${bsi.nip ? ` (Nopen/NIP: ${bsi.nip})` : ""} usia ${r.age} tahun (${bsi.retired_type_label || "Pensiun Sendiri"} • ${bsi.spouse_status_label || "Sendiri"} • Flagging ${bsi.flagging_label || "TASPEN"}) pada produk BSI Pensiun Berkah (Akad ${bsi.akad || "MMQ"} • Skema ${bsi.is_atribusi ? "Atribusi Premi" : "Reguler"}).`,
+      `• Plafond & Tenor: Plafond Rp${r.plafond.toLocaleString("id-ID")} selama ${r.tenor} bulan dengan Price Dasar ${bsi.base_rate_pensiun ?? r.coop_rate}% p.a. (Price Akhir ${bsi.price_atrib_pensiun_pct ?? r.coop_rate}% p.a.).`,
+      `• Angsuran Pembiayaan: Angsuran bulanan Rp${(bsi.pension_installment || r.coop_installment).toLocaleString("id-ID")}/bln (${bsi.ratio_basis || "DBR"} Aktual ${r.ratio_pension_pct ?? r.ratio_pct}% dari batas ${bsi.ratio_pct || 90}%).`,
+      `• Rincian Biaya & Asuransi: Administrasi (1%) Rp${r.proaq.toLocaleString("id-ID")}, Premi Simas Pensiun (${bsi.simas?.tarif_permil ?? 0} ‰) Rp${Math.round(bsi.premi_asuransi_tertanggung || 0).toLocaleString("id-ID")} (${bsi.is_atribusi ? "Dicicil di Margin" : "Potong Pencairan"}), Materai Rp${r.admin_fee.toLocaleString("id-ID")}.`,
+      `• Blokir & Pelunasan: Blokir Angsuran (${bsi.blokir_pension_count || 0}x) Rp${r.retention.toLocaleString("id-ID")}${r.take_over > 0 ? `, Pelunasan Yang Lama Rp${(r.take_over || 0).toLocaleString("id-ID")}` : ""}.`,
+      `• Hasil Akhir: Terima Bersih Rp${r.net_disbursement.toLocaleString("id-ID")} dengan Sisa Gaji Pensiun Rp${Math.round(sisaGajiPensiun).toLocaleString("id-ID")}.`,
+      `• Rekomendasi Kelayakan: ${r.overall_ok ? "LAYAK DIPROSES — Seluruh parameter akseptasi BSI Pensiun Berkah & Simas Pensiun terpenuhi." : "PERLU PENYESUAIAN — Terdapat parameter pembiayaan yang belum terpenuhi."}`
     ].join("\n");
   } else if (isBsi) {
     const sisaGajiPensiun = bsi.sisa_gaji_pensiun || (r.pension_salary - r.coop_installment);
@@ -2212,6 +2238,8 @@ if (fs.existsSync(FRONTEND_DIST)) {
   });
 }
 
-app.listen(PORT, () => {
+// A draft pension preview is a local validation tool; do not expose this development server to the LAN.
+const BIND_HOST = !IS_PROD && process.env.BSI_PENSIUN_PREVIEW === "true" ? "127.0.0.1" : undefined;
+app.listen(PORT, BIND_HOST, () => {
   console.log(`[Layanan Pensiunan Enterprise API] Running on http://localhost:${PORT}`);
 });
