@@ -18,6 +18,7 @@ import {
   Percent
 } from "lucide-react";
 import { api, errMsg } from "../lib/api";
+import { useAuth } from "../context/AuthContext";
 import { rp, pct, fmtDate, ddmmyyyyToIso } from "../lib/format";
 import { cn } from "../lib/utils";
 import { Logo, PartnerLogo } from "../components/brand/Logo";
@@ -28,6 +29,18 @@ import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
 import CurrencyInput from "../components/calc/CurrencyInput";
 import ResultView from "../components/calc/ResultView";
 import { AiSummary, DownloadActions } from "../components/calc/SimExtras";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription
+} from "../components/ui/dialog";
+import {
+  computeBsiPensiunLiveRecommendation,
+  BSI_PENSIUN_FLAGGING_OPTIONS,
+  BSI_PENSIUN_EXCEL_ANCHOR
+} from "../lib/bsiPensiunSimas";
 
 const Step = ({ n, title, children, testid }) => (
   <section className="lp-card p-4 sm:p-6" data-testid={testid}>
@@ -55,12 +68,15 @@ const MaxCard = memo(function MaxCard({ mx }) {
   const isAms2 = mx.bank_key === "ams2";
 
   if (isBsi) {
+    const isBsiPensiun = mx.bsi_sub_product === "PENSIUN";
     return (
       <div className="lp-card p-4 sm:p-6 lp-fade border-l-4 border-l-[#078D67]" data-testid="max-result">
         <div className="mb-4 flex items-center gap-3 border-b border-slate-100 pb-3">
           <PartnerLogo bankKey="bsi_prapen" size="sm" />
           <div>
-            <p className="lp-eyebrow text-[#078D67]">Hasil Maksimal Pembiayaan BSI • {mx.bank_name || "Bank BSI"}</p>
+            <p className="lp-eyebrow text-[#078D67]">
+              Hasil Maksimal Pembiayaan BSI • {isBsiPensiun ? "Pensiun Berkah" : (mx.bank_name || "Bank BSI")}
+            </p>
             <p className="font-display text-base font-bold text-[#17223B]">Calon Debitur: {mx.name}</p>
           </div>
         </div>
@@ -68,30 +84,51 @@ const MaxCard = memo(function MaxCard({ mx }) {
           <MaxRow k="Tanggal Proses" v={fmtDate(mx.process_date)} />
           <MaxRow k="Usia Saat Ini" v={`${mx.age} tahun`} testid="max-age" />
           {mx.bsi_status_gaji_label && (
-            <MaxRow k="Status Gaji" v={mx.bsi_status_gaji_label} strong testid="max-status-gaji" />
+            <MaxRow k={isBsiPensiun ? "Tipe Pensiun & Pasangan" : "Status Gaji"} v={mx.bsi_status_gaji_label} strong testid="max-status-gaji" />
           )}
           {mx.bsi_sub_product_label && (
             <MaxRow k="Sub-Produk BSI" v={mx.bsi_sub_product_label} testid="max-sub-product" />
           )}
           <MaxRow k="Kategori & Akad" v={mx.category} strong testid="max-category" />
-          <MaxRow k="Price / Margin Saat Aktif" v={`${pct(mx.bank_rate)} per tahun`} />
-          <MaxRow k="Price / Margin Saat Pensiun" v={`${pct(mx.coop_rate)} per tahun`} testid="max-coop-rate" />
-          <MaxRow k="Gaji Masa Aktif Diakui" v={rp(mx.salary)} />
-          {mx.pension_salary > 0 && (
-            <MaxRow k="Estimasi Gaji Pensiun" v={rp(mx.pension_salary)} />
+          {isBsiPensiun ? (
+            <>
+              <MaxRow k="Price Dasar / Price Akhir" v={`${pct(mx.bank_rate)} / ${pct(mx.coop_rate)} p.a.`} testid="max-coop-rate" />
+              <MaxRow k="Manfaat Pensiun Bulanan" v={rp(mx.pension_salary || mx.salary)} />
+              <MaxRow
+                k={`Kapasitas Angsuran (${mx.bsi_ratio_basis || "DBR"} ${mx.dbr_active_rate || 90}%)`}
+                v={rp(mx.max_installment)}
+                strong
+                testid="max-installment"
+              />
+              <MaxRow k="Tenor Maksimal" v={`${mx.max_tenor} bulan`} testid="max-tenor" />
+              <MaxRow k="Plafond Maksimal (Skema Dipilih)" v={rp(mx.max_plafond)} strong testid="max-plafond" />
+              {mx.max_plafond_reguler > 0 && (
+                <MaxRow k="Pembanding Maks Reguler / Atribusi" v={`${rp(mx.max_plafond_reguler)} / ${rp(mx.max_plafond_atribusi || 0)}`} />
+              )}
+              <MaxRow k="Pelunasan Lama / Take Over" v={rp(mx.take_over)} />
+            </>
+          ) : (
+            <>
+              <MaxRow k="Price / Margin Saat Aktif" v={`${pct(mx.bank_rate)} per tahun`} />
+              <MaxRow k="Price / Margin Saat Pensiun" v={`${pct(mx.coop_rate)} per tahun`} testid="max-coop-rate" />
+              <MaxRow k="Gaji Masa Aktif Diakui" v={rp(mx.salary)} />
+              {mx.pension_salary > 0 && (
+                <MaxRow k="Estimasi Gaji Pensiun" v={rp(mx.pension_salary)} />
+              )}
+              <MaxRow
+                k={`Angsuran Maksimal Aktif (DBR ${mx.dbr_active_rate || 70}%)`}
+                v={rp(mx.max_installment)}
+                strong
+                testid="max-installment"
+              />
+              {mx.max_installment_pension > 0 && (
+                <MaxRow k="Angsuran Maksimal Pensiun (DSR 90%)" v={rp(mx.max_installment_pension)} />
+              )}
+              <MaxRow k="Tenor Maksimal" v={`${mx.max_tenor} bulan`} testid="max-tenor" />
+              <MaxRow k="Plafond Maksimal" v={rp(mx.max_plafond)} strong testid="max-plafond" />
+              <MaxRow k="Nilai Take Over" v={rp(mx.take_over)} />
+            </>
           )}
-          <MaxRow
-            k={`Angsuran Maksimal Aktif (DBR ${mx.dbr_active_rate || 70}%)`}
-            v={rp(mx.max_installment)}
-            strong
-            testid="max-installment"
-          />
-          {mx.max_installment_pension > 0 && (
-            <MaxRow k="Angsuran Maksimal Pensiun (DSR 90%)" v={rp(mx.max_installment_pension)} />
-          )}
-          <MaxRow k="Tenor Maksimal" v={`${mx.max_tenor} bulan`} testid="max-tenor" />
-          <MaxRow k="Plafond Maksimal" v={rp(mx.max_plafond)} strong testid="max-plafond" />
-          <MaxRow k="Nilai Take Over" v={rp(mx.take_over)} />
         </div>
       </div>
     );
@@ -350,6 +387,12 @@ function computeMestikaRecommendation(d, cfg = {}) {
 function nextMonth25IsoLocal(baseIso) {
   const d = parseIsoDateLocal(baseIso) || new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+function nextMonthFirstIsoLocal(baseIso) {
+  const d = parseIsoDateLocal(baseIso) || new Date();
+  const next = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
 function roundHalfUpLocal(value, decimals = 0) {
@@ -828,6 +871,7 @@ function computeAms2LiveRecommendation(d, cfg) {
 }
 
 export default function CalculatorPage() {
+  const { user } = useAuth();
   const [sp] = useSearchParams();
   const nav = useNavigate();
   const leadId = sp.get("lead");
@@ -887,6 +931,14 @@ export default function CalculatorPage() {
     angsuran_selain_bsi: 0,
     bsi_req_loan: "",
     bsi_akad: "MMQ",
+    // BSI Pensiun Berkah (Blue Sheets: Akseptasi Pensiun, Pensiun, Rincain keNsb):
+    bsi_process_iso: todayIsoLocal(),
+    bsi_retired_type: "pensiunan", // "pensiunan" (min 50 thn) | "janda" (min 48 thn)
+    bsi_spouse_status: "single", // "single" (100%) | "with_spouse" (98%)
+    bsi_flagging: "TASPEN", // "TASPEN" | "TASPEN_CTP" | "ASABRI" | "DAPEN"
+    bsi_ratio_basis: "DBR", // "DBR" | "DSR"
+    bsi_ratio_pct: "90", // "90" | "70"
+    bsi_ongoing_installments: 0,
     // Calc Capital (PS3 CAPITAL — DASA CIPTA BERKARYA) Specific:
     capital_birth_iso: "",
     capital_product: "", // "" | "pra" | "pensiun"
@@ -917,10 +969,25 @@ export default function CalculatorPage() {
   const [mestikaError, setMestikaError] = useState("");
   const [bsiError, setBsiError] = useState("");
   const [showExistingOblig, setShowExistingOblig] = useState(false);
+  const [bsiChoiceOpen, setBsiChoiceOpen] = useState(false);
 
-  const handleSelectBank = (targetKey) => {
+  const handleSelectBank = (targetKey, bsiInitialSubProduct = null) => {
     setTransitionBankKey(targetKey);
     setBankKey(targetKey);
+    if (targetKey === "bsi_prapen" && bsiInitialSubProduct) {
+      const today = todayIsoLocal();
+      setD((prev) => ({
+        ...prev,
+        bsi_sub_product: bsiInitialSubProduct,
+        bsi_process_iso: prev.bsi_process_iso || today,
+        bsi_proyeksi_cair: prev.bsi_proyeksi_cair || today,
+        bsi_start_angsuran:
+          bsiInitialSubProduct === "PENSIUN"
+            ? nextMonthFirstIsoLocal(prev.bsi_proyeksi_cair || today)
+            : (prev.bsi_start_angsuran || nextMonth25IsoLocal(today)),
+        bsi_req_tenor: bsiInitialSubProduct === "PENSIUN" ? "" : (prev.bsi_req_tenor || "180")
+      }));
+    }
     reset();
     setViewStage("transition");
     setTimeout(() => {
@@ -1031,6 +1098,12 @@ export default function CalculatorPage() {
     pelunasan_lama: Number(d.pelunasan_lama || d.take_over || 0),
     angsuran_bsi: Number(d.angsuran_bsi || 0),
     angsuran_selain_bsi: Number(d.angsuran_selain_bsi || 0),
+    bsi_retired_type: d.bsi_retired_type || "pensiunan",
+    bsi_spouse_status: d.bsi_spouse_status || "single",
+    bsi_flagging: d.bsi_flagging || (dapem === "ASABRI" ? "ASABRI" : "TASPEN"),
+    bsi_ratio_basis: d.bsi_ratio_basis || "DBR",
+    bsi_ratio_pct: Number(d.bsi_ratio_pct || 90),
+    ongoing_installments: Number(d.bsi_ongoing_installments || 0),
     // Calc Capital fields:
     capital_product: d.capital_product,
     tmt_pensiun_date: d.capital_product === "pensiun" ? "" : d.capital_tmt_iso,
@@ -1039,7 +1112,7 @@ export default function CalculatorPage() {
     process_date: isMestika
       ? d.mestika_process_iso
       : isBsi
-      ? (d.bsi_proyeksi_cair || todayIsoLocal())
+      ? (d.bsi_sub_product === "PENSIUN" ? (d.bsi_process_iso || d.bsi_proyeksi_cair || todayIsoLocal()) : (d.bsi_proyeksi_cair || todayIsoLocal()))
       : isAms2
       ? (d.ams2_process_iso || todayIsoLocal())
       : d.capital_process_iso,
@@ -1090,7 +1163,18 @@ export default function CalculatorPage() {
   const tlNum = tl === "" ? null : Number(String(tl).replace(",", "."));
   const tlError = isAms2 && tl !== "" && (isNaN(tlNum) || tlNum < 0 || tlNum > 3.5) ? "Tata Laksana tidak boleh negatif atau melebihi 3,5%." : "";
 
-  const bsiRec = isBsi ? computeBsiLiveRecommendation(d, partnerParams?.bsi_prapen) : null;
+  const isBsiPensiun = isBsi && d.bsi_sub_product === "PENSIUN";
+  const bsiRec = isBsi && !isBsiPensiun ? computeBsiLiveRecommendation(d, partnerParams?.bsi_prapen) : null;
+  const bsiPenRec = isBsiPensiun
+    ? computeBsiPensiunLiveRecommendation({
+        ...d,
+        birth_date: d.bsi_birth_iso,
+        process_date: d.bsi_process_iso || d.bsi_proyeksi_cair || todayIsoLocal(),
+        plafond: d.bsi_req_loan,
+        tenor: d.bsi_req_tenor,
+        bsi_price_pensiun: Number(String(d.bsi_price_pensiun || "10.50").replace(",", ".")) || 10.5
+      })
+    : null;
   const ams2Rec = isAms2 ? computeAms2LiveRecommendation(d, partnerParams?.ams2) : null;
 
   const payload = () => {
@@ -1108,6 +1192,20 @@ export default function CalculatorPage() {
       };
     }
     if (isBsi) {
+      if (isBsiPensiun) {
+        const usePlafond = d.bsi_req_loan ? Number(d.bsi_req_loan) : (bsiPenRec?.maxPlafondSelected || "");
+        const useTenor = d.bsi_req_tenor ? Number(d.bsi_req_tenor) : (bsiPenRec?.maxTenor || "");
+        return {
+          ...base(),
+          salary: Number(d.pension_salary || 0),
+          tata_laksana_pct: 0,
+          lead_id: leadId || null,
+          bank_key: bankKey,
+          dapem: dapem || null,
+          plafond: usePlafond,
+          tenor: useTenor,
+        };
+      }
       const usePlafond = d.bsi_req_loan ? Number(d.bsi_req_loan) : (bsiRec?.maxPlafond || "");
       const useTenor = d.bsi_req_tenor ? Number(d.bsi_req_tenor) : (bsiRec?.maxTenor || 180);
       return {
@@ -1240,27 +1338,48 @@ export default function CalculatorPage() {
     const errs = [];
     if (!d.name?.trim()) errs.push("Nama Calon Debitur wajib diisi.");
     if (!parseIsoDateLocal(d.bsi_birth_iso)) errs.push("Tanggal Lahir wajib diisi.");
-    if ((bsiRec?.recognizedSalary || 0) <= 0) errs.push("Komponen Penghasilan Aktif (minimal Gaji Pokok) wajib diisi.");
-    if (bsiRec?.ready && bsiRec.actualMonthsToBup > 0 && bsiRec.pensionMonths <= 0) {
-      errs.push(
-        `Tenor (${bsiRec.requestedTenor} bln) harus lebih panjang dari sisa masa aktif ke BUP (${bsiRec.actualMonthsToBup} bln) agar memiliki fase pensiun minimal 1 bulan.`
-      );
+
+    if (d.bsi_sub_product === "PENSIUN") {
+      if (Number(d.pension_salary || 0) <= 0) {
+        errs.push("Manfaat Pensiun Bulanan wajib diisi dan harus lebih dari Rp0.");
+      }
+      if (!d.bsi_price_pensiun || Number(String(d.bsi_price_pensiun).replace(",", ".")) <= 0) {
+        errs.push("Price Pembiayaan (% p.a.) wajib diisi.");
+      }
+      if (String(d.bsi_req_loan || "").trim() !== "" && Number(d.bsi_req_loan) <= 0) {
+        errs.push("Plafond Pensiun yang diajukan harus lebih dari Rp0 (atau kosongkan untuk otomatis Plafond Maksimal).");
+      }
+      if (String(d.bsi_req_loan || "").trim() !== "" && Number(d.bsi_req_loan) > 350000000) {
+        errs.push("Plafond Pensiun Berkah maksimal Rp350.000.000 sesuai ketentuan BSI & Simas Pensiun.");
+      }
+      const effTenor = Number(d.bsi_req_tenor) > 0 ? Number(d.bsi_req_tenor) : (bsiPenRec?.maxTenor || 0);
+      if (effTenor <= 0 || effTenor > 180) {
+        errs.push("Tenor Pensiun Berkah harus antara 1 s.d. 180 bulan (pastikan usia nasabah memenuhi ketentuan).");
+      }
+    } else {
+      if ((bsiRec?.recognizedSalary || 0) <= 0) errs.push("Komponen Penghasilan Aktif (minimal Gaji Pokok) wajib diisi.");
+      if (bsiRec?.ready && bsiRec.actualMonthsToBup > 0 && bsiRec.pensionMonths <= 0) {
+        errs.push(
+          `Tenor (${bsiRec.requestedTenor} bln) harus lebih panjang dari sisa masa aktif ke BUP (${bsiRec.actualMonthsToBup} bln) agar memiliki fase pensiun minimal 1 bulan.`
+        );
+      }
+      if (Number(d.pension_salary || 0) <= 0 && (bsiRec?.pensionMonths || 0) > 0) {
+        errs.push("Manfaat Pensiun Bulanan wajib diisi karena tenor melewati masa pensiun (BUP).");
+      }
+      if (String(d.bsi_req_loan || "").trim() !== "" && Number(d.bsi_req_loan) <= 0) {
+        errs.push("Plafond Pra Pensiun yang diajukan harus lebih dari Rp0 (atau kosongkan untuk otomatis Plafond Maksimal).");
+      }
+      if (String(d.bsi_req_tenor || "").trim() !== "" && Number(d.bsi_req_tenor) <= 0) {
+        errs.push("Tenor Pembiayaan harus lebih dari 0 bulan.");
+      }
+      if (!d.bsi_price_aktif || Number(String(d.bsi_price_aktif).replace(",", ".")) <= 0) {
+        errs.push("Price Saat Aktif (% p.a.) wajib diisi.");
+      }
+      if (!d.bsi_price_pensiun || Number(String(d.bsi_price_pensiun).replace(",", ".")) <= 0) {
+        errs.push("Price Saat Pensiun (% p.a.) wajib diisi.");
+      }
     }
-    if (Number(d.pension_salary || 0) <= 0 && (bsiRec?.pensionMonths || 0) > 0) {
-      errs.push("Manfaat Pensiun Bulanan wajib diisi karena tenor melewati masa pensiun (BUP).");
-    }
-    if (String(d.bsi_req_loan || "").trim() !== "" && Number(d.bsi_req_loan) <= 0) {
-      errs.push("Plafond Pra Pensiun yang diajukan harus lebih dari Rp0 (atau kosongkan untuk otomatis Plafond Maksimal).");
-    }
-    if (String(d.bsi_req_tenor || "").trim() !== "" && Number(d.bsi_req_tenor) <= 0) {
-      errs.push("Tenor Pembiayaan harus lebih dari 0 bulan.");
-    }
-    if (!d.bsi_price_aktif || Number(String(d.bsi_price_aktif).replace(",", ".")) <= 0) {
-      errs.push("Price Saat Aktif (% p.a.) wajib diisi.");
-    }
-    if (!d.bsi_price_pensiun || Number(String(d.bsi_price_pensiun).replace(",", ".")) <= 0) {
-      errs.push("Price Saat Pensiun (% p.a.) wajib diisi.");
-    }
+
     if (errs.length > 0) {
       setBsiError(errs.join(" "));
       toast.error(errs[0]);
@@ -1279,7 +1398,11 @@ export default function CalculatorPage() {
       setRes(prevResp.data);
       setViewStage("result");
       window.scrollTo({ top: 0, behavior: "smooth" });
-      toast.success("Simulasi BSI Mitraguna Prapensiun berhasil dihitung.");
+      toast.success(
+        d.bsi_sub_product === "PENSIUN"
+          ? "Simulasi BSI Pensiun Berkah berhasil dihitung."
+          : "Simulasi BSI Mitraguna Prapensiun berhasil dihitung."
+      );
     } catch (err) {
       toast.error(errMsg(err));
     } finally {
@@ -1289,12 +1412,13 @@ export default function CalculatorPage() {
 
   const resetBsiForm = () => {
     const today = todayIsoLocal();
+    const keepPen = d.bsi_sub_product === "PENSIUN";
     setD({
       ...d,
       name: "",
       bsi_birth_iso: "",
       nip: "",
-      bsi_sub_product: "PP10",
+      bsi_sub_product: keepPen ? "PENSIUN" : "PP10",
       bsi_status_gaji: "payroll",
       bsi_dbr_chosen: "70",
       gaji_pokok: "",
@@ -1307,11 +1431,12 @@ export default function CalculatorPage() {
       tmt_pensiun_year: "",
       tht: "",
       pension_salary: "",
-      bsi_req_tenor: "180",
+      bsi_req_tenor: keepPen ? "" : "180",
       bsi_price_aktif: "9.25",
       bsi_price_pensiun: "10.50",
+      bsi_process_iso: today,
       bsi_proyeksi_cair: today,
-      bsi_start_angsuran: nextMonth25IsoLocal(today),
+      bsi_start_angsuran: keepPen ? nextMonthFirstIsoLocal(today) : nextMonth25IsoLocal(today),
       bsi_skema: "Atribusi",
       bsi_insurance_buffer_months: "0",
       bsi_manual_insurance: "",
@@ -1321,11 +1446,46 @@ export default function CalculatorPage() {
       angsuran_selain_bsi: 0,
       bsi_req_loan: "",
       bsi_akad: "MMQ",
+      bsi_retired_type: "pensiunan",
+      bsi_spouse_status: "single",
+      bsi_flagging: "TASPEN",
+      bsi_ratio_basis: "DBR",
+      bsi_ratio_pct: "90",
+      bsi_ongoing_installments: 0,
       salary: "",
       take_over: 0
     });
     reset();
     setViewStage("workspace");
+  };
+
+  const prefillBsiPensiunAnchor = () => {
+    setD({
+      ...d,
+      name: BSI_PENSIUN_EXCEL_ANCHOR.name,
+      bsi_birth_iso: BSI_PENSIUN_EXCEL_ANCHOR.birth_date,
+      nip: "196606101990031002",
+      bsi_sub_product: "PENSIUN",
+      bsi_process_iso: BSI_PENSIUN_EXCEL_ANCHOR.process_date,
+      bsi_proyeksi_cair: BSI_PENSIUN_EXCEL_ANCHOR.bsi_proyeksi_cair,
+      bsi_start_angsuran: BSI_PENSIUN_EXCEL_ANCHOR.bsi_start_angsuran,
+      pension_salary: BSI_PENSIUN_EXCEL_ANCHOR.pension_salary,
+      bsi_req_loan: BSI_PENSIUN_EXCEL_ANCHOR.plafond,
+      bsi_req_tenor: String(BSI_PENSIUN_EXCEL_ANCHOR.tenor),
+      bsi_price_pensiun: BSI_PENSIUN_EXCEL_ANCHOR.bsi_price_pensiun,
+      bsi_retired_type: BSI_PENSIUN_EXCEL_ANCHOR.bsi_retired_type,
+      bsi_spouse_status: BSI_PENSIUN_EXCEL_ANCHOR.bsi_spouse_status,
+      bsi_flagging: BSI_PENSIUN_EXCEL_ANCHOR.bsi_flagging,
+      bsi_ratio_basis: BSI_PENSIUN_EXCEL_ANCHOR.bsi_ratio_basis,
+      bsi_ratio_pct: BSI_PENSIUN_EXCEL_ANCHOR.bsi_ratio_pct,
+      bsi_ongoing_installments: BSI_PENSIUN_EXCEL_ANCHOR.bsi_ongoing_installments,
+      pelunasan_lama: BSI_PENSIUN_EXCEL_ANCHOR.pelunasan_lama,
+      take_over: BSI_PENSIUN_EXCEL_ANCHOR.pelunasan_lama,
+      bsi_skema: BSI_PENSIUN_EXCEL_ANCHOR.bsi_skema,
+      bsi_akad: BSI_PENSIUN_EXCEL_ANCHOR.bsi_akad
+    });
+    reset();
+    toast.info("Contoh Uji Excel BSI Pensiun Berkah (Rp166 Jt • 169 Bln) berhasil dimuat.");
   };
 
   const prefillBsiSitiHafsah = () => {
@@ -1569,7 +1729,9 @@ export default function CalculatorPage() {
           <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {banks.map((b) => {
               const isSupported = b.supported !== false;
+              const isBsiCard = b.key === "bsi_prapen";
               const isSelected = bankKey === b.key;
+
               return (
                 <button
                   key={b.key}
@@ -1577,6 +1739,10 @@ export default function CalculatorPage() {
                   disabled={!isSupported}
                   onClick={() => {
                     if (!isSupported) return;
+                    if (isBsiCard) {
+                      setBsiChoiceOpen(true);
+                      return;
+                    }
                     handleSelectBank(b.key);
                   }}
                   data-testid={`bank-option-${b.key}`}
@@ -1590,24 +1756,28 @@ export default function CalculatorPage() {
                 >
                   <div className="flex items-start justify-between gap-2">
                     <PartnerLogo bankKey={b.key} size="md" />
-                    {!isSupported && (
+                    {!isSupported ? (
                       <span className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-400">
                         <Lock className="h-2.5 w-2.5" /> Segera Hadir
                       </span>
-                    )}
+                    ) : isBsiCard ? (
+                      <span className="inline-flex items-center gap-1 rounded-md border border-[#078D67]/30 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-[#078D67]">
+                        2 Pilihan Produk
+                      </span>
+                    ) : null}
                   </div>
 
                   <div className="mt-3.5">
                     <div className="font-display text-base font-bold leading-snug group-hover:text-[#351080]">
-                      {b.name}
+                      {isBsiCard ? "Bank Syariah Indonesia (BSI)" : b.name}
                     </div>
                     <p className="mt-0.5 text-[11px] text-slate-500 line-clamp-1">
-                      {b.full_name || b.name}
+                      {isBsiCard ? "Pensiun Berkah & Mitraguna Prapensiun" : (b.full_name || b.name)}
                     </p>
                     {isSupported && (
                       <div className="mt-3 flex items-center justify-end border-t border-slate-100 pt-2.5">
                         <span className="inline-flex items-center gap-0.5 text-xs font-bold text-[#351080] group-hover:translate-x-0.5 transition-transform">
-                          Buka Simulasi <ChevronRight className="h-3.5 w-3.5" />
+                          {isBsiCard ? "Pilih Produk BSI" : "Buka Simulasi"} <ChevronRight className="h-3.5 w-3.5" />
                         </span>
                       </div>
                     )}
@@ -1618,6 +1788,89 @@ export default function CalculatorPage() {
           </div>
         </section>
       )}
+
+      {/* Dialog Pilihan Produk BSI: Prapensiun vs Pensiun Berkah */}
+      <Dialog open={bsiChoiceOpen} onOpenChange={setBsiChoiceOpen}>
+        <DialogContent className="max-w-md p-5 sm:p-6" data-testid="bsi-choice-dialog">
+          <DialogHeader>
+            <div className="flex items-center gap-3">
+              <PartnerLogo bankKey="bsi_prapen" size="md" />
+              <div>
+                <DialogTitle className="font-display text-base sm:text-lg font-bold text-[#17223B]">
+                  Pilih Produk Pembiayaan BSI
+                </DialogTitle>
+                <DialogDescription className="text-xs text-slate-500 mt-0.5">
+                  Bank Syariah Indonesia • Pilih fasilitas pembiayaan yang ingin disimulasikan:
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="mt-2 space-y-3">
+            {/* Opsi 1: Pensiun Berkah */}
+            <button
+              type="button"
+              onClick={() => {
+                setBsiChoiceOpen(false);
+                handleSelectBank("bsi_prapen", "PENSIUN");
+              }}
+              data-testid="bsi-choice-pensiun-btn"
+              className="group relative flex w-full flex-col rounded-xl border-2 border-emerald-200/90 bg-gradient-to-br from-white via-emerald-50/20 to-teal-50/40 p-4 text-left transition-all hover:border-[#078D67] hover:shadow-md hover:-translate-y-0.5"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="inline-flex items-center gap-1.5 rounded-md bg-[#078D67] px-2.5 py-0.5 text-[10px] font-bold text-white shadow-2xs">
+                  <Sparkles className="h-3 w-3" /> Pensiun Murni &amp; Janda
+                </span>
+                <span className="text-[11px] font-bold text-[#078D67] group-hover:translate-x-0.5 transition-transform flex items-center">
+                  Buka Simulasi <ChevronRight className="h-3.5 w-3.5" />
+                </span>
+              </div>
+              <h4 className="mt-2.5 font-display text-base font-extrabold text-[#17223B] group-hover:text-[#078D67]">
+                1. BSI · Pensiun Berkah
+              </h4>
+              <p className="mt-1 text-xs text-slate-600 leading-relaxed">
+                Untuk pensiunan PNS, TNI, POLRI, BUMN, BUMD, dan Pensiun Janda/Duda yang sudah menerima SK pensiun.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-1.5 border-t border-emerald-100 pt-2 text-[10px] font-semibold text-emerald-800">
+                <span className="rounded bg-emerald-100/70 px-2 py-0.5">Reguler &amp; Atribusi Premi</span>
+                <span className="rounded bg-emerald-100/70 px-2 py-0.5">Tenor s.d. 180 Bln</span>
+                <span className="rounded bg-emerald-100/70 px-2 py-0.5">Maks Rp 350 Jt</span>
+              </div>
+            </button>
+
+            {/* Opsi 2: Mitraguna Prapensiun */}
+            <button
+              type="button"
+              onClick={() => {
+                setBsiChoiceOpen(false);
+                handleSelectBank("bsi_prapen", "PP10");
+              }}
+              data-testid="bsi-choice-prapen-btn"
+              className="group relative flex w-full flex-col rounded-xl border border-slate-200/90 bg-white p-4 text-left transition-all hover:border-[#351080] hover:shadow-md hover:-translate-y-0.5"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="inline-flex items-center gap-1.5 rounded-md bg-[#351080] px-2.5 py-0.5 text-[10px] font-bold text-white shadow-2xs">
+                  <ShieldCheck className="h-3 w-3" /> ASN &amp; Pegawai Aktif
+                </span>
+                <span className="text-[11px] font-bold text-[#351080] group-hover:translate-x-0.5 transition-transform flex items-center">
+                  Buka Simulasi <ChevronRight className="h-3.5 w-3.5" />
+                </span>
+              </div>
+              <h4 className="mt-2.5 font-display text-base font-extrabold text-[#17223B] group-hover:text-[#351080]">
+                2. BSI · Mitraguna Prapensiun
+              </h4>
+              <p className="mt-1 text-xs text-slate-600 leading-relaxed">
+                Untuk ASN &amp; Pegawai aktif menjelang pensiun (dua fase: masa aktif + masa pensiun).
+              </p>
+              <div className="mt-3 flex flex-wrap gap-1.5 border-t border-slate-100 pt-2 text-[10px] font-semibold text-slate-700">
+                <span className="rounded bg-slate-100 px-2 py-0.5">Dekade Berkah (PP10)</span>
+                <span className="rounded bg-slate-100 px-2 py-0.5">Tri Berkah (PP3)</span>
+                <span className="rounded bg-slate-100 px-2 py-0.5">Payroll &amp; Non-Payroll</span>
+              </div>
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {viewStage === "transition" && (
         <div
@@ -1631,7 +1884,11 @@ export default function CalculatorPage() {
             </span>
           </div>
           <h2 className="mt-1 font-display text-xl font-extrabold text-[#17223B]">
-            {bank?.full_name || bank?.name || "Mitra Pembiayaan"}
+            {(transitionBankKey || bankKey) === "bsi_prapen"
+              ? (d.bsi_sub_product === "PENSIUN"
+                  ? "BSI — Pensiun Berkah (Pensiun Murni & Janda)"
+                  : "BSI — Mitraguna Prapensiun (Dekade & Tri Berkah)")
+              : (bank?.full_name || bank?.name || "Mitra Pembiayaan")}
           </h2>
           <p className="mt-1.5 max-w-md text-xs text-slate-500">
             Memuat formulir simulasi...
@@ -1656,7 +1913,11 @@ export default function CalculatorPage() {
               <div className="flex items-center gap-2.5 border-l border-slate-200 pl-2.5 sm:pl-3">
                 <PartnerLogo bankKey={bank.key} size="sm" />
                 <span className="font-display text-sm font-bold text-[#17223B]">
-                  {bank.full_name || bank.name}
+                  {isBsi
+                    ? (isBsiPensiun
+                        ? "BSI — Pensiun Berkah (Pensiun Murni & Janda)"
+                        : "BSI — Mitraguna Prapensiun (Dekade & Tri Berkah)")
+                    : (bank.full_name || bank.name)}
                 </span>
               </div>
             </div>
@@ -2501,19 +2762,686 @@ export default function CalculatorPage() {
       {viewStage === "workspace" && bank && isBsi && (
         <div className="grid gap-6 xl:grid-cols-[480px_1fr] lp-fade" data-testid="bsi-calculator-layout">
           <div className="space-y-6">
-            <Step n="1" title="Formulir Simulasi Pembiayaan BSI Mitraguna Prapensiun" testid="bsi-step-1">
-              <div className="mb-4 flex items-center gap-3 border-b border-slate-100 pb-3">
-                <PartnerLogo bankKey="bsi_prapen" size="md" />
-                <div>
-                  <h3 className="font-display text-sm font-bold text-[#17223B]">
-                    PT Swara Ganiyy Utama • Bank Syariah Indonesia
-                  </h3>
-                  <p className="text-[11px] text-slate-500">
-                    Simulasi Pembiayaan Syariah • Dekade Berkah (PP10) &amp; Tri Berkah (PP3)
-                  </p>
+            <Step
+              n="1"
+              title={
+                isBsiPensiun
+                  ? "Formulir Simulasi Pembiayaan BSI Pensiun Berkah"
+                  : "Formulir Simulasi Pembiayaan BSI Mitraguna Prapensiun"
+              }
+              testid="bsi-step-1"
+            >
+              <div className="mb-3.5 flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-3">
+                  <PartnerLogo bankKey="bsi_prapen" size="md" />
+                  <div>
+                    <h3 className="font-display text-sm font-bold text-[#17223B]">
+                      PT Swara Ganiyy Utama • Bank Syariah Indonesia
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      {isBsiPensiun
+                        ? "Pensiun Berkah (Pensiun Murni & Janda) • Reguler & Atribusi Premi"
+                        : "Simulasi Pembiayaan Syariah • Dekade Berkah (PP10) & Tri Berkah (PP3)"}
+                    </p>
+                  </div>
                 </div>
               </div>
 
+              {/* Segmented Mode Switcher: Prapensiun vs Pensiun Berkah */}
+              <div
+                className="mb-4 grid grid-cols-2 gap-1.5 rounded-xl border border-slate-200 bg-slate-100/80 p-1"
+                data-testid="bsi-mode-switcher"
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!isBsiPensiun) return;
+                    const today = todayIsoLocal();
+                    setD({
+                      ...d,
+                      bsi_sub_product: "PP10",
+                      bsi_req_tenor: d.bsi_req_tenor || "180",
+                      bsi_start_angsuran: nextMonth25IsoLocal(d.bsi_proyeksi_cair || today)
+                    });
+                    setBsiError("");
+                    reset();
+                  }}
+                  data-testid="bsi-mode-prapen-btn"
+                  className={cn(
+                    "rounded-lg px-2.5 py-2 text-center text-xs font-bold transition-all",
+                    !isBsiPensiun
+                      ? "bg-[#351080] text-white shadow-xs"
+                      : "text-slate-600 hover:bg-white/70 hover:text-[#17223B]"
+                  )}
+                >
+                  Prapensiun (PP10 &amp; PP3)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isBsiPensiun) return;
+                    const today = todayIsoLocal();
+                    const cair = d.bsi_proyeksi_cair || today;
+                    setD({
+                      ...d,
+                      bsi_sub_product: "PENSIUN",
+                      bsi_process_iso: d.bsi_process_iso || cair,
+                      bsi_proyeksi_cair: cair,
+                      bsi_start_angsuran: nextMonthFirstIsoLocal(cair),
+                      bsi_req_tenor: ""
+                    });
+                    setBsiError("");
+                    reset();
+                  }}
+                  data-testid="bsi-mode-pensiun-btn"
+                  className={cn(
+                    "rounded-lg px-2.5 py-2 text-center text-xs font-bold transition-all",
+                    isBsiPensiun
+                      ? "bg-[#078D67] text-white shadow-xs"
+                      : "text-slate-600 hover:bg-white/70 hover:text-[#17223B]"
+                  )}
+                >
+                  Pensiun Berkah (Murni / Janda)
+                </button>
+              </div>
+
+              {isBsiPensiun ? (
+                <form onSubmit={calcBsiSubmit} className="space-y-4" noValidate data-testid="bsi-pensiun-form">
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-200/80 bg-emerald-50/70 px-3 py-2 text-[11px] text-[#065f46]">
+                    <span>
+                      Rumus resmi <b>Sheet Biru Kalkulator Pensiun BSI rev1</b> (Akseptasi Pensiun • Pensiun • Rincain keNsb).
+                    </span>
+                    <button
+                      type="button"
+                      onClick={prefillBsiPensiunAnchor}
+                      className="rounded-md bg-[#078D67] px-2.5 py-1 text-[10px] font-bold text-white hover:bg-[#067455] shrink-0"
+                      data-testid="bsi-pensiun-prefill-btn"
+                    >
+                      Muat Contoh Uji Excel BSI (Rp166 Jt)
+                    </button>
+                  </div>
+
+                  {/* BAGIAN A: IDENTITAS, USIA & PROFIL PENSIUN */}
+                  <div className="space-y-3.5">
+                    <span className="block text-[11px] font-bold uppercase tracking-wider text-[#078D67]">
+                      A. Identitas, Usia &amp; Profil Penerima Pensiun
+                    </span>
+
+                    <div className="space-y-1.5">
+                      <Label htmlFor="bsi-pen-name" className="text-xs font-bold text-[#17223B]">
+                        1. Nama Calon Nasabah
+                      </Label>
+                      <Input
+                        id="bsi-pen-name"
+                        required
+                        placeholder="Nama lengkap sesuai KTP / SK Pensiun"
+                        className="h-10 border-slate-200 text-xs font-semibold"
+                        value={d.name}
+                        onChange={(e) => { setD({ ...d, name: e.target.value }); setBsiError(""); reset(); }}
+                        data-testid="calc-name-input"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bsi-pen-birth" className="text-xs font-bold text-[#17223B]">
+                          2. Tanggal Lahir
+                        </Label>
+                        <Input
+                          id="bsi-pen-birth"
+                          type="date"
+                          required
+                          className="h-10 border-slate-200 lp-num text-xs font-semibold"
+                          value={d.bsi_birth_iso}
+                          onChange={(e) => {
+                            const iso = e.target.value;
+                            setD({ ...d, bsi_birth_iso: iso, birth: iso });
+                            setBsiError("");
+                            reset();
+                          }}
+                          data-testid="bsi-birth-input"
+                        />
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bsi-pen-nip" className="text-xs font-bold text-[#17223B]">
+                          3. Nopen / NIP Pensiun
+                        </Label>
+                        <Input
+                          id="bsi-pen-nip"
+                          placeholder="Nomor Pensiun / NOTAS (opsional)"
+                          className="h-10 border-slate-200 font-mono text-xs"
+                          value={d.nip}
+                          onChange={(e) => setD({ ...d, nip: e.target.value })}
+                          data-testid="bsi-nip-input"
+                        />
+                      </div>
+                    </div>
+
+                    {bsiPenRec && (
+                      <div
+                        className={cn(
+                          "rounded-xl border p-3.5 text-xs transition-all lp-fade",
+                          bsiPenRec.ageStatus !== "ELIGIBLE"
+                            ? "border-red-200 bg-red-50/90 text-red-900"
+                            : "border-[#078D67]/25 bg-gradient-to-br from-[#078D67]/8 to-emerald-50/80 text-[#17223B]"
+                        )}
+                        data-testid="bsi-pensiun-age-card"
+                      >
+                        <div className="flex items-start justify-between gap-2 border-b border-black/10 pb-2">
+                          <div className="flex items-center gap-2">
+                            <UserCheck
+                              className={cn(
+                                "h-4 w-4 shrink-0",
+                                bsiPenRec.ageStatus !== "ELIGIBLE" ? "text-red-600" : "text-[#078D67]"
+                              )}
+                            />
+                            <span className="font-display font-bold">
+                              {bsiPenRec.ageStatus === "ELIGIBLE"
+                                ? "Memenuhi Ketentuan Usia Pensiun Berkah"
+                                : "Perhatian Ketentuan Usia Masuk"}
+                            </span>
+                          </div>
+                          <span className="rounded-full bg-white/80 px-2 py-0.5 text-[10px] font-extrabold text-[#351080] shadow-2xs lp-num">
+                            Simas Nearest: {bsiPenRec.entryAgeNearest} Thn
+                          </span>
+                        </div>
+
+                        <div className="mt-2.5 grid grid-cols-3 gap-2">
+                          <div className="rounded-lg bg-white/75 p-2 border border-black/5">
+                            <span className="block text-[10px] text-slate-500">Usia Eksak</span>
+                            <strong className="mt-0.5 block text-[11px] font-bold text-[#17223B] lp-num">
+                              {bsiPenRec.ageObj.exactText}
+                            </strong>
+                          </div>
+                          <div className="rounded-lg bg-white/75 p-2 border border-black/5">
+                            <span className="block text-[10px] text-slate-500">Usia Bank (DAYS360)</span>
+                            <strong className="mt-0.5 block text-[11px] font-bold text-[#078D67] lp-num">
+                              {bsiPenRec.bankAgeDays360} Thn (Min {bsiPenRec.minBankAge})
+                            </strong>
+                          </div>
+                          <div className="rounded-lg bg-white/75 p-2 border border-black/5">
+                            <span className="block text-[10px] text-slate-500">Maks Tenor (≤74,5 Th)</span>
+                            <strong className="mt-0.5 block text-[11px] font-bold text-[#351080] lp-num">
+                              {bsiPenRec.maxTenor} Bulan
+                            </strong>
+                          </div>
+                        </div>
+
+                        <p className="mt-2 text-[11px] leading-relaxed opacity-90">
+                          {bsiPenRec.ageReason}
+                        </p>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bsi-pen-sub-product" className="text-xs font-bold text-[#17223B]">
+                          4. Tipe Produk BSI
+                        </Label>
+                        <select
+                          id="bsi-pen-sub-product"
+                          className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-[#17223B] focus:border-[#078D67] focus:outline-none"
+                          value={d.bsi_sub_product}
+                          onChange={(e) => {
+                            const sub = e.target.value;
+                            const today = todayIsoLocal();
+                            setD({
+                              ...d,
+                              bsi_sub_product: sub,
+                              bsi_req_tenor: sub === "PENSIUN" ? "" : "180",
+                              bsi_start_angsuran:
+                                sub === "PENSIUN"
+                                  ? nextMonthFirstIsoLocal(d.bsi_proyeksi_cair || today)
+                                  : nextMonth25IsoLocal(d.bsi_proyeksi_cair || today)
+                            });
+                            setBsiError("");
+                            reset();
+                          }}
+                          data-testid="bsi-sub-product-select"
+                        >
+                          <option value="PENSIUN">3. Pensiun Berkah (Pensiun Murni / Janda)</option>
+                          <option value="PP10">1. Prapen 10 Tahun (Dekade Berkah)</option>
+                          <option value="PP3">2. Prapen 3 Tahun (Tri Berkah)</option>
+                        </select>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bsi-retired-type" className="text-xs font-bold text-[#17223B]">
+                          5. Tipe Penerima Pensiun
+                        </Label>
+                        <select
+                          id="bsi-retired-type"
+                          className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-[#17223B] focus:border-[#078D67] focus:outline-none"
+                          value={d.bsi_retired_type}
+                          onChange={(e) => { setD({ ...d, bsi_retired_type: e.target.value }); setBsiError(""); reset(); }}
+                          data-testid="bsi-retired-type-select"
+                        >
+                          <option value="pensiunan">Pensiun Sendiri (Usia Min 50 Thn)</option>
+                          <option value="janda">Pensiun Janda / Duda (Usia Min 48 Thn)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bsi-spouse-status" className="text-xs font-bold text-[#17223B]">
+                          6. Status Pasangan (Pengali Gaji)
+                        </Label>
+                        <select
+                          id="bsi-spouse-status"
+                          className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-[#17223B] focus:border-[#078D67] focus:outline-none"
+                          value={d.bsi_spouse_status}
+                          onChange={(e) => { setD({ ...d, bsi_spouse_status: e.target.value }); reset(); }}
+                          data-testid="bsi-spouse-status-select"
+                        >
+                          <option value="single">Sendiri / Tanpa Pasangan (100%)</option>
+                          <option value="with_spouse">Ada Pasangan (98% sesuai Akseptasi)</option>
+                        </select>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bsi-flagging" className="text-xs font-bold text-[#17223B]">
+                          7. Flagging Juru Bayar
+                        </Label>
+                        <select
+                          id="bsi-flagging"
+                          className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-[#17223B] focus:border-[#078D67] focus:outline-none"
+                          value={d.bsi_flagging}
+                          onChange={(e) => {
+                            const flg = e.target.value;
+                            setD({ ...d, bsi_flagging: flg });
+                            if (flg === "ASABRI") setDapem("ASABRI");
+                            else if (flg.startsWith("TASPEN")) setDapem("TASPEN");
+                            reset();
+                          }}
+                          data-testid="bsi-flagging-select"
+                        >
+                          {BSI_PENSIUN_FLAGGING_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* BAGIAN B: MANFAAT PENSIUN & RASIO DBR / DSR */}
+                  <div className="border-t border-slate-100 pt-4 space-y-3.5">
+                    <span className="block text-[11px] font-bold uppercase tracking-wider text-[#078D67]">
+                      B. Manfaat Pensiun, Rasio DBR/DSR &amp; Kewajiban Berjalan
+                    </span>
+
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-bold text-[#17223B]">
+                        8. Manfaat Pensiun Bulanan Bersih (Rp)
+                      </Label>
+                      <CurrencyInput
+                        required
+                        value={d.pension_salary}
+                        onChange={(v) => { setD({ ...d, pension_salary: v, salary: v }); setBsiError(""); reset(); }}
+                        placeholder="Masukkan manfaat pensiun sesuai SK / Karip"
+                        data-testid="bsi-pension-salary-input"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bsi-ratio-basis" className="text-xs font-bold text-[#17223B]">
+                          9a. Dasar Perhitungan Rasio
+                        </Label>
+                        <select
+                          id="bsi-ratio-basis"
+                          className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-[#17223B]"
+                          value={d.bsi_ratio_basis}
+                          onChange={(e) => { setD({ ...d, bsi_ratio_basis: e.target.value }); reset(); }}
+                          data-testid="bsi-ratio-basis-select"
+                        >
+                          <option value="DBR">DBR (Kapasitas dikurangi angsuran lain)</option>
+                          <option value="DSR">DSR (Kapasitas murni % manfaat pensiun)</option>
+                        </select>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bsi-ratio-pct" className="text-xs font-bold text-[#17223B]">
+                          9b. Batas Rasio Maksimal
+                        </Label>
+                        <select
+                          id="bsi-ratio-pct"
+                          className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-[#17223B]"
+                          value={d.bsi_ratio_pct}
+                          onChange={(e) => { setD({ ...d, bsi_ratio_pct: e.target.value }); reset(); }}
+                          data-testid="bsi-ratio-pct-select"
+                        >
+                          <option value="90">90% (Standar Payroll Pensiun)</option>
+                          <option value="70">70% (Batas Konservatif)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold text-slate-700">
+                        10. Angsuran Pinjaman Lain yang Masih Berjalan (Opsional • Rp/bln)
+                      </Label>
+                      <CurrencyInput
+                        value={d.bsi_ongoing_installments}
+                        onChange={(v) => { setD({ ...d, bsi_ongoing_installments: v }); reset(); }}
+                        placeholder="0"
+                        data-testid="bsi-ongoing-installments-input"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-2 rounded-xl border border-emerald-200/80 bg-emerald-50/60 p-3 text-xs sm:grid-cols-2">
+                      <div>
+                        <span className="block text-[10px] font-semibold uppercase text-slate-500">
+                          Manfaat Pensiun Efektif ({d.bsi_spouse_status === "with_spouse" ? "98%" : "100%"})
+                        </span>
+                        <strong className="mt-0.5 block text-sm font-extrabold text-[#17223B] lp-num">
+                          {rp(Math.round(Number(d.pension_salary || 0) * (d.bsi_spouse_status === "with_spouse" ? 0.98 : 1)))}
+                        </strong>
+                      </div>
+                      <div className="sm:text-right">
+                        <span className="block text-[10px] font-semibold uppercase text-slate-500">
+                          Kapasitas Angsuran ({d.bsi_ratio_basis} {d.bsi_ratio_pct}%)
+                        </span>
+                        <strong className="mt-0.5 block text-sm font-extrabold text-[#078D67] lp-num">
+                          {rp(Math.floor(bsiPenRec?.capacityExact || 0))} / bln
+                        </strong>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* BAGIAN C: TENOR, PRICE DASAR & TANGGAL POLIS / ANGSURAN */}
+                  <div className="border-t border-slate-100 pt-4 space-y-3.5">
+                    <span className="block text-[11px] font-bold uppercase tracking-wider text-[#078D67]">
+                      C. Tenor, Price Dasar &amp; Tanggal Pertanggungan
+                    </span>
+
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="bsi-pen-tenor" className="text-xs font-bold text-[#17223B]">
+                          11. Jangka Waktu / Tenor (1 s.d. 180 Bulan)
+                        </Label>
+                        {bsiPenRec?.maxTenor > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setD({ ...d, bsi_req_tenor: String(bsiPenRec.maxTenor) });
+                              reset();
+                            }}
+                            className="text-[11px] font-bold text-[#078D67] hover:underline"
+                          >
+                            Gunakan Maks Tenor ({bsiPenRec.maxTenor} bln)
+                          </button>
+                        )}
+                      </div>
+                      <Input
+                        id="bsi-pen-tenor"
+                        type="number"
+                        min="1"
+                        max="180"
+                        step="1"
+                        placeholder={bsiPenRec?.maxTenor > 0 ? `Otomatis Maks Tenor (${bsiPenRec.maxTenor} bln)` : "Contoh: 169"}
+                        className="h-10 border-slate-200 lp-num text-xs font-bold"
+                        value={d.bsi_req_tenor}
+                        onChange={(e) => { setD({ ...d, bsi_req_tenor: e.target.value.replace(/\D/g, "") }); reset(); }}
+                        data-testid="bsi-tenor-input"
+                      />
+                    </div>
+
+                    <div className="rounded-xl border border-[#351080]/20 bg-[#351080]/[0.03] p-3.5 space-y-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5">
+                          <Percent className="h-3.5 w-3.5 text-[#351080]" />
+                          <Label htmlFor="bsi-pen-price" className="text-xs font-bold text-[#17223B]">
+                            12. Price Dasar Pembiayaan (% Efektif p.a.)
+                          </Label>
+                        </div>
+                        {bsiPenRec?.liveSelected && (
+                          <span className="rounded bg-[#078D67]/12 px-2 py-0.5 text-[10px] font-bold text-[#078D67] lp-num">
+                            Price Akhir: {bsiPenRec.liveSelected.annualPricePct.toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}% p.a.
+                          </span>
+                        )}
+                      </div>
+                      <Input
+                        id="bsi-pen-price"
+                        type="number"
+                        step="0.01"
+                        min="1"
+                        max="30"
+                        placeholder="Contoh: 10.50"
+                        className="h-10 border-slate-200 bg-white lp-num text-xs font-bold text-[#351080]"
+                        value={d.bsi_price_pensiun}
+                        onChange={(e) => { setD({ ...d, bsi_price_pensiun: e.target.value }); reset(); }}
+                        data-testid="bsi-price-pensiun-input"
+                      />
+                      <div className="flex flex-wrap gap-1">
+                        {["10.00", "10.50", "11.00", "11.50", "12.00"].map((val) => (
+                          <button
+                            key={val}
+                            type="button"
+                            onClick={() => { setD({ ...d, bsi_price_pensiun: val }); reset(); }}
+                            className={cn(
+                              "rounded border px-2 py-0.5 text-[10px] font-bold lp-num transition-colors",
+                              d.bsi_price_pensiun === val
+                                ? "border-[#351080] bg-[#351080] text-white"
+                                : "border-slate-200 bg-white text-slate-600 hover:border-[#351080]"
+                            )}
+                          >
+                            {val.replace(".", ",")}%
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bsi-pen-proc" className="text-xs font-bold text-[#17223B]">
+                          13a. Tgl Proses
+                        </Label>
+                        <Input
+                          id="bsi-pen-proc"
+                          type="date"
+                          className="h-10 border-slate-200 lp-num text-xs font-semibold"
+                          value={d.bsi_process_iso}
+                          onChange={(e) => {
+                            const procIso = e.target.value;
+                            setD({
+                              ...d,
+                              bsi_process_iso: procIso,
+                              bsi_proyeksi_cair: procIso,
+                              bsi_start_angsuran: nextMonthFirstIsoLocal(procIso)
+                            });
+                            reset();
+                          }}
+                          data-testid="bsi-process-date-input"
+                        />
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bsi-pen-cair" className="text-xs font-bold text-[#17223B]">
+                          13b. Mulai Polis / Cair
+                        </Label>
+                        <Input
+                          id="bsi-pen-cair"
+                          type="date"
+                          className="h-10 border-slate-200 lp-num text-xs font-semibold"
+                          value={d.bsi_proyeksi_cair}
+                          onChange={(e) => {
+                            const cairIso = e.target.value;
+                            setD({
+                              ...d,
+                              bsi_proyeksi_cair: cairIso,
+                              bsi_start_angsuran: nextMonthFirstIsoLocal(cairIso)
+                            });
+                            reset();
+                          }}
+                          data-testid="bsi-proyeksi-cair-input"
+                        />
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bsi-pen-start" className="text-xs font-bold text-[#17223B]">
+                          13c. Angsuran Ke-1
+                        </Label>
+                        <Input
+                          id="bsi-pen-start"
+                          type="date"
+                          className="h-10 border-slate-200 lp-num text-xs font-semibold"
+                          value={d.bsi_start_angsuran}
+                          onChange={(e) => { setD({ ...d, bsi_start_angsuran: e.target.value }); reset(); }}
+                          data-testid="bsi-start-angsuran-input"
+                        />
+                      </div>
+                    </div>
+
+                    {bsiPenRec?.lastInstallmentIso && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200/80 bg-slate-50 px-3 py-2 text-[11px] text-slate-700 lp-num">
+                        <span>
+                          Angsuran Terakhir: <b>{fmtDate(bsiPenRec.lastInstallmentIso)}</b>
+                        </span>
+                        <span>
+                          Akhir Polis Simas: <b className="text-[#078D67]">{fmtDate(bsiPenRec.policyEndIso)}</b>
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* BAGIAN D: SKEMA PERTANGGUNGAN, PELUNASAN & PLAFOND */}
+                  <div className="border-t border-slate-100 pt-4 space-y-3.5">
+                    <span className="block text-[11px] font-bold uppercase tracking-wider text-[#078D67]">
+                      D. Skema Pertanggungan Simas Pensiun, Pelunasan &amp; Plafond
+                    </span>
+
+                    <div className="space-y-1.5">
+                      <Label htmlFor="bsi-pen-skema" className="text-xs font-bold text-[#17223B]">
+                        14. Skema Pertanggungan Asuransi (C16 Sheet Pensiun)
+                      </Label>
+                      <select
+                        id="bsi-pen-skema"
+                        className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-[#17223B]"
+                        value={d.bsi_skema}
+                        onChange={(e) => { setD({ ...d, bsi_skema: e.target.value }); reset(); }}
+                        data-testid="bsi-skema-select"
+                      >
+                        <option value="Atribusi">3. Atribusi Premi (Premi ke Margin + Blokir 2x Angsuran)</option>
+                        <option value="Non-Atribusi">1. Reguler / Non-Atribusi (Premi Potong Pencairan + Blokir 0x)</option>
+                      </select>
+                    </div>
+
+                    {bsiPenRec?.liveSelected && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-200 bg-emerald-50/70 px-3 py-2.5 text-xs text-[#078D67] lp-num">
+                        <div>
+                          <span className="block text-[10px] font-semibold uppercase text-slate-500">
+                            Premi Simas Pensiun ({bsiPenRec.isAtribusi ? "Atribusi Gross-UP" : "Reguler"})
+                          </span>
+                          <strong className="text-sm font-extrabold text-[#078D67]">
+                            {rp(Math.round(bsiPenRec.liveSelected.premiumExact))}
+                          </strong>
+                        </div>
+                        <div className="text-right">
+                          <span className="rounded bg-[#078D67]/15 px-2 py-0.5 text-[10px] font-bold">
+                            {(bsiPenRec.tariffPermil || 0).toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ‰ • {bsiPenRec.liveSelected.mcuStatus === "NON_MCU" ? "Non-MCU" : bsiPenRec.liveSelected.mcuStatus}
+                          </span>
+                          <span className="mt-0.5 block text-[10px] text-slate-600">
+                            UP Pertanggungan: {rp(Math.round(bsiPenRec.liveSelected.sumAssured))}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-bold text-red-700">
+                        15. Pelunasan Yang Lama / Take Over (- Rp)
+                      </Label>
+                      <CurrencyInput
+                        placeholder="0"
+                        value={d.pelunasan_lama}
+                        onChange={(v) => { setD({ ...d, pelunasan_lama: v, take_over: v }); reset(); }}
+                        data-testid="bsi-pelunasan-lama-input"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-xs font-bold text-[#17223B]">
+                            16a. Plafond Pensiun (Maks Rp350 Jt)
+                          </Label>
+                          {bsiPenRec?.maxPlafondSelected > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setD({ ...d, bsi_req_loan: bsiPenRec.maxPlafondSelected });
+                                reset();
+                              }}
+                              className="text-[10px] font-bold text-[#078D67] hover:underline"
+                            >
+                              Isi Maks ({rp(bsiPenRec.maxPlafondSelected)})
+                            </button>
+                          )}
+                        </div>
+                        <CurrencyInput
+                          placeholder="Kosongkan untuk otomatis Plafond Maksimal"
+                          value={d.bsi_req_loan}
+                          onChange={(v) => { setD({ ...d, bsi_req_loan: v }); setBsiError(""); reset(); }}
+                          data-testid="bsi-requested-loan-input"
+                        />
+                        <small className="block text-[11px] font-semibold text-[#078D67] lp-num" data-testid="bsi-loan-recommendation">
+                          {bsiPenRec?.maxPlafondSelected > 0
+                            ? `Maks ${bsiPenRec.isAtribusi ? "Atribusi" : "Reguler"}: ${rp(bsiPenRec.maxPlafondSelected)} (Reguler: ${rp(bsiPenRec.maxPlafondReguler)})`
+                            : "Lengkapi tanggal lahir & manfaat pensiun"}
+                        </small>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bsi-pen-akad" className="text-xs font-bold text-[#17223B]">
+                          16b. Akad Pembiayaan
+                        </Label>
+                        <select
+                          id="bsi-pen-akad"
+                          className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-[#17223B]"
+                          value={d.bsi_akad}
+                          onChange={(e) => { setD({ ...d, bsi_akad: e.target.value }); reset(); }}
+                          data-testid="bsi-akad-select"
+                        >
+                          <option value="MMQ">MMQ (Musyarakah Mutanaqishah)</option>
+                          <option value="Murabahah">Murabahah</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {bsiError && (
+                    <div className="flex gap-2.5 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700" data-testid="bsi-error-box">
+                      <AlertTriangle className="h-4 w-4 shrink-0 text-red-600" />
+                      <span>{bsiError}</span>
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap gap-2.5 pt-2">
+                    <Button
+                      type="submit"
+                      disabled={busy === "final"}
+                      className="h-11 flex-1 bg-[#078D67] font-bold text-white hover:bg-[#067455] shadow-xs"
+                      data-testid="bsi-submit-button"
+                    >
+                      {busy === "final" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                      Hitung Simulasi BSI Pensiun Berkah
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={resetBsiForm}
+                      className="h-11 border-slate-200 text-slate-600 hover:bg-slate-50 font-semibold"
+                      data-testid="bsi-reset-button"
+                    >
+                      Atur Ulang
+                    </Button>
+                  </div>
+                </form>
+              ) : (
               <form onSubmit={calcBsiSubmit} className="space-y-4" noValidate>
                 {/* BAGIAN A: IDENTITAS, TANGGAL LAHIR (+ NOTIF UMUR), NIP, TIPE PRODUK & PAYROLL */}
                 <div className="space-y-3.5">
@@ -2667,6 +3595,27 @@ export default function CalculatorPage() {
                           Opsional: Gunakan 2. Prapen 3 Tahun (PP3 Pokok Aktif Rp10rb)
                         </button>
                       )}
+                      {(bsiRec.recommendedSubProduct === "SUDAH_PENSIUN" || bsiRec.nearestAge > 65) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const cair = d.bsi_proyeksi_cair || todayIsoLocal();
+                            setD({
+                              ...d,
+                              bsi_sub_product: "PENSIUN",
+                              bsi_process_iso: cair,
+                              bsi_start_angsuran: nextMonthFirstIsoLocal(cair),
+                              bsi_req_tenor: ""
+                            });
+                            setBsiError("");
+                            reset();
+                          }}
+                          className="mt-2 inline-flex items-center gap-1 rounded-md bg-[#078D67] px-2.5 py-1 text-[11px] font-bold text-white hover:bg-[#067455]"
+                          data-testid="bsi-switch-to-pensiun-btn"
+                        >
+                          Alihkan ke 3. Pensiun Berkah (Pensiun Murni / Janda)
+                        </button>
+                      )}
                     </div>
                   )}
 
@@ -2682,8 +3631,19 @@ export default function CalculatorPage() {
                         value={d.bsi_sub_product}
                         onChange={(e) => {
                           const sub = e.target.value;
-                          const nextStatus = sub === "PP10" && d.bsi_status_gaji === "non_payroll" ? "payroll" : d.bsi_status_gaji;
-                          setD({ ...d, bsi_sub_product: sub, bsi_status_gaji: nextStatus });
+                          if (sub === "PENSIUN") {
+                            const cair = d.bsi_proyeksi_cair || todayIsoLocal();
+                            setD({
+                              ...d,
+                              bsi_sub_product: "PENSIUN",
+                              bsi_process_iso: cair,
+                              bsi_start_angsuran: nextMonthFirstIsoLocal(cair),
+                              bsi_req_tenor: ""
+                            });
+                          } else {
+                            const nextStatus = sub === "PP10" && d.bsi_status_gaji === "non_payroll" ? "payroll" : d.bsi_status_gaji;
+                            setD({ ...d, bsi_sub_product: sub, bsi_status_gaji: nextStatus });
+                          }
                           setBsiError("");
                           reset();
                         }}
@@ -2691,6 +3651,7 @@ export default function CalculatorPage() {
                       >
                         <option value="PP10">1. Prapen 10 Tahun (Dekade Berkah)</option>
                         <option value="PP3">2. Prapen 3 Tahun (Tri Berkah)</option>
+                        <option value="PENSIUN">3. Pensiun Berkah (Pensiun Murni / Janda)</option>
                       </select>
                     </div>
 
@@ -3371,11 +4332,12 @@ export default function CalculatorPage() {
                   </Button>
                 </div>
               </form>
+              )}
             </Step>
           </div>
 
           <div className="space-y-6">
-            {/* Panel Ringkasan & Rekomendasi Live BSI NOS v1.4.6 + Simas Jiwa */}
+            {/* Panel Ringkasan & Rekomendasi Live BSI (Prapensiun NOS v1.4.6 / Pensiun Berkah Sheet Biru) */}
             <section
               className="rounded-2xl bg-gradient-to-br from-[#065f46] via-[#078D67] to-[#1e1b4b] p-5 sm:p-6 text-white shadow-sm"
               data-testid="bsi-recommendation-panel"
@@ -3385,71 +4347,135 @@ export default function CalculatorPage() {
                   <PartnerLogo bankKey="bsi_prapen" size="sm" className="ring-2 ring-white/25" />
                   <div>
                     <p className="text-[11px] font-bold uppercase tracking-wider text-emerald-200">
-                      MONITORING AKSEPTASI &amp; SIMAS JIWA (LIVE)
+                      {isBsiPensiun
+                        ? "MONITORING AKSEPTASI PENSIUN & SIMAS PENSIUN (LIVE)"
+                        : "MONITORING AKSEPTASI & SIMAS JIWA (LIVE)"}
                     </p>
                     <h2 className="font-display text-base sm:text-lg font-bold text-white">
-                      {d.bsi_sub_product === "PP3"
+                      {isBsiPensiun
+                        ? "3. Pensiun Berkah (Pensiun Murni / Janda)"
+                        : d.bsi_sub_product === "PP3"
                         ? "2. Prapen 3 Tahun (Tri Berkah)"
                         : "1. Prapen 10 Tahun (Dekade Berkah)"}
                     </h2>
                   </div>
                 </div>
                 <span className="rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-bold text-emerald-50 lp-num">
-                  Price: {String(d.bsi_price_aktif).replace(".", ",")}% Aktif • {String(d.bsi_price_pensiun).replace(".", ",")}% Pensiun
+                  {isBsiPensiun
+                    ? `Price Dasar: ${String(d.bsi_price_pensiun).replace(".", ",")}%${bsiPenRec?.liveSelected ? ` → Akhir ${bsiPenRec.liveSelected.annualPricePct.toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%` : ""}`
+                    : `Price: ${String(d.bsi_price_aktif).replace(".", ",")}% Aktif • ${String(d.bsi_price_pensiun).replace(".", ",")}% Pensiun`}
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="rounded-xl border border-white/15 bg-white/10 p-3.5">
-                  <span className="block text-xs text-emerald-100/85">
-                    Akseptasi Masa Aktif ({bsiRec?.dbrLabel} {bsiRec?.dbrRate}%)
-                  </span>
-                  <strong className="mt-1 block font-display text-lg font-bold lp-num">
-                    {bsiRec?.akseptasiAktif > 0 ? rp(bsiRec.akseptasiAktif) : "—"}
-                  </strong>
-                  <span className="mt-0.5 block text-[11px] text-emerald-100/75 lp-num">
-                    Penghasilan diakui: {rp(bsiRec?.recognizedSalary || 0)}
-                  </span>
-                </div>
+              {isBsiPensiun ? (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="rounded-xl border border-white/15 bg-white/10 p-3.5">
+                    <span className="block text-xs text-emerald-100/85">
+                      Kapasitas Angsuran ({d.bsi_ratio_basis} {d.bsi_ratio_pct}%)
+                    </span>
+                    <strong className="mt-1 block font-display text-lg font-bold lp-num">
+                      {bsiPenRec?.capacityExact > 0 ? rp(Math.floor(bsiPenRec.capacityExact)) : "—"}
+                    </strong>
+                    <span className="mt-0.5 block text-[11px] text-emerald-100/75 lp-num">
+                      Manfaat pensiun: {rp(Number(d.pension_salary || 0))} ({d.bsi_spouse_status === "with_spouse" ? "98%" : "100%"})
+                    </span>
+                  </div>
 
-                <div className="rounded-xl border border-white/15 bg-white/10 p-3.5">
-                  <span className="block text-xs text-emerald-100/85">
-                    Akseptasi Masa Pensiun (DSR 90%)
-                  </span>
-                  <strong className="mt-1 block font-display text-lg font-bold lp-num">
-                    {bsiRec?.akseptasiPensiun > 0 ? rp(bsiRec.akseptasiPensiun) : "—"}
-                  </strong>
-                  <span className="mt-0.5 block text-[11px] text-emerald-100/75 lp-num">
-                    Tenor Aktif/Pensiun: {bsiRec?.ready ? `${bsiRec.activeMonths} / ${bsiRec.pensionMonths} bln` : "—"}
-                  </span>
-                </div>
+                  <div className="rounded-xl border border-white/15 bg-white/10 p-3.5">
+                    <span className="block text-xs text-emerald-100/85">
+                      Estimasi Angsuran &amp; Terima Bersih
+                    </span>
+                    <strong className="mt-1 block font-display text-lg font-bold lp-num">
+                      {bsiPenRec?.liveSelected ? `${rp(Math.round(bsiPenRec.liveSelected.installmentExact))} / bln` : "—"}
+                    </strong>
+                    <span className="mt-0.5 block text-[11px] text-emerald-100/75 lp-num">
+                      {bsiPenRec?.liveSelected
+                        ? `Terima Bersih: ${rp(Math.round(bsiPenRec.netDisbursementExact))} • Tenor ${bsiPenRec.evalTenor} bln`
+                        : "Lengkapi data untuk estimasi live"}
+                    </span>
+                  </div>
 
-                <div className="rounded-xl border border-white/15 bg-white/10 p-3.5">
-                  <span className="block text-xs text-emerald-100/85">
-                    Premi Simas Jiwa ({d.bsi_skema === "Non-Atribusi" ? "No Atribusi" : "Atribusi"})
-                  </span>
-                  <strong className="mt-1 block font-display text-lg font-bold text-amber-200 lp-num">
-                    {bsiRec?.ready && bsiRec.premiSimas > 0 ? rp(bsiRec.premiSimas) : "—"}
-                  </strong>
-                  <span className="mt-0.5 block text-[11px] text-emerald-100/75 lp-num">
-                    {bsiRec?.ready
-                      ? `Tarif ${bsiRec.tarifPerMil.toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ‰ • Santunan ${rp(bsiRec.santunanSimas)}`
-                      : "Pilih tanggal lahir & plafond"}
-                  </span>
-                </div>
+                  <div className="rounded-xl border border-white/15 bg-white/10 p-3.5">
+                    <span className="block text-xs text-emerald-100/85">
+                      Premi Simas Pensiun ({d.bsi_skema === "Non-Atribusi" ? "Reguler" : "Atribusi"})
+                    </span>
+                    <strong className="mt-1 block font-display text-lg font-bold text-amber-200 lp-num">
+                      {bsiPenRec?.liveSelected ? rp(Math.round(bsiPenRec.liveSelected.premiumExact)) : "—"}
+                    </strong>
+                    <span className="mt-0.5 block text-[11px] text-emerald-100/75 lp-num">
+                      {bsiPenRec?.liveSelected
+                        ? `Tarif ${(bsiPenRec.tariffPermil || 0).toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ‰ • UP ${rp(Math.round(bsiPenRec.liveSelected.sumAssured))}`
+                        : "Pilih tanggal lahir & plafond"}
+                    </span>
+                  </div>
 
-                <div className="rounded-xl border border-white/20 bg-white/15 p-3.5">
-                  <span className="block text-xs text-emerald-50">
-                    Kapasitas Plafond Maksimal
-                  </span>
-                  <strong className="mt-1 block font-display text-lg font-extrabold text-[#b9fff5] lp-num">
-                    {bsiRec?.maxPlafond > 0 ? rp(bsiRec.maxPlafond) : "—"}
-                  </strong>
-                  <span className="mt-0.5 block text-[11px] text-emerald-100/80 lp-num">
-                    {bsiRec?.ready ? bsiRec.mcuStatus : "Menunggu data lengkap"}
-                  </span>
+                  <div className="rounded-xl border border-white/20 bg-white/15 p-3.5">
+                    <span className="block text-xs text-emerald-50">
+                      Kapasitas Plafond Maksimal ({d.bsi_skema === "Non-Atribusi" ? "Reguler" : "Atribusi"})
+                    </span>
+                    <strong className="mt-1 block font-display text-lg font-extrabold text-[#b9fff5] lp-num">
+                      {bsiPenRec?.maxPlafondSelected > 0 ? rp(bsiPenRec.maxPlafondSelected) : "—"}
+                    </strong>
+                    <span className="mt-0.5 block text-[11px] text-emerald-100/80 lp-num">
+                      {bsiPenRec?.liveSelected
+                        ? `${bsiPenRec.liveSelected.mcuStatus === "NON_MCU" ? "Non-MCU" : bsiPenRec.liveSelected.mcuStatus} • Reguler: ${rp(bsiPenRec.maxPlafondReguler)}`
+                        : "Menunggu data lengkap"}
+                    </span>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="rounded-xl border border-white/15 bg-white/10 p-3.5">
+                    <span className="block text-xs text-emerald-100/85">
+                      Akseptasi Masa Aktif ({bsiRec?.dbrLabel} {bsiRec?.dbrRate}%)
+                    </span>
+                    <strong className="mt-1 block font-display text-lg font-bold lp-num">
+                      {bsiRec?.akseptasiAktif > 0 ? rp(bsiRec.akseptasiAktif) : "—"}
+                    </strong>
+                    <span className="mt-0.5 block text-[11px] text-emerald-100/75 lp-num">
+                      Penghasilan diakui: {rp(bsiRec?.recognizedSalary || 0)}
+                    </span>
+                  </div>
+
+                  <div className="rounded-xl border border-white/15 bg-white/10 p-3.5">
+                    <span className="block text-xs text-emerald-100/85">
+                      Akseptasi Masa Pensiun (DSR 90%)
+                    </span>
+                    <strong className="mt-1 block font-display text-lg font-bold lp-num">
+                      {bsiRec?.akseptasiPensiun > 0 ? rp(bsiRec.akseptasiPensiun) : "—"}
+                    </strong>
+                    <span className="mt-0.5 block text-[11px] text-emerald-100/75 lp-num">
+                      Tenor Aktif/Pensiun: {bsiRec?.ready ? `${bsiRec.activeMonths} / ${bsiRec.pensionMonths} bln` : "—"}
+                    </span>
+                  </div>
+
+                  <div className="rounded-xl border border-white/15 bg-white/10 p-3.5">
+                    <span className="block text-xs text-emerald-100/85">
+                      Premi Simas Jiwa ({d.bsi_skema === "Non-Atribusi" ? "No Atribusi" : "Atribusi"})
+                    </span>
+                    <strong className="mt-1 block font-display text-lg font-bold text-amber-200 lp-num">
+                      {bsiRec?.ready && bsiRec.premiSimas > 0 ? rp(bsiRec.premiSimas) : "—"}
+                    </strong>
+                    <span className="mt-0.5 block text-[11px] text-emerald-100/75 lp-num">
+                      {bsiRec?.ready
+                        ? `Tarif ${bsiRec.tarifPerMil.toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ‰ • Santunan ${rp(bsiRec.santunanSimas)}`
+                        : "Pilih tanggal lahir & plafond"}
+                    </span>
+                  </div>
+
+                  <div className="rounded-xl border border-white/20 bg-white/15 p-3.5">
+                    <span className="block text-xs text-emerald-50">
+                      Kapasitas Plafond Maksimal
+                    </span>
+                    <strong className="mt-1 block font-display text-lg font-extrabold text-[#b9fff5] lp-num">
+                      {bsiRec?.maxPlafond > 0 ? rp(bsiRec.maxPlafond) : "—"}
+                    </strong>
+                    <span className="mt-0.5 block text-[11px] text-emerald-100/80 lp-num">
+                      {bsiRec?.ready ? bsiRec.mcuStatus : "Menunggu data lengkap"}
+                    </span>
+                  </div>
+                </div>
+              )}
             </section>
 
             {/* Hasil Simulasi Final BSI */}
@@ -3475,7 +4501,8 @@ export default function CalculatorPage() {
 
               {!res ? (
                 <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/70 p-8 text-center text-sm text-slate-500">
-                  Lengkapi formulir di sebelah kiri, lalu tekan tombol <b>Hitung Simulasi BSI Prapensiun</b>.
+                  Lengkapi formulir di sebelah kiri, lalu tekan tombol{" "}
+                  <b>{isBsiPensiun ? "Hitung Simulasi BSI Pensiun Berkah" : "Hitung Simulasi BSI Prapensiun"}</b>.
                 </div>
               ) : (
                 <div className="space-y-6 lp-fade">

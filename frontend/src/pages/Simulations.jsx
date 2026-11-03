@@ -70,11 +70,17 @@ export default function Simulations() {
                   <TableCell>{s.result.tenor} bln</TableCell>
                   <TableCell className="lp-num">
                     {s.result.bank_key === "bsi_prapen" || s.result.bsi_details ? (
-                      <span className="text-xs">
-                        <span className="text-slate-500">Aktif:</span> {rp(s.result.bsi_details?.active_installment || s.result.bank_installment)}
-                        <br />
-                        <span className="text-[#078D67] font-semibold">Pensiun:</span> {rp(s.result.bsi_details?.pension_installment || s.result.coop_installment)}
-                      </span>
+                      s.result.bsi_details?.sub_product === "PENSIUN" ? (
+                        <span className="text-xs font-semibold text-[#078D67]">
+                          {rp(s.result.bsi_details?.pension_installment || s.result.coop_installment)} / bln
+                        </span>
+                      ) : (
+                        <span className="text-xs">
+                          <span className="text-slate-500">Aktif:</span> {rp(s.result.bsi_details?.active_installment || s.result.bank_installment)}
+                          <br />
+                          <span className="text-[#078D67] font-semibold">Pensiun:</span> {rp(s.result.bsi_details?.pension_installment || s.result.coop_installment)}
+                        </span>
+                      )
                     ) : (
                       rp(s.result.coop_installment)
                     )}
@@ -112,9 +118,15 @@ export default function Simulations() {
                 <div className="col-span-2">
                   <span className="text-slate-400">Angsuran:</span>{" "}
                   {s.result.bank_key === "bsi_prapen" || s.result.bsi_details ? (
-                    <span className="font-semibold text-[#078D67] lp-num">
-                      {rp(s.result.bsi_details?.active_installment || s.result.bank_installment)} (Aktif) / {rp(s.result.bsi_details?.pension_installment || s.result.coop_installment)} (Pensiun)
-                    </span>
+                    s.result.bsi_details?.sub_product === "PENSIUN" ? (
+                      <span className="font-semibold text-[#078D67] lp-num">
+                        {rp(s.result.bsi_details?.pension_installment || s.result.coop_installment)} / bln
+                      </span>
+                    ) : (
+                      <span className="font-semibold text-[#078D67] lp-num">
+                        {rp(s.result.bsi_details?.active_installment || s.result.bank_installment)} (Aktif) / {rp(s.result.bsi_details?.pension_installment || s.result.coop_installment)} (Pensiun)
+                      </span>
+                    )
                   ) : (
                     <b className="font-semibold text-[#351080] lp-num">{rp(s.result.coop_installment)}</b>
                   )}
