@@ -344,7 +344,14 @@ export function BsiResultView({ r }) {
                 <Row k="Tipe Produk" v={bsi.sub_product_label || "Dekade Berkah (Prapen 10 Tahun)"} strong testid="bsi-result-sub-product" />
                 <Row k="Status Payroll" v={`${bsi.status_gaji_label || "Payroll"} (DBR Maks ${bsi.dbr_active_rate || 70}%)`} strong testid="bsi-result-status-gaji" />
                 {bsi.tmt_bekerja && <Row k="TMT Bekerja" v={fmtDate(bsi.tmt_bekerja)} />}
-                <Row k="TMT Pensiun / BUP" v={`Tahun ${bsi.bup_year || "-"} (BUP ${bsi.bup_age || 58} Thn • Sisa ${bsi.actual_months_to_bup ?? bsi.active_months ?? 0} bln)`} />
+                <Row
+                  k="TMT Pensiun Efektif / BUP"
+                  v={
+                    bsi.bup_date
+                      ? `${fmtDate(bsi.bup_date)} (Thn BUP ${bsi.bup_year || "-"} • BUP ${bsi.bup_age || 58} Thn • Sisa ${bsi.actual_months_to_bup ?? bsi.active_months ?? 0} bln)`
+                      : `Tahun ${bsi.bup_year || "-"} (BUP ${bsi.bup_age || 58} Thn • Sisa ${bsi.actual_months_to_bup ?? bsi.active_months ?? 0} bln)`
+                  }
+                />
                 <Row k="Total Penghasilan Aktif Diakui" v={rp(r.salary)} strong />
                 {bsi.tht > 0 && <Row k="THT (Diakui 75%)" v={`${rp(bsi.tht)} (Diakui ${rp(bsi.tht_recognized || Math.round(bsi.tht * 0.75))})`} />}
                 <Row k="Manfaat Pensiun (DSR Maks 90%)" v={`${rp(r.pension_salary)} (Maks Angs ${rp(bsi.max_installment_pension || Math.floor((r.pension_salary || 0) * 0.9))})`} />

@@ -60,3 +60,6 @@ logs/
 .temp/
 .tmp/
 tmp/
+
+# Large simulation audit archives (>100 MB GitHub limit)
+Blue_Print/**/*.zip

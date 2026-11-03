@@ -8,7 +8,7 @@
 //    agar manifest.webmanifest & icon PWA selalu valid untuk prompt instalasi.
 // ============================================================================
 
-const CACHE_NAME = "lp-pwa-shell-v2.5.7";
+const CACHE_NAME = "lp-pwa-shell-v2.5.9";
 const PRECACHE_ASSETS = [
   "/",
   "/index.html",

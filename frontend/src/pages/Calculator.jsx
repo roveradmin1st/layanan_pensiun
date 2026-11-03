@@ -163,8 +163,12 @@ function fullMonthsLocal(from, to) {
 
 function parseIsoDateLocal(val) {
   if (!val) return null;
-  const d = new Date(`${String(val).slice(0, 10)}T00:00:00`);
-  return isNaN(d.getTime()) ? null : d;
+  const s = String(val).trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const d = new Date(`${s}T00:00:00`);
+  if (isNaN(d.getTime())) return null;
+  const check = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return check === s ? d : null;
 }
 
 function todayIsoLocal() {
@@ -439,17 +443,25 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
     tht: 75
   };
 
-  const recognizedSalary = Math.round(
+  const recognizedSalaryRaw =
     gp * (Number(w.gajiPokok) / 100) +
     um * (Number(w.uangMakan) / 100) +
     tr1 * (Number(w.tunjanganRutin1Bln) / 100) +
     tr3 * (Number(w.tunjanganRutin3Bln) / 100) +
-    tl1 * (Number(w.tunjanganLain1Bln) / 100)
-  );
+    tl1 * (Number(w.tunjanganLain1Bln) / 100);
+  const recognizedSalary = Math.round(recognizedSalaryRaw);
   const thtRecognized = Math.round(tht * ((Number(w.tht) || 75) / 100));
 
   const statusGaji = d.bsi_status_gaji || "payroll";
-  const dbrRate = statusGaji === "non_payroll" ? 50 : 70;
+  const dbrPayroll = Number(cfg.dbrActivePayroll) || 70;
+  const dbrColek = Number(cfg.dbrActivePayrollColek) || 80;
+  const dbrNonPayroll = Number(cfg.dbrActiveNonPayroll) || 50;
+  const chosenColekDbr = Number(d.bsi_dbr_chosen) === 80 ? Math.min(dbrColek, 80) : dbrPayroll;
+  const dbrRate = statusGaji === "non_payroll"
+    ? dbrNonPayroll
+    : statusGaji === "comitted_payroll"
+    ? chosenColekDbr
+    : dbrPayroll;
   const dbrLabel = statusGaji === "comitted_payroll"
     ? "Comitted Payroll"
     : statusGaji === "non_payroll"
@@ -460,14 +472,13 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
   const angsuranSelainBsi = Math.max(0, Number(d.angsuran_selain_bsi || 0));
   let akseptasiAktifRaw = 0;
   if (statusGaji === "payroll") {
-    akseptasiAktifRaw = (recognizedSalary * (dbrRate / 100) - angsuranSelainBsi) - angsuranBsi;
-  } else if (statusGaji === "comitted_payroll") {
-    akseptasiAktifRaw = recognizedSalary * (dbrRate / 100) - (angsuranBsi + angsuranSelainBsi);
+    akseptasiAktifRaw = Math.max(0, recognizedSalaryRaw - angsuranBsi) * (dbrRate / 100);
   } else {
-    akseptasiAktifRaw = (recognizedSalary - angsuranSelainBsi) * (dbrRate / 100) - angsuranBsi;
+    akseptasiAktifRaw = Math.max(0, recognizedSalaryRaw - angsuranBsi - angsuranSelainBsi) * (dbrRate / 100);
   }
   const akseptasiAktif = Math.floor(Math.max(0, akseptasiAktifRaw));
-  const akseptasiPensiun = Math.floor(Math.max(0, pensionSalary * 0.9));
+  const akseptasiPensiunRaw = Math.max(0, pensionSalary * 0.9);
+  const akseptasiPensiun = Math.floor(akseptasiPensiunRaw);
 
   const subProduct = d.bsi_sub_product === "PP3" ? "PP3" : "PP10";
   const isAtribusi = d.bsi_skema !== "Non-Atribusi";
@@ -489,10 +500,13 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
   }
 
   const ageObj = computeExactAgeLocal(dob, cairDate);
-  const nearestAge = getNearestAge30_360Local(dob, startAngsuranDate);
+  const nearestAge = getNearestAge30_360Local(dob, cairDate);
   const bupAge = Math.max(55, Number(d.bup_age || 58));
+  const bupAttainmentYear = dob.getFullYear() + bupAge;
   const explicitBupYear = Number(d.tmt_pensiun_year) || 0;
-  const targetBupYear = explicitBupYear >= 1990 ? explicitBupYear : (dob.getFullYear() + bupAge);
+  const targetBupYear = explicitBupYear >= 1990 ? explicitBupYear : bupAttainmentYear;
+  const isDecemberBirth = dob.getMonth() === 11;
+  const decemberBupYearWarning = isDecemberBirth && explicitBupYear === bupAttainmentYear + 1;
   const bupDate = new Date(targetBupYear, dob.getMonth() + 1, 1);
   const rawDaysToBup = (bupDate.getTime() - cairDate.getTime()) / (1000 * 60 * 60 * 24);
   const actualMonthsToBup = rawDaysToBup > 0 ? Math.max(0, Math.round(rawDaysToBup / 30.5)) : 0;
@@ -551,7 +565,10 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
 
   // Simas Jiwa Tarif & Premi Live
   const simasCfg = cfg.simasInsurance || {};
-  const insTotalMonths = requestedTenor + 6;
+  const insBufferMonths = d.bsi_insurance_buffer_months !== undefined && d.bsi_insurance_buffer_months !== ""
+    ? Math.max(0, Number(d.bsi_insurance_buffer_months))
+    : 0;
+  const insTotalMonths = requestedTenor + insBufferMonths;
   const insYears = Math.floor(Math.max(0, insTotalMonths) / 12);
   const insRemMonths = Math.max(0, insTotalMonths) % 12;
   const endCoverageAge = nearestAge + insYears + insRemMonths / 12;
@@ -588,7 +605,7 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
   // Hitung Rekomendasi Plafond Maksimal (Iterasi Konvergen sama persis dengan Backend)
   const manualIns = Math.max(0, Number(d.bsi_manual_insurance || 0));
   let maxPlafond = 0;
-  if (activeMonths > 0 && akseptasiAktif > 0 && (pensionMonths === 0 || akseptasiPensiun > 0)) {
+  if (activeMonths > 0 && akseptasiAktifRaw > 0 && pensionMonths > 0 && akseptasiPensiunRaw > 0) {
     let candP = Number(d.bsi_req_loan) > 0 ? Number(d.bsi_req_loan) : 400000000;
     for (let iter = 0; iter < 5; iter++) {
       const simCand = calcSimasForPlafond(candP);
@@ -597,23 +614,19 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
       const hasAtrib = isAtribusi && atribNominal > 0;
 
       if (subProduct === "PP3") {
-        const availAktif = akseptasiAktif - atribPerBln - 10000;
-        const capAktif = availAktif > 0 ? Math.floor(((availAktif * 12) / (baseRateAktifAnnual / 100)) / 10000000) * 10000000 : 0;
-        if (pensionMonths > 0) {
-          const ratePenCap = (baseRatePensiunAnnual / 100) + (hasAtrib ? 0.01 : 0);
-          const availPen = akseptasiPensiun - atribPerBln;
-          const capPen = availPen > 0 ? Math.floor(pvWithFvLocal(ratePenCap / 12, pensionMonths, availPen, 0) / 10000000) * 10000000 : 0;
-          maxPlafond = Math.max(0, Math.min(800000000, capAktif, capPen));
-        } else {
-          maxPlafond = Math.max(0, Math.min(800000000, capAktif));
-        }
+        const availAktif = akseptasiAktifRaw - atribPerBln - 10000;
+        const capAktif = availAktif > 0 ? Math.floor(((availAktif * 12) / (baseRateAktifAnnual / 100)) / 1000000) * 1000000 : 0;
+        const ratePenCap = (baseRatePensiunAnnual / 100) + (hasAtrib ? 0.01 : 0);
+        const availPen = akseptasiPensiunRaw - atribPerBln;
+        const capPen = availPen > 0 ? Math.floor(pvWithFvLocal(ratePenCap / 12, pensionMonths, availPen, 0) / 1000000) * 1000000 : 0;
+        maxPlafond = Math.max(0, Math.min(800000000, capAktif, capPen));
       } else {
         const rateAktCap = (baseRateAktifAnnual / 100) + (hasAtrib ? 0.001 : 0);
         const ratePenCap = (baseRatePensiunAnnual / 100) + (hasAtrib ? 0.01 : 0);
         const availAkt = akseptasiAktif - atribPerBln;
-        const availPen = akseptasiPensiun - atribPerBln;
-        if (availAkt > 0 && (pensionMonths === 0 || availPen > 0)) {
-          const pvPen = pensionMonths > 0 ? pvWithFvLocal(ratePenCap / 12, pensionMonths, availPen, 0) : 0;
+        const availPen = akseptasiPensiunRaw - atribPerBln;
+        if (availAkt > 0 && availPen > 0) {
+          const pvPen = pvWithFvLocal(ratePenCap / 12, pensionMonths, availPen, 0);
           const rawPvAkt = pvWithFvLocal(rateAktCap / 12, activeMonths, availAkt, pvPen);
           maxPlafond = Math.max(0, Math.min(800000000, Math.floor(rawPvAkt / 1000000) * 1000000));
         } else {
@@ -644,7 +657,10 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
     ageObj,
     nearestAge,
     bupAge,
+    bupAttainmentYear,
     targetBupYear,
+    isDecemberBirth,
+    decemberBupYearWarning,
     bupDateIso: `${bupDate.getFullYear()}-${String(bupDate.getMonth() + 1).padStart(2, "0")}-01`,
     actualMonthsToBup,
     remainingAgeMonths,
@@ -667,6 +683,8 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
     baseRateAktifAnnual,
     baseRatePensiunAnnual,
     tarifPerMil,
+    insBufferMonths,
+    insTotalMonths,
     insYears,
     insRemMonths,
     endCoverageAge: Number(endCoverageAge.toFixed(1)),
@@ -844,6 +862,7 @@ export default function CalculatorPage() {
     nip: "",
     bsi_sub_product: "PP10", // "PP10" (1. Prapen 10 Tahun) | "PP3" (2. Prapen 3 Tahun)
     bsi_status_gaji: "payroll", // "payroll" | "comitted_payroll" | "non_payroll"
+    bsi_dbr_chosen: "70", // "70" | "80" (khusus Comitted Payroll / Payroll Colek)
     gaji_pokok: "",
     uang_makan: "",
     tunjangan_rutin_1: "",
@@ -860,6 +879,7 @@ export default function CalculatorPage() {
     bsi_proyeksi_cair: todayIsoLocal(),
     bsi_start_angsuran: nextMonth25IsoLocal(todayIsoLocal()),
     bsi_skema: "Atribusi", // "Atribusi" (2. Atribusi Asuransi) | "Non-Atribusi" (1. No Atribusi)
+    bsi_insurance_buffer_months: "0", // "0" (Sesuai Tenor / Standar Excel) | "6" (Tenor + 6 Bulan)
     bsi_manual_insurance: "",
     buka_blokir_lama: 0,
     pelunasan_lama: 0,
@@ -985,6 +1005,7 @@ export default function CalculatorPage() {
     marketing: isAms2 ? d.ams2_marketing : undefined,
     marketing_hp: isAms2 ? d.ams2_marketing_hp : undefined,
     bsi_status_gaji: d.bsi_status_gaji,
+    bsi_dbr_chosen: d.bsi_status_gaji === "comitted_payroll" ? Number(d.bsi_dbr_chosen || 70) : undefined,
     bsi_sub_product: d.bsi_sub_product,
     bsi_akad: d.bsi_akad,
     bsi_skema: d.bsi_skema,
@@ -1004,6 +1025,7 @@ export default function CalculatorPage() {
     bsi_price_pensiun: Number(String(d.bsi_price_pensiun || "0").replace(",", ".")) || 0,
     bsi_proyeksi_cair: d.bsi_proyeksi_cair,
     bsi_start_angsuran: d.bsi_start_angsuran,
+    bsi_insurance_buffer_months: Number(d.bsi_insurance_buffer_months ?? 0),
     bsi_manual_insurance: Number(d.bsi_manual_insurance || 0),
     buka_blokir_lama: Number(d.buka_blokir_lama || 0),
     pelunasan_lama: Number(d.pelunasan_lama || d.take_over || 0),
@@ -1219,8 +1241,19 @@ export default function CalculatorPage() {
     if (!d.name?.trim()) errs.push("Nama Calon Debitur wajib diisi.");
     if (!parseIsoDateLocal(d.bsi_birth_iso)) errs.push("Tanggal Lahir wajib diisi.");
     if ((bsiRec?.recognizedSalary || 0) <= 0) errs.push("Komponen Penghasilan Aktif (minimal Gaji Pokok) wajib diisi.");
+    if (bsiRec?.ready && bsiRec.actualMonthsToBup > 0 && bsiRec.pensionMonths <= 0) {
+      errs.push(
+        `Tenor (${bsiRec.requestedTenor} bln) harus lebih panjang dari sisa masa aktif ke BUP (${bsiRec.actualMonthsToBup} bln) agar memiliki fase pensiun minimal 1 bulan.`
+      );
+    }
     if (Number(d.pension_salary || 0) <= 0 && (bsiRec?.pensionMonths || 0) > 0) {
       errs.push("Manfaat Pensiun Bulanan wajib diisi karena tenor melewati masa pensiun (BUP).");
+    }
+    if (String(d.bsi_req_loan || "").trim() !== "" && Number(d.bsi_req_loan) <= 0) {
+      errs.push("Plafond Pra Pensiun yang diajukan harus lebih dari Rp0 (atau kosongkan untuk otomatis Plafond Maksimal).");
+    }
+    if (String(d.bsi_req_tenor || "").trim() !== "" && Number(d.bsi_req_tenor) <= 0) {
+      errs.push("Tenor Pembiayaan harus lebih dari 0 bulan.");
     }
     if (!d.bsi_price_aktif || Number(String(d.bsi_price_aktif).replace(",", ".")) <= 0) {
       errs.push("Price Saat Aktif (% p.a.) wajib diisi.");
@@ -1263,6 +1296,7 @@ export default function CalculatorPage() {
       nip: "",
       bsi_sub_product: "PP10",
       bsi_status_gaji: "payroll",
+      bsi_dbr_chosen: "70",
       gaji_pokok: "",
       uang_makan: "",
       tunjangan_rutin_1: "",
@@ -1279,6 +1313,7 @@ export default function CalculatorPage() {
       bsi_proyeksi_cair: today,
       bsi_start_angsuran: nextMonth25IsoLocal(today),
       bsi_skema: "Atribusi",
+      bsi_insurance_buffer_months: "0",
       bsi_manual_insurance: "",
       buka_blokir_lama: 0,
       pelunasan_lama: 0,
@@ -1301,6 +1336,7 @@ export default function CalculatorPage() {
       nip: "1968012220071012004",
       bsi_sub_product: "PP10",
       bsi_status_gaji: "payroll",
+      bsi_dbr_chosen: "70",
       gaji_pokok: 4254800,
       uang_makan: 550000,
       tunjangan_rutin_1: 3761240,
@@ -1318,6 +1354,7 @@ export default function CalculatorPage() {
       bsi_proyeksi_cair: "2026-11-07",
       bsi_start_angsuran: "2026-11-01",
       bsi_skema: "Atribusi",
+      bsi_insurance_buffer_months: "6",
       bsi_manual_insurance: "",
       buka_blokir_lama: 0,
       pelunasan_lama: 0,
@@ -2668,16 +2705,38 @@ export default function CalculatorPage() {
                         onChange={(e) => {
                           const stat = e.target.value;
                           const nextSub = stat === "non_payroll" ? "PP3" : d.bsi_sub_product;
-                          setD({ ...d, bsi_status_gaji: stat, bsi_sub_product: nextSub });
+                          const nextDbr = stat === "comitted_payroll" ? (d.bsi_dbr_chosen || "70") : (stat === "non_payroll" ? "50" : "70");
+                          setD({ ...d, bsi_status_gaji: stat, bsi_sub_product: nextSub, bsi_dbr_chosen: nextDbr });
                           setBsiError("");
                           reset();
                         }}
                         data-testid="bsi-status-gaji-select"
                       >
                         <option value="payroll">Payroll (DBR 70%)</option>
-                        <option value="comitted_payroll">Comitted Payroll (DBR 70%)</option>
+                        <option value="comitted_payroll">Comitted Payroll (DBR 70% / 80%)</option>
                         <option value="non_payroll">Non Payroll (DBR 50% • Khusus PP3)</option>
                       </select>
+                      {d.bsi_status_gaji === "comitted_payroll" && (
+                        <div className="flex items-center gap-1.5 pt-0.5">
+                          <span className="text-[10px] font-semibold text-slate-500">Batas DBR Comitted:</span>
+                          {["70", "80"].map((val) => (
+                            <button
+                              key={val}
+                              type="button"
+                              onClick={() => { setD({ ...d, bsi_dbr_chosen: val }); reset(); }}
+                              className={cn(
+                                "rounded border px-2 py-0.5 text-[10px] font-bold lp-num transition-colors",
+                                String(d.bsi_dbr_chosen || "70") === val
+                                  ? "border-[#078D67] bg-[#078D67] text-white"
+                                  : "border-slate-200 bg-white text-slate-600 hover:border-[#078D67]"
+                              )}
+                              data-testid={`bsi-dbr-${val}-btn`}
+                            >
+                              DBR {val}%
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -2816,19 +2875,56 @@ export default function CalculatorPage() {
 
                     <div className="space-y-1.5">
                       <Label htmlFor="bsi-tmt" className="text-xs font-bold text-[#17223B]">
-                        8b. Tahun TMT Pensiun
+                        8b. Tahun Mencapai Usia BUP
                       </Label>
                       <Input
                         id="bsi-tmt"
                         type="number"
-                        placeholder="2028"
+                        placeholder={bsiRec?.bupAttainmentYear ? String(bsiRec.bupAttainmentYear) : "Contoh: 2027"}
                         className="h-10 border-slate-200 lp-num text-xs font-semibold"
                         value={d.tmt_pensiun_year}
                         onChange={(e) => { setD({ ...d, tmt_pensiun_year: e.target.value }); reset(); }}
                         data-testid="bsi-tmt-pensiun-input"
                       />
+                      {bsiRec?.ready && (
+                        <small className="block text-[11px] font-semibold text-[#078D67] lp-num" data-testid="bsi-effective-tmt-date">
+                          TMT Pensiun Efektif: {fmtDate(bsiRec.bupDateIso)}
+                        </small>
+                      )}
                     </div>
                   </div>
+
+                  {bsiRec?.ready && bsiRec.isDecemberBirth && (
+                    <div
+                      className={cn(
+                        "rounded-lg border px-3 py-2 text-[11px] leading-relaxed",
+                        bsiRec.decemberBupYearWarning
+                          ? "border-amber-300 bg-amber-50 text-amber-900"
+                          : "border-slate-200 bg-slate-50 text-slate-600"
+                      )}
+                      data-testid="bsi-december-bup-note"
+                    >
+                      <p>
+                        <b>Catatan Kelahiran Desember:</b> Kolom <b>8b</b> mengikuti <i>Tahun Mencapai Usia BUP</i> (<b>{bsiRec.bupAttainmentYear}</b>), sehingga TMT Pensiun Efektif 1 bulan berikutnya otomatis jatuh pada <b>01/01/{bsiRec.bupAttainmentYear + 1}</b>.
+                        {bsiRec.decemberBupYearWarning && (
+                          <> Anda sedang mengisi tahun <b>{bsiRec.targetBupYear}</b> sehingga TMT bergeser ke <b>{fmtDate(bsiRec.bupDateIso)}</b> (+12 bln).</>
+                        )}
+                      </p>
+                      {bsiRec.decemberBupYearWarning && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setD({ ...d, tmt_pensiun_year: String(bsiRec.bupAttainmentYear) });
+                            reset();
+                          }}
+                          className="mt-1.5 inline-flex items-center rounded bg-amber-600 px-2 py-0.5 text-[10px] font-bold text-white hover:bg-amber-700"
+                          data-testid="bsi-fix-december-bup-btn"
+                        >
+                          Gunakan Tahun BUP {bsiRec.bupAttainmentYear} (TMT 01/01/{bsiRec.bupAttainmentYear + 1})
+                        </button>
+                      )}
+                    </div>
+                  )}
 
                   {/* 9. THT & 10. Pensiun / Manfaat Pensiun */}
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -2914,7 +3010,10 @@ export default function CalculatorPage() {
                           Terbagi otomatis: <b className="text-[#078D67]">{bsiRec.activeMonths} bln Masa Aktif</b> +{" "}
                           <b className="text-[#351080]">{bsiRec.pensionMonths} bln Masa Pensiun</b>
                         </span>
-                        <span>Polis Simas (+6 bln): {(bsiRec.requestedTenor || 0) + 6} bln</span>
+                        <span>
+                          Polis Simas ({bsiRec.insBufferMonths > 0 ? `+${bsiRec.insBufferMonths} bln` : "Sesuai Tenor"}):{" "}
+                          {bsiRec.insTotalMonths} bln
+                        </span>
                       </div>
                     )}
                   </div>
@@ -3063,35 +3162,67 @@ export default function CalculatorPage() {
                     </div>
                   )}
 
-                  {/* 15. Skema Atribusi & Biaya Asuransi Simas Jiwa */}
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <div className="space-y-1.5">
-                      <Label htmlFor="bsi-skema" className="text-xs font-bold text-[#17223B]">
-                        15a. Skema Asuransi
-                      </Label>
-                      <select
-                        id="bsi-skema"
-                        className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-[#17223B]"
-                        value={d.bsi_skema}
-                        onChange={(e) => { setD({ ...d, bsi_skema: e.target.value }); reset(); }}
-                        data-testid="bsi-skema-select"
-                      >
-                        <option value="Atribusi">2. Atribusi Asuransi (Dicicil di Margin)</option>
-                        <option value="Non-Atribusi">1. No Atribusi (Potong Pencairan)</option>
-                      </select>
+                  {/* 15. Skema Atribusi, Masa Polis & Biaya Asuransi Simas Jiwa */}
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bsi-skema" className="text-xs font-bold text-[#17223B]">
+                          15a. Skema Asuransi
+                        </Label>
+                        <select
+                          id="bsi-skema"
+                          className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-[#17223B]"
+                          value={d.bsi_skema}
+                          onChange={(e) => { setD({ ...d, bsi_skema: e.target.value }); reset(); }}
+                          data-testid="bsi-skema-select"
+                        >
+                          <option value="Atribusi">2. Atribusi Asuransi (Dicicil di Margin)</option>
+                          <option value="Non-Atribusi">1. No Atribusi (Potong Pencairan)</option>
+                        </select>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bsi-ins-buffer" className="text-xs font-bold text-[#17223B]">
+                          15b. Masa Polis Asuransi Simas
+                        </Label>
+                        <select
+                          id="bsi-ins-buffer"
+                          className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-[#17223B]"
+                          value={d.bsi_insurance_buffer_months ?? "0"}
+                          onChange={(e) => { setD({ ...d, bsi_insurance_buffer_months: e.target.value }); reset(); }}
+                          data-testid="bsi-ins-buffer-select"
+                        >
+                          <option value="0">Sesuai Tenor (+0 Bln — Standar Excel)</option>
+                          <option value="6">Tenor + 6 Bulan (+6 Bln Buffer)</option>
+                        </select>
+                      </div>
                     </div>
 
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-bold text-[#17223B]">
-                        15b. Biaya Asuransi Simas Jiwa
-                      </Label>
-                      <div className="flex h-10 items-center justify-between rounded-md border border-emerald-200 bg-emerald-50/70 px-3 text-xs font-bold text-[#078D67] lp-num">
-                        <span>{bsiRec?.ready ? rp(bsiRec.premiSimas) : "Rp0"}</span>
-                        {bsiRec?.ready && (
-                          <span className="rounded bg-[#078D67]/15 px-1.5 py-0.5 text-[10px]">
-                            {bsiRec.tarifPerMil.toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ‰
-                          </span>
-                        )}
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <Label className="text-xs font-bold text-[#17223B]">
+                          15c. Biaya Asuransi Simas (Otomatis)
+                        </Label>
+                        <div className="flex h-10 items-center justify-between rounded-md border border-emerald-200 bg-emerald-50/70 px-3 text-xs font-bold text-[#078D67] lp-num">
+                          <span>{bsiRec?.ready ? rp(bsiRec.premiSimas) : "Rp0"}</span>
+                          {bsiRec?.ready && (
+                            <span className="rounded bg-[#078D67]/15 px-1.5 py-0.5 text-[10px]">
+                              {bsiRec.tarifPerMil.toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ‰ • {bsiRec.insYears}Th {bsiRec.insRemMonths}Bl
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <Label className="text-xs font-bold text-slate-600">
+                          15d. Override Premi Manual (Opsional)
+                        </Label>
+                        <CurrencyInput
+                          placeholder="Kosongkan untuk otomatis Simas"
+                          value={d.bsi_manual_insurance}
+                          onChange={(v) => { setD({ ...d, bsi_manual_insurance: v || "" }); reset(); }}
+                          data-testid="bsi-manual-insurance-input"
+                        />
                       </div>
                     </div>
                   </div>

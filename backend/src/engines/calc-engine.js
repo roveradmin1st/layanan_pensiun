@@ -22,9 +22,16 @@ function pv(rateMonthly, nper, payment) {
 
 function parseIsoLocalDate(isoStr) {
   if (!isoStr) return null;
-  const s = String(isoStr).slice(0, 10);
+  if (isoStr instanceof Date) {
+    return isNaN(isoStr.getTime())
+      ? null
+      : new Date(isoStr.getFullYear(), isoStr.getMonth(), isoStr.getDate());
+  }
+  const s = String(isoStr).trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
   const d = new Date(`${s}T00:00:00`);
-  return isNaN(d.getTime()) ? null : d;
+  if (isNaN(d.getTime()) || toIsoDateStr(d) !== s) return null;
+  return d;
 }
 
 function toIsoDateStr(d) {
@@ -133,8 +140,8 @@ export function getNearestAge30_360(dobDate, startDate) {
 }
 
 export function computeAgeDetail(birthDateIso, processDateIso = new Date().toISOString().slice(0, 10)) {
-  const b = parseIsoLocalDate(birthDateIso) || new Date(birthDateIso);
-  const p = parseIsoLocalDate(processDateIso) || new Date(processDateIso);
+  const b = parseIsoLocalDate(birthDateIso);
+  const p = parseIsoLocalDate(processDateIso);
   if (!b || isNaN(b.getTime()) || !p || isNaN(p.getTime())) {
     return { years: 0, months: 0, days: 0, totalMonths: 0, insuranceAge: 0, exactText: "-" };
   }
@@ -369,16 +376,23 @@ function computeBsiCandidateMaxPlafond({
   baseRateAktifAnnual,
   baseRatePensiunAnnual,
   akseptasiAktif,
+  akseptasiAktifExact,
   akseptasiPensiun,
+  akseptasiPensiunExact,
   tenorAktif,
   tenorPensiun,
   requestedTenor,
   nominalAtribusi,
   cfg
 }) {
+  const capIncomeAktif = subProduct === "PP3"
+    ? (akseptasiAktifExact !== undefined ? akseptasiAktifExact : akseptasiAktif)
+    : akseptasiAktif;
+  const capIncomePensiun = akseptasiPensiunExact !== undefined ? akseptasiPensiunExact : akseptasiPensiun;
+
   if (tenorAktif <= 0 || requestedTenor <= 0) return 0;
-  if (tenorPensiun > 0 && akseptasiPensiun <= 0) return 0;
-  if (akseptasiAktif <= 0) return 0;
+  if (tenorPensiun > 0 && capIncomePensiun <= 0) return 0;
+  if (capIncomeAktif <= 0) return 0;
 
   const maxPlafondAbs = Number(cfg.maxPlafondAbsolute) || 800000000;
   const hasAtrib = isAtribusi && nominalAtribusi > 0;
@@ -386,18 +400,18 @@ function computeBsiCandidateMaxPlafond({
 
   if (subProduct === "PP3") {
     const pokokTetap = Number(cfg.atribusiAdjustments?.pp3PokokTetapAktif) || 10000;
-    const availAktif = akseptasiAktif - atribPerBulan - pokokTetap;
+    const availAktif = capIncomeAktif - atribPerBulan - pokokTetap;
     if (availAktif <= 0 || baseRateAktifAnnual <= 0) return 0;
     const rawCapAktif = (availAktif * 12) / (baseRateAktifAnnual / 100);
-    const capAktif = Math.floor(rawCapAktif / 10000000) * 10000000;
+    const capAktif = Math.floor(rawCapAktif / 1000000) * 1000000;
 
     if (tenorPensiun > 0) {
       const adjPensiun = hasAtrib ? ((Number(cfg.atribusiAdjustments?.pp10PensionRateAdd) || 1.0) / 100) : 0;
       const ratePenCap = (baseRatePensiunAnnual / 100) + adjPensiun;
-      const availPensiun = akseptasiPensiun - atribPerBulan;
+      const availPensiun = capIncomePensiun - atribPerBulan;
       if (availPensiun <= 0) return 0;
       const rawCapPensiun = pvWithFv(ratePenCap / 12, tenorPensiun, availPensiun, 0);
-      const capPensiun = Math.floor(rawCapPensiun / 10000000) * 10000000;
+      const capPensiun = Math.floor(rawCapPensiun / 1000000) * 1000000;
       return Math.max(0, Math.min(maxPlafondAbs, capAktif, capPensiun));
     }
     return Math.max(0, Math.min(maxPlafondAbs, capAktif));
@@ -408,11 +422,11 @@ function computeBsiCandidateMaxPlafond({
   const rateAktifCap = (baseRateAktifAnnual / 100) + adjAktif;
   const ratePensiunCap = (baseRatePensiunAnnual / 100) + adjPensiun;
 
-  const availAktif = akseptasiAktif - atribPerBulan;
+  const availAktif = capIncomeAktif - atribPerBulan;
   if (availAktif <= 0) return 0;
   let pvPen = 0;
   if (tenorPensiun > 0) {
-    const availPensiun = akseptasiPensiun - atribPerBulan;
+    const availPensiun = capIncomePensiun - atribPerBulan;
     if (availPensiun <= 0) return 0;
     pvPen = pvWithFv(ratePensiunCap / 12, tenorPensiun, availPensiun, 0);
   }
@@ -421,8 +435,12 @@ function computeBsiCandidateMaxPlafond({
 }
 
 function evaluateBsiCore(body, cfg, defaultProcessDate) {
-  const processDateStr = body.process_date || defaultProcessDate || new Date().toISOString().slice(0, 10);
-  const procDate = parseIsoLocalDate(processDateStr) || new Date(processDateStr);
+  const hasExplicitProcDate =
+    body.process_date !== undefined && body.process_date !== null && String(body.process_date).trim() !== "";
+  const processDateStr = hasExplicitProcDate
+    ? String(body.process_date).trim().slice(0, 10)
+    : (defaultProcessDate || new Date().toISOString().slice(0, 10));
+  const procDate = parseIsoLocalDate(processDateStr);
   const dobDate = parseIsoLocalDate(body.birth_date);
   const ageObj = computeAgeDetail(body.birth_date, processDateStr);
   const nearestAge = dobDate && procDate ? getNearestAge30_360(dobDate, procDate) : 0;
@@ -435,14 +453,23 @@ function evaluateBsiCore(body, cfg, defaultProcessDate) {
   const skema = isAtribusi ? "Atribusi" : "Non-Atribusi";
 
   const bupAge = Math.max(55, Number(body.bup_age || cfg.bupAgeDefault || 58));
+  const bupAttainmentYear = dobDate
+    ? dobDate.getFullYear() + bupAge
+    : ((procDate ? procDate.getFullYear() : new Date().getFullYear()) + 5);
   const explicitBupYear = Number(body.tmt_pensiun_year || body.bup_year) || 0;
-  const targetBupYear = explicitBupYear >= 1990
-    ? explicitBupYear
-    : (dobDate ? dobDate.getFullYear() + bupAge : procDate.getFullYear() + 5);
+  const targetBupYear = explicitBupYear >= 1990 ? explicitBupYear : bupAttainmentYear;
+  const decemberBupYearRolloverWarning = Boolean(
+    dobDate && dobDate.getMonth() === 11 && explicitBupYear === bupAttainmentYear + 1
+  );
 
+  const explicitBsiTmtDate = parseIsoLocalDate(body.bsi_tmt_pensiun_date);
   let bupDate = null;
   let actualMonthsToBup = 0;
-  if (dobDate && procDate) {
+  if (explicitBsiTmtDate && procDate) {
+    bupDate = new Date(explicitBsiTmtDate.getFullYear(), explicitBsiTmtDate.getMonth(), 1);
+    const rawDays = (bupDate.getTime() - procDate.getTime()) / (1000 * 60 * 60 * 24);
+    actualMonthsToBup = rawDays > 0 ? Math.max(0, Math.round(rawDays / 30.5)) : 0;
+  } else if (dobDate && procDate) {
     bupDate = new Date(targetBupYear, dobDate.getMonth() + 1, 1);
     const rawDays = (bupDate.getTime() - procDate.getTime()) / (1000 * 60 * 60 * 24);
     actualMonthsToBup = rawDays > 0 ? Math.max(0, Math.round(rawDays / 30.5)) : 0;
@@ -508,22 +535,27 @@ function evaluateBsiCore(body, cfg, defaultProcessDate) {
   const hasSplitOblig = body.angsuran_bsi !== undefined || body.angsuran_selain_bsi !== undefined;
   const existingInstallment = hasSplitOblig ? (angsuranBsi + angsuranSelainBsi) : Math.max(0, Number(body.existing_installment || 0));
 
+  let netIncomeActiveBase = 0;
   let akseptasiAktifRaw = 0;
   if (payrollInfo.valid) {
     if (hasSplitOblig) {
+      // Sesuai rumus resmi Simulasi!G4:G6:
+      // - Payroll ("P"): G4 = MIN((B16 - B19)*C16, 0.7*(B16 - B19)) -> B20 (selain BSI) tidak dikurangkan
+      // - Comitted ("C"): G5 = MIN((B16 - B19 - B20)*C16, 0.8*(B16 - B19 - B20))
+      // - Non Payroll ("N"): G6 = MIN((B16 - B19 - B20)*C16, 0.5*(B16 - B19 - B20))
       if (payrollInfo.code === "P") {
-        akseptasiAktifRaw = (recognizedSalary * (dbrActiveRate / 100) - angsuranSelainBsi) - angsuranBsi;
-      } else if (payrollInfo.code === "C") {
-        akseptasiAktifRaw = recognizedSalary * (dbrActiveRate / 100) - (angsuranBsi + angsuranSelainBsi);
+        netIncomeActiveBase = Math.max(0, recognizedSalaryRaw - angsuranBsi);
       } else {
-        akseptasiAktifRaw = (recognizedSalary - angsuranSelainBsi) * (dbrActiveRate / 100) - angsuranBsi;
+        netIncomeActiveBase = Math.max(0, recognizedSalaryRaw - angsuranBsi - angsuranSelainBsi);
       }
     } else {
-      akseptasiAktifRaw = (recognizedSalary - existingInstallment) * (dbrActiveRate / 100);
+      netIncomeActiveBase = Math.max(0, recognizedSalaryRaw - existingInstallment);
     }
+    akseptasiAktifRaw = netIncomeActiveBase * (dbrActiveRate / 100);
   }
+  const akseptasiPensiunRaw = Math.max(0, pensionSalary * (dsrPensionRate / 100));
   const maxInstallmentActive = Math.floor(Math.max(0, akseptasiAktifRaw));
-  const maxInstallmentPension = Math.floor(Math.max(0, pensionSalary * (dsrPensionRate / 100)));
+  const maxInstallmentPension = Math.floor(akseptasiPensiunRaw);
 
   return {
     processDateStr,
@@ -537,7 +569,9 @@ function evaluateBsiCore(body, cfg, defaultProcessDate) {
     skema,
     isAtribusi,
     bupAge,
+    bupAttainmentYear,
     targetBupYear,
+    decemberBupYearRolloverWarning,
     bupDateStr: bupDate ? toIsoDateStr(bupDate) : "",
     actualMonthsToBup,
     recommendedSubProduct,
@@ -560,6 +594,9 @@ function evaluateBsiCore(body, cfg, defaultProcessDate) {
     angsuranBsi,
     angsuranSelainBsi,
     existingInstallment,
+    netIncomeActiveBase,
+    akseptasiAktifRaw,
+    akseptasiPensiunRaw,
     maxInstallmentActive,
     maxInstallmentPension
   };
@@ -714,15 +751,24 @@ export function calculateMax(body, allParams) {
     const tenorAktifCap = core.actualMonthsToBup > 0 ? Math.min(tenorForCap, core.actualMonthsToBup) : 0;
     const tenorPensiunCap = Math.max(0, tenorForCap - tenorAktifCap);
 
-    const endCoverageAgePreview = core.nearestAge + Math.floor((tenorForCap + 6) / 12) + ((tenorForCap + 6) % 12) / 12;
+    const insBufCap = body.bsi_insurance_buffer_months !== undefined && body.bsi_insurance_buffer_months !== null
+      ? Number(body.bsi_insurance_buffer_months)
+      : 6;
+    const insMonthsCap = body.bsi_insurance_months !== undefined && body.bsi_insurance_months !== null
+      ? Number(body.bsi_insurance_months)
+      : (tenorForCap + insBufCap);
+    const endCoverageAgePreview = core.nearestAge + Math.floor(insMonthsCap / 12) + (insMonthsCap % 12) / 12;
     const maxUpAllowed = (core.nearestAge > 64 || endCoverageAgePreview > 70)
       ? (Number(cfg.simasInsurance?.maxUpAge75) || 500000000)
       : (Number(cfg.simasInsurance?.maxUpAge70) || 1000000000);
     const mcuThreshold = core.nearestAge >= 56 ? 500000000 : (core.nearestAge >= 51 ? 800000000 : 1000000000);
 
     const stopReasons = [];
+    if (!core.procDate) {
+      stopReasons.push("Tanggal Proses tidak valid.");
+    }
     if (!core.dobDate) {
-      stopReasons.push("Tanggal Lahir wajib diisi.");
+      stopReasons.push("Tanggal Lahir wajib diisi dengan tanggal kalender yang valid.");
     } else if (core.nearestAge < 45 || core.nearestAge > 65) {
       stopReasons.push(`Usia Nearest Birthday (${core.nearestAge} tahun) di luar rentang usia masuk BSI Prapensiun & Asuransi Simas Jiwa (45–65 tahun).`);
     }
@@ -740,12 +786,14 @@ export function calculateMax(body, allParams) {
 
     let candidateP = reqPlafond > 0 ? reqPlafond : 400000000;
     let maxPlafond = 0;
-    if (tenorAktifCap > 0 && core.maxInstallmentActive > 0 && (tenorPensiunCap === 0 || core.maxInstallmentPension > 0)) {
+    if (tenorAktifCap > 0 && core.akseptasiAktifRaw > 0 && (tenorPensiunCap === 0 || core.akseptasiPensiunRaw > 0)) {
       for (let iter = 0; iter < 5; iter++) {
         const simasCand = computeSimasInsurance(candidateP, body.birth_date, tenorForCap, cfg.simasInsurance, {
           processDateIso: core.processDateStr,
           nearestAge: core.nearestAge,
           isAtribusi: core.isAtribusi,
+          bufferMonths: insBufCap,
+          insuranceMonths: insMonthsCap,
           discountPercent: body.bsi_discount_pct ?? 0,
           extraEmPercent: body.bsi_extra_em_pct ?? 0
         });
@@ -757,7 +805,9 @@ export function calculateMax(body, allParams) {
           baseRateAktifAnnual: candPricing.baseRateAktifAnnual,
           baseRatePensiunAnnual: candPricing.baseRatePensiunAnnual,
           akseptasiAktif: core.maxInstallmentActive,
+          akseptasiAktifExact: core.akseptasiAktifRaw,
           akseptasiPensiun: core.maxInstallmentPension,
+          akseptasiPensiunExact: core.akseptasiPensiunRaw,
           tenorAktif: tenorAktifCap,
           tenorPensiun: tenorPensiunCap,
           requestedTenor: tenorForCap,
@@ -786,8 +836,11 @@ export function calculateMax(body, allParams) {
       nearest_age: core.nearestAge,
       end_age_limit_date: core.endAgeLimitDateStr,
       bup_age: core.bupAge,
+      bup_attainment_year: core.bupAttainmentYear,
       bup_year: core.targetBupYear,
       bup_date: core.bupDateStr,
+      tmt_pensiun_effective_date: core.bupDateStr,
+      december_bup_year_warning: core.decemberBupYearRolloverWarning,
       actual_months_to_bup: core.actualMonthsToBup,
       recommended_sub_product: core.recommendedSubProduct,
       recommended_sub_product_reason: core.recommendedSubProductReason,
@@ -1238,16 +1291,27 @@ export function calculatePreview(body, allParams) {
     const maxPlafondAbs = Number(cfg.maxPlafondAbsolute) || 800000000;
     const maxTenorMonths = Number(cfg.maxTenorMonths) || 180;
 
-    const rawTenorInput = Number(body.tenor || mx.max_tenor || 180);
+    const hasExplicitTenor =
+      body.tenor !== undefined && body.tenor !== null && String(body.tenor).trim() !== "";
+    const rawTenorInput = hasExplicitTenor ? Number(body.tenor) : Number(mx.max_tenor || 180);
     const okTenorInput = Number.isInteger(rawTenorInput) && rawTenorInput >= 1 && rawTenorInput <= maxTenorMonths;
-    const requestedTenor = okTenorInput ? rawTenorInput : Math.max(1, Math.floor(rawTenorInput || 180));
+    const requestedTenor = okTenorInput
+      ? rawTenorInput
+      : (hasExplicitTenor && (!Number.isFinite(rawTenorInput) || rawTenorInput <= 0)
+        ? 0
+        : Math.max(1, Math.floor(rawTenorInput || 180)));
 
     const maxActiveMonthsLimit = core.subProduct === "PP3" ? 36 : 120;
     const okActiveWindow = core.actualMonthsToBup >= 1 && core.actualMonthsToBup <= maxActiveMonthsLimit;
     const activeMonths = core.actualMonthsToBup > 0 ? Math.min(requestedTenor, core.actualMonthsToBup) : 0;
     const pensionMonths = Math.max(0, requestedTenor - activeMonths);
+    const okPensionPhase = pensionMonths >= 1;
 
-    const requestedPlafond = Math.max(0, Number(body.plafond || mx.max_plafond || 0));
+    const hasExplicitPlafond =
+      body.plafond !== undefined && body.plafond !== null && String(body.plafond).trim() !== "";
+    const rawPlafondInput = hasExplicitPlafond ? Number(body.plafond) : Number(mx.max_plafond || 0);
+    const okPlafondPositive = Number.isFinite(rawPlafondInput) && rawPlafondInput > 0;
+    const requestedPlafond = okPlafondPositive ? rawPlafondInput : 0;
     const pricing = resolveBsiBasePricing(requestedPlafond, core.subProduct, cfg, body);
     let baseRateAktifAnnual = pricing.baseRateAktifAnnual;
     let baseRatePensiunAnnual = pricing.baseRatePensiunAnnual;
@@ -1257,7 +1321,7 @@ export function calculatePreview(body, allParams) {
       : 6;
     const insuranceMonths = body.bsi_insurance_months !== undefined && body.bsi_insurance_months !== null
       ? Number(body.bsi_insurance_months)
-      : (requestedTenor + insuranceBufferMonths);
+      : (requestedTenor > 0 ? requestedTenor + insuranceBufferMonths : 0);
     const discountPercent = Number(body.bsi_discount_pct ?? 0);
     const extraEmPercent = Number(body.bsi_extra_em_pct ?? 0);
 
@@ -1281,7 +1345,9 @@ export function calculatePreview(body, allParams) {
       baseRateAktifAnnual,
       baseRatePensiunAnnual,
       akseptasiAktif: core.maxInstallmentActive,
+      akseptasiAktifExact: core.akseptasiAktifRaw,
       akseptasiPensiun: core.maxInstallmentPension,
+      akseptasiPensiunExact: core.akseptasiPensiunRaw,
       tenorAktif: activeMonths,
       tenorPensiun: pensionMonths,
       requestedTenor,
@@ -1436,7 +1502,8 @@ export function calculatePreview(body, allParams) {
     const priceAtribPensiunPct = roundHalfUp(priceAtribPensiun * 100, 2);
 
     // Jadwal Proyeksi Cair, Start Angsuran, & Selesai Angsuran (Sheet Akseptasi B24:E26)
-    const defaultCairDate = new Date(core.procDate.getTime() + 7 * 86400000);
+    const baseProcMs = core.procDate ? core.procDate.getTime() : Date.now();
+    const defaultCairDate = new Date(baseProcMs + 7 * 86400000);
     const cairDateObj = parseIsoLocalDate(body.bsi_proyeksi_cair) || defaultCairDate;
     const cairDateStr = toIsoDateStr(cairDateObj);
 
@@ -1471,9 +1538,14 @@ export function calculatePreview(body, allParams) {
 
     const netDisbursementRaw = evalPlafond - totalFeesRaw - retentionRaw - pelunasanLama + bukaBlokirLama;
     const netDisbursement = Math.round(netDisbursementRaw);
+    const netDisbursementWithoutUpfrontInsRaw = netDisbursementRaw + insuranceDeductionRaw;
+    const netDisbursementWithoutUpfrontIns = Math.round(netDisbursementWithoutUpfrontInsRaw);
 
-    const ratioActivePct = core.recognizedSalary > 0
-      ? Number((((angsuranAktifRaw + core.existingInstallment) / core.recognizedSalary) * 100).toFixed(2))
+    const ratioActivePct = core.netIncomeActiveBase > 0
+      ? Number(((angsuranAktifRaw / core.netIncomeActiveBase) * 100).toFixed(2))
+      : (angsuranAktifRaw > 0 ? 100 : 0);
+    const dsrActiveGrossPct = core.recognizedSalaryRaw > 0
+      ? Number((((angsuranAktifRaw + core.angsuranBsi) / core.recognizedSalaryRaw) * 100).toFixed(2))
       : 0;
     const ratioPensionPct = core.pensionSalary > 0
       ? Number(((angsuranPensiunRaw / core.pensionSalary) * 100).toFixed(2))
@@ -1487,13 +1559,13 @@ export function calculatePreview(body, allParams) {
     const subProductLabel = core.subProduct === "PP3" ? "Tri Berkah (Prapen 3 Tahun)" : "Dekade Berkah (Prapen 10 Tahun)";
     const statusGajiLabel = core.payrollInfo.label;
 
-    const okBenefitInput = pensionMonths === 0 || core.pensionSalary > 0;
+    const okBenefitInput = okPensionPhase && core.pensionSalary > 0;
     const okSchedule = Boolean(!overpaymentDetected && requestedTenor > 0 && fullSchedule.length === requestedTenor);
     const validations = [
       {
         key: "age",
         label: `Usia Nearest Birthday Simas 45–65 thn (Saat ini: ${core.nearestAge} thn)`,
-        ok: core.nearestAge >= 45 && core.nearestAge <= 65
+        ok: Boolean(core.dobDate && core.procDate) && core.nearestAge >= 45 && core.nearestAge <= 65
       },
       {
         key: "end_age",
@@ -1506,6 +1578,11 @@ export function calculatePreview(body, allParams) {
         ok: okActiveWindow
       },
       {
+        key: "pension_tenor",
+        label: `Fase Pensiun Prapensiun ≥ 1 bln (Tenor ${requestedTenor} bln harus melewati masa aktif ${core.actualMonthsToBup} bln)`,
+        ok: okPensionPhase
+      },
+      {
         key: "plafond",
         label: `Plafond Rp${(minPlafondAbs / 1e6).toFixed(0)} Juta s.d. Maks Kapasitas Rp${maxPlafondAtTenor.toLocaleString("id-ID")}`,
         ok: evalPlafond >= minPlafondAbs && evalPlafond <= maxPlafondAtTenor && evalPlafond <= maxPlafondAbs
@@ -1513,12 +1590,12 @@ export function calculatePreview(body, allParams) {
       {
         key: "dbr_active",
         label: `DBR Masa Aktif (${statusGajiLabel}) ≤ ${core.dbrActiveRate}% (Aktual: ${ratioActivePct}%)`,
-        ok: core.payrollInfo.valid && angsuranAktifRaw <= core.maxInstallmentActive + 1 && ratioActivePct <= core.dbrActiveRate + 0.1
+        ok: core.payrollInfo.valid && core.maxInstallmentActive > 0 && angsuranAktifRaw <= core.akseptasiAktifRaw + 1 && ratioActivePct <= core.dbrActiveRate + 0.1
       },
       {
         key: "dsr_pension",
         label: `DSR Masa Pensiun ≤ ${core.dsrPensionRate}% Manfaat Pensiun (Aktual: ${ratioPensionPct}%)`,
-        ok: pensionMonths === 0 || (okBenefitInput && angsuranPensiunRaw <= core.maxInstallmentPension + 1 && ratioPensionPct <= core.dsrPensionRate + 0.1)
+        ok: okBenefitInput && angsuranPensiunRaw <= core.akseptasiPensiunRaw + 1 && ratioPensionPct <= core.dsrPensionRate + 0.1
       },
       {
         key: "simas",
@@ -1585,8 +1662,11 @@ export function calculatePreview(body, allParams) {
         skema: core.skema,
         is_atribusi: core.isAtribusi,
         bup_age: core.bupAge,
+        bup_attainment_year: core.bupAttainmentYear,
         bup_year: core.targetBupYear,
         bup_date: core.bupDateStr,
+        tmt_pensiun_effective_date: core.bupDateStr,
+        december_bup_year_warning: core.decemberBupYearRolloverWarning,
         actual_months_to_bup: core.actualMonthsToBup,
         recommended_sub_product: core.recommendedSubProduct,
         recommended_sub_product_reason: core.recommendedSubProductReason,
@@ -1647,6 +1727,9 @@ export function calculatePreview(body, allParams) {
         buka_blokir_lama_exact: bukaBlokirLama,
         sisa_pencairan_bersih: netDisbursement,
         sisa_pencairan_bersih_exact: netDisbursementRaw,
+        sisa_pencairan_tanpa_potong_asuransi: netDisbursementWithoutUpfrontIns,
+        sisa_pencairan_tanpa_potong_asuransi_exact: netDisbursementWithoutUpfrontInsRaw,
+        dsr_active_gross_pct: dsrActiveGrossPct,
         taksasi_mmq: taksasiMmq,
         proyeksi_cair: cairDateStr,
         start_angsuran: startAngsuranStr,

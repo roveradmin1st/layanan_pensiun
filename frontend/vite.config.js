@@ -27,12 +27,18 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true,
+    allowedHosts: true,
     proxy: {
       "/api": {
         target: "http://localhost:4000",
         changeOrigin: true
       }
     }
+  },
+  preview: {
+    port: 5173,
+    host: true,
+    allowedHosts: true
   },
   build: {
     sourcemap: false,
