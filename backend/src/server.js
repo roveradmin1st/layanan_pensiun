@@ -61,6 +61,7 @@ const ROLE_LABEL = {
 };
 
 const app = express();
+app.set("trust proxy", 1);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 12 * 1024 * 1024 } });
 
 app.use(cors({ origin: true, credentials: true }));
@@ -2239,7 +2240,7 @@ if (fs.existsSync(FRONTEND_DIST)) {
 }
 
 // A draft pension preview is a local validation tool; do not expose this development server to the LAN.
-const BIND_HOST = !IS_PROD && process.env.BSI_PENSIUN_PREVIEW === "true" ? "127.0.0.1" : undefined;
+const BIND_HOST = process.env.HOST || (!IS_PROD && process.env.BSI_PENSIUN_PREVIEW === "true" ? "127.0.0.1" : undefined);
 app.listen(PORT, BIND_HOST, () => {
   console.log(`[Layanan Pensiunan Enterprise API] Running on http://localhost:${PORT}`);
 });
