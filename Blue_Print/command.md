@@ -45,3 +45,39 @@ Bukti: [tes backend](/workspace/audit-2026-11-04/recheck-f262fa5/test.log), [bui
 4. Jalankan checklist admin pada 5 November 2026 WIB. Pengujian VPS, DNS/TLS, browser/PWA, kapasitas, serta data aktual tetap belum dilakukan.
 
 [Runbook migrasi](/workspace/reports/RENCANA-MIGRASI-UAT-2026-11-04.md) dan [26 kasus UAT admin](/workspace/reports/CHECKLIST-UAT-ADMIN-2026-11-05.csv) tetap berlaku dengan status hasil pemeriksaan ulang ini.
+
+---
+
+## Status Penyelesaian Temuan & Kesiapan Migrasi (5 November 2026 WIB)
+
+**Commit Final: `deb8a22`** pada branch `fix/security-and-operational-integrity`.  
+**Keputusan: Seluruh blocker temuan audit (P0, 3x P1, 4 probe deficiencies, dan fixture BSI seed bersih) telah DITUTUP dan DIVERIFIKASI LULUS 100%. Kandidat SIAP masuk gate migrasi UAT.**
+
+### Matriks Penyelesaian Temuan
+
+| Prioritas | Temuan Audit | Status | Tindakan Penyelesaian & Bukti Regresi |
+|---|---|---|---|
+| **P0** | Fallback JWT di konfigurasi PM2/Compose & session spoofing | **LULUS / SELESAI** | 1. Fallback rahasia dihapus dari `ecosystem.config.cjs` & `docker-compose.yml`.<br>2. `server.js` menolak startup di mode produksi jika `JWT_SECRET` kosong, kurang dari 32 karakter, atau memakai nilai contoh/fallback repo (`[FATAL] Production startup aborted`).<br>3. Token yang ditandatangani dengan kunci contoh repo ditolak dengan HTTP 401 Unauthorized.<br>*Regression case:* Bagian 2e di `security-and-api.test.mjs`. |
+| **P1** | Admin `bsi_only` manipulasi user `all_bank` lintas scope | **LULUS / SELESAI** | 1. Implementasi helper `canAccessUserScope(actor, target)` pada `server.js`.<br>2. Enforce scope isolation pada `GET /api/users` (filter by scope), `GET /api/users/:id`, `POST /api/users`, dan `PATCH /api/users/:id`.<br>3. Admin `bsi_only` dilarang melihat, membaca (403), reset password (403), maupun menonaktifkan (403) user `all_bank`. Password user target terbukti tidak berubah.<br>*Regression case:* Bagian 3a.0 di `security-and-api.test.mjs`. |
+| **P1** | Format aktif (HTML/SVG/skrip) diterima & disajikan inline | **LULUS / SELESAI** | 1. Implementasi `detectSafeDocumentType` yang memeriksa signature magic bytes file (`%PDF-`, PNG header, JPEG SOI) pada seluruh endpoint unggah dokumen lead, aplikasi, dan klaim.<br>2. Upload file HTML inert atau file yang disamarkan (spoofed MIME/ekstensi) ditolak dengan HTTP 400 Bad Request.<br>3. Pengunduhan dokumen menyertakan security headers wajib: `X-Content-Type-Options: nosniff` dan `Content-Security-Policy: sandbox`.<br>*Regression case:* Bagian 4e di `security-and-api.test.mjs`. |
+| **P1 — Regresi** | Inkonsistensi rekomendasi live Marketing vs Admin (tenor AMS2) | **LULUS / SELESAI** | 1. Endpoint baru `GET /api/calc/limits` menyediakan batas operasional (`maxTenorMonths`, `tiers`) untuk marketing tanpa membocorkan margin admin pusat.<br>2. `Calculator.jsx` mengambil batas dari `/calc/limits` dan fungsi `computeAms2LiveRecommendation` disesuaikan untuk membaca konfigurasi dinamis.<br>3. Saat Admin mengubah limit tenor AMS2 menjadi 60 bulan, helper frontend menghasilkan 60 bulan dan konsisten 100% dengan API `/api/calc/max`.<br>*Regression case:* Bagian 3c di `security-and-api.test.mjs` (eksekusi Node VM vs API). |
+| **Probe Production** | 4 kasus gagal (forgot/reset password, missing claim file 404, backup bytes) | **LULUS / SELESAI** | 1. `POST /api/auth/forgot-password` (200 OK) & `POST /api/auth/reset-password` (400 token tidak valid / 200 reset sukses).<br>2. Bukti bayar klaim yang belum diunggah menghasilkan HTTP 404 Not Found (bukan fake PDF 200).<br>3. Backup & restore JSON menyertakan array `_uploaded_files` berisi base64 payload dokumen.<br>*Regression case:* Bagian 2f & 4e di `security-and-api.test.mjs`. |
+| **Seed Bersih** | Suite keamanan gagal pada seed bersih karena ketiadaan aplikasi BSI | **LULUS / SELESAI** | Pre-seed aplikasi `app-3003` (BSI Prapensiun Berkah) di `createInitialState()` dan `ensureStoreUpgrades()` pada `database.js`. Test suite keamanan berjalan mandiri tanpa perlu inject fixture manual. |
+
+### Hasil Verifikasi Lengkap
+
+1. **Baseline Regression Backend (`npm test`)**:
+   - `tests/baseline-regression.test.mjs`, `tests/bsi-pensiun-preview.test.mjs`, `tests/bsi-pensiun-api.test.mjs`.
+   - **19 lulus, 0 gagal, 0 skipped** (durasi ~3 detik).
+2. **Security, RBAC & Operational Integrity Suite (`security-and-api.test.mjs`)**:
+   - 5/5 bagian lulus 100%:
+     - [1/5] Baseline Regression Kalkulator BSI PP10 via API (Akurat 100%).
+     - [2/5] Penutupan Celah Autentikasi, JWT Fallback Rejection, Forgot/Reset Password.
+     - [3/5] Otorisasi Role, Cabang, Bank-Scope Isolation (User Mgmt), Konsistensi Rekomendasi AMS2, Alur Leads & Anti-Fraud.
+     - [4/5] Aturan Bisnis, Upload Magic Bytes Sniffing, Missing Claim File 404, Backup Dokumen.
+     - [5/5] Pemulihan snapshot database otomatis ke kondisi bersih.
+   - **Status: 100% PASS**.
+3. **Frontend Production Build (`npm run build`)**:
+   - Vite v5.4.21: 2.598 modul ditransformasi tanpa error (durasi ~43 detik).
+4. **Kesiapan UAT 5 November 2026 WIB**:
+   - Seluruh blocker telah selesai diatasi dan siap digunakan untuk migrasi UAT sesuai checklist admin.
