@@ -337,6 +337,151 @@ function createInitialState() {
       documents: [],
       created_at: "2026-10-26T08:00:00.000Z",
       updated_at: "2026-10-26T08:00:00.000Z"
+    },
+    {
+      id: "lead-1006",
+      name: "DRS. ASEP SUNANDAR",
+      nopen: "196403151988031002",
+      nip: "196403151988031002",
+      nik: "3273011503640003",
+      birth_date: "1964-03-15",
+      age: 62,
+      phone: "081220112233",
+      address: "Jl. Dago Asri No. 15",
+      province: "Jawa Barat",
+      city: "Kota Bandung",
+      district: "Coblong",
+      branch: "BANDUNG",
+      sk_type: "Pensiun Sendiri",
+      institution: "Dinas Pendidikan Kota Bandung",
+      pay_office: "Bank BJB Cabang Utama",
+      pension_salary: 4750000,
+      status: "baru",
+      follow_up_date: null,
+      source: "Impor Master Taspen",
+      assigned_to: null,
+      assigned_name: null,
+      notes: "Stok pool data prospek unassigned Cabang Bandung.",
+      activities: [],
+      documents: [],
+      created_at: "2026-10-26T08:30:00.000Z",
+      updated_at: "2026-10-26T08:30:00.000Z"
+    },
+    {
+      id: "lead-1007",
+      name: "HJ. ENI ROHAENI",
+      nopen: "196805201990032001",
+      nip: "196805201990032001",
+      nik: "3273086005680005",
+      birth_date: "1968-05-20",
+      age: 58,
+      phone: "081321445566",
+      address: "Jl. Buah Batu No. 88",
+      province: "Jawa Barat",
+      city: "Kota Bandung",
+      district: "Lengkong",
+      branch: "BANDUNG",
+      sk_type: "Prapensiun BUP 60",
+      institution: "Dinas Kesehatan Prov Jabar",
+      pay_office: "Bank BJB Buah Batu",
+      pension_salary: 5200000,
+      status: "baru",
+      follow_up_date: null,
+      source: "Database PNS Aktif",
+      assigned_to: null,
+      assigned_name: null,
+      notes: "Calon debitur prapensiun ASN, siap take over/top up.",
+      activities: [],
+      documents: [],
+      created_at: "2026-10-26T09:00:00.000Z",
+      updated_at: "2026-10-26T09:00:00.000Z"
+    },
+    {
+      id: "lead-1008",
+      name: "IR. DADANG KURNIADI",
+      nopen: "195908121985031004",
+      nip: "195908121985031004",
+      nik: "3273051208590001",
+      birth_date: "1959-08-12",
+      age: 67,
+      phone: "081222998877",
+      address: "Jl. Riau No. 104",
+      province: "Jawa Barat",
+      city: "Kota Bandung",
+      district: "Bandung Wetan",
+      branch: "BANDUNG",
+      sk_type: "Pensiun Sendiri",
+      institution: "Kementerian PUPR",
+      pay_office: "Bank Mandiri Taspen Bandung",
+      pension_salary: 4900000,
+      status: "baru",
+      follow_up_date: null,
+      source: "Data Taspen",
+      assigned_to: null,
+      assigned_name: null,
+      notes: "Pensiun murni, butuh dana renovasi rumah.",
+      activities: [],
+      documents: [],
+      created_at: "2026-10-26T09:30:00.000Z",
+      updated_at: "2026-10-26T09:30:00.000Z"
+    },
+    {
+      id: "lead-1009",
+      name: "NENENG HASANAH, S.PD",
+      nopen: "196611041989022002",
+      nip: "196611041989022002",
+      nik: "3273104411660002",
+      birth_date: "1966-11-04",
+      age: 60,
+      phone: "081399887711",
+      address: "Jl. Cihampelas No. 55",
+      province: "Jawa Barat",
+      city: "Kota Bandung",
+      district: "Coblong",
+      branch: "BANDUNG",
+      sk_type: "Pensiun Sendiri",
+      institution: "SMKN 1 Bandung",
+      pay_office: "Bank BJB Tamansari",
+      pension_salary: 4300000,
+      status: "baru",
+      follow_up_date: null,
+      source: "Impor Master Taspen",
+      assigned_to: null,
+      assigned_name: null,
+      notes: "Baru masuk masa purna bhakti, berminat simulasi BSI / AMS2.",
+      activities: [],
+      documents: [],
+      created_at: "2026-10-26T10:00:00.000Z",
+      updated_at: "2026-10-26T10:00:00.000Z"
+    },
+    {
+      id: "lead-1010",
+      name: "MAYOR (PURN) H. ACHMAD HIDAYAT",
+      nopen: "195101011974011003",
+      nip: "195101011974011003",
+      nik: "3273020101510001",
+      birth_date: "1951-01-01",
+      age: 75,
+      phone: "081223456789",
+      address: "Jl. Gatot Subroto No. 120",
+      province: "Jawa Barat",
+      city: "Kota Bandung",
+      district: "Batununggal",
+      branch: "BANDUNG",
+      sk_type: "Pensiun ASABRI",
+      institution: "TNI AD Purnawirawan",
+      pay_office: "Bank BTPN Pensiun Bandung",
+      pension_salary: 5800000,
+      status: "baru",
+      follow_up_date: null,
+      source: "Database Asabri",
+      assigned_to: null,
+      assigned_name: null,
+      notes: "Pensiunan ASABRI, siap dihubungi untuk program Platinum.",
+      activities: [],
+      documents: [],
+      created_at: "2026-10-26T10:30:00.000Z",
+      updated_at: "2026-10-26T10:30:00.000Z"
     }
   ];
 
@@ -497,6 +642,49 @@ function createInitialState() {
         { id: "h-23", action: "booking_live", note: "Kredit telah cair & aktif dengan No. PK-AMS2-2026-08891", user_name: "RINA KARTIKA SARI", role: "admin_ops", at: "2026-10-23T11:00:00.000Z" }
       ],
       created_at: "2026-10-19T14:15:00.000Z"
+    },
+    {
+      id: "app-3003",
+      app_no: "APP-202610-0003",
+      sim_id: "sim-2003",
+      lead_id: "lead-1003",
+      lead_name: "DRS. BAMBANG HERMAWAN",
+      marketing_id: "u-mkt-1",
+      marketing_name: "ANDI PRATAMA",
+      branch: "BANDUNG",
+      bank_key: "bsi_prapen",
+      bank_name: "Bank Syariah Indonesia (BSI)",
+      debtor_type: "PRAPENSIUN BUP 60",
+      dapem: "TASPEN",
+      plafond: 320000000,
+      tenor: 120,
+      stage: "booking_live",
+      stage_index: 6,
+      stages: APP_STAGES,
+      stage_data: {
+        upload_dokumen: { by_name: "ANDI PRATAMA", date: "2026-10-21" },
+        pengajuan_bank: { by_name: "RINA KARTIKA SARI", date: "2026-10-22" },
+        verifikasi_bank: { by_name: "RINA KARTIKA SARI", date: "2026-10-23" },
+        approval_bank: { by_name: "RINA KARTIKA SARI", date: "2026-10-24" },
+        penjadwalan_akad: { by_name: "RINA KARTIKA SARI", date: "2026-10-24" },
+        akad_nasabah: { by_name: "RINA KARTIKA SARI", date: "2026-10-25" },
+        booking_live: { by_name: "RINA KARTIKA SARI", date: "2026-10-25" }
+      },
+      pending: null,
+      rejected: false,
+      reject_reason: null,
+      booking: {
+        date: "2026-10-25",
+        credit_no: "PK-BSI-2026-00412",
+        confirmed_by: "RINA KARTIKA SARI"
+      },
+      checklist: buildChecklist(true).map((d) => ({ ...d, status: "diterima" })),
+      history: [
+        { id: "h-31", action: "created", note: "Pengajuan dibuat dari SIM-202610-0003", user_name: "ANDI PRATAMA", role: "marketing", at: "2026-10-21T10:00:00.000Z" },
+        { id: "h-32", action: "forward_bank", note: "Dokumen lengkap, diteruskan ke BSI KC Bandung", user_name: "RINA KARTIKA SARI", role: "admin_ops", at: "2026-10-22T09:00:00.000Z" },
+        { id: "h-33", action: "booking_live", note: "Kredit telah cair & aktif dengan No. PK-BSI-2026-00412", user_name: "RINA KARTIKA SARI", role: "admin_ops", at: "2026-10-25T11:00:00.000Z" }
+      ],
+      created_at: "2026-10-21T10:00:00.000Z"
     }
   ];
 
@@ -597,6 +785,7 @@ function createInitialState() {
     applications,
     claims,
     imports,
+    lead_requests: [],
     audit_logs,
     meta: {
       provinces: INDONESIA_PROVINCES,
@@ -658,6 +847,53 @@ function ensureStoreUpgrades(state) {
       phone: "081277008899",
       active: true,
       created_at: "2026-01-17T09:00:00.000Z"
+    });
+    changed = true;
+  }
+
+  if (Array.isArray(state.applications) && !state.applications.some((a) => a.id === "app-3003")) {
+    state.applications.push({
+      id: "app-3003",
+      app_no: "APP-202610-0003",
+      sim_id: "sim-2003",
+      lead_id: "lead-1003",
+      lead_name: "DRS. BAMBANG HERMAWAN",
+      marketing_id: "u-mkt-1",
+      marketing_name: "ANDI PRATAMA",
+      branch: "BANDUNG",
+      bank_key: "bsi_prapen",
+      bank_name: "Bank Syariah Indonesia (BSI)",
+      debtor_type: "PRAPENSIUN BUP 60",
+      dapem: "TASPEN",
+      plafond: 320000000,
+      tenor: 120,
+      stage: "booking_live",
+      stage_index: 6,
+      stages: APP_STAGES,
+      stage_data: {
+        upload_dokumen: { by_name: "ANDI PRATAMA", date: "2026-10-21" },
+        pengajuan_bank: { by_name: "RINA KARTIKA SARI", date: "2026-10-22" },
+        verifikasi_bank: { by_name: "RINA KARTIKA SARI", date: "2026-10-23" },
+        approval_bank: { by_name: "RINA KARTIKA SARI", date: "2026-10-24" },
+        penjadwalan_akad: { by_name: "RINA KARTIKA SARI", date: "2026-10-24" },
+        akad_nasabah: { by_name: "RINA KARTIKA SARI", date: "2026-10-25" },
+        booking_live: { by_name: "RINA KARTIKA SARI", date: "2026-10-25" }
+      },
+      pending: null,
+      rejected: false,
+      reject_reason: null,
+      booking: {
+        date: "2026-10-25",
+        credit_no: "PK-BSI-2026-00412",
+        confirmed_by: "RINA KARTIKA SARI"
+      },
+      checklist: buildChecklist(true).map((d) => ({ ...d, status: "diterima" })),
+      history: [
+        { id: "h-31", action: "created", note: "Pengajuan dibuat dari SIM-202610-0003", user_name: "ANDI PRATAMA", role: "marketing", at: "2026-10-21T10:00:00.000Z" },
+        { id: "h-32", action: "forward_bank", note: "Dokumen lengkap, diteruskan ke BSI KC Bandung", user_name: "RINA KARTIKA SARI", role: "admin_ops", at: "2026-10-22T09:00:00.000Z" },
+        { id: "h-33", action: "booking_live", note: "Kredit telah cair & aktif dengan No. PK-BSI-2026-00412", user_name: "RINA KARTIKA SARI", role: "admin_ops", at: "2026-10-25T11:00:00.000Z" }
+      ],
+      created_at: "2026-10-21T10:00:00.000Z"
     });
     changed = true;
   }
@@ -741,6 +977,162 @@ function ensureStoreUpgrades(state) {
       state.partner_parameters[inactiveKey].active = false;
       changed = true;
     }
+  }
+
+  if (!Array.isArray(state.lead_requests)) {
+    state.lead_requests = [];
+    changed = true;
+  }
+
+  if (Array.isArray(state.leads) && !state.leads.some((l) => l.id === "lead-1006")) {
+    state.leads.push(
+      {
+        id: "lead-1006",
+        name: "DRS. ASEP SUNANDAR",
+        nopen: "196403151988031002",
+        nip: "196403151988031002",
+        nik: "3273011503640003",
+        birth_date: "1964-03-15",
+        age: 62,
+        phone: "081220112233",
+        address: "Jl. Dago Asri No. 15",
+        province: "Jawa Barat",
+        city: "Kota Bandung",
+        district: "Coblong",
+        branch: "BANDUNG",
+        sk_type: "Pensiun Sendiri",
+        institution: "Dinas Pendidikan Kota Bandung",
+        pay_office: "Bank BJB Cabang Utama",
+        pension_salary: 4750000,
+        status: "baru",
+        follow_up_date: null,
+        source: "Impor Master Taspen",
+        assigned_to: null,
+        assigned_name: null,
+        notes: "Stok pool data prospek unassigned Cabang Bandung.",
+        activities: [],
+        documents: [],
+        created_at: "2026-10-26T08:30:00.000Z",
+        updated_at: "2026-10-26T08:30:00.000Z"
+      },
+      {
+        id: "lead-1007",
+        name: "HJ. ENI ROHAENI",
+        nopen: "196805201990032001",
+        nip: "196805201990032001",
+        nik: "3273086005680005",
+        birth_date: "1968-05-20",
+        age: 58,
+        phone: "081321445566",
+        address: "Jl. Buah Batu No. 88",
+        province: "Jawa Barat",
+        city: "Kota Bandung",
+        district: "Lengkong",
+        branch: "BANDUNG",
+        sk_type: "Prapensiun BUP 60",
+        institution: "Dinas Kesehatan Prov Jabar",
+        pay_office: "Bank BJB Buah Batu",
+        pension_salary: 5200000,
+        status: "baru",
+        follow_up_date: null,
+        source: "Database PNS Aktif",
+        assigned_to: null,
+        assigned_name: null,
+        notes: "Calon debitur prapensiun ASN, siap take over/top up.",
+        activities: [],
+        documents: [],
+        created_at: "2026-10-26T09:00:00.000Z",
+        updated_at: "2026-10-26T09:00:00.000Z"
+      },
+      {
+        id: "lead-1008",
+        name: "IR. DADANG KURNIADI",
+        nopen: "195908121985031004",
+        nip: "195908121985031004",
+        nik: "3273051208590001",
+        birth_date: "1959-08-12",
+        age: 67,
+        phone: "081222998877",
+        address: "Jl. Riau No. 104",
+        province: "Jawa Barat",
+        city: "Kota Bandung",
+        district: "Bandung Wetan",
+        branch: "BANDUNG",
+        sk_type: "Pensiun Sendiri",
+        institution: "Kementerian PUPR",
+        pay_office: "Bank Mandiri Taspen Bandung",
+        pension_salary: 4900000,
+        status: "baru",
+        follow_up_date: null,
+        source: "Data Taspen",
+        assigned_to: null,
+        assigned_name: null,
+        notes: "Pensiun murni, butuh dana renovasi rumah.",
+        activities: [],
+        documents: [],
+        created_at: "2026-10-26T09:30:00.000Z",
+        updated_at: "2026-10-26T09:30:00.000Z"
+      },
+      {
+        id: "lead-1009",
+        name: "NENENG HASANAH, S.PD",
+        nopen: "196611041989022002",
+        nip: "196611041989022002",
+        nik: "3273104411660002",
+        birth_date: "1966-11-04",
+        age: 60,
+        phone: "081399887711",
+        address: "Jl. Cihampelas No. 55",
+        province: "Jawa Barat",
+        city: "Kota Bandung",
+        district: "Coblong",
+        branch: "BANDUNG",
+        sk_type: "Pensiun Sendiri",
+        institution: "SMKN 1 Bandung",
+        pay_office: "Bank BJB Tamansari",
+        pension_salary: 4300000,
+        status: "baru",
+        follow_up_date: null,
+        source: "Impor Master Taspen",
+        assigned_to: null,
+        assigned_name: null,
+        notes: "Baru masuk masa purna bhakti, berminat simulasi BSI / AMS2.",
+        activities: [],
+        documents: [],
+        created_at: "2026-10-26T10:00:00.000Z",
+        updated_at: "2026-10-26T10:00:00.000Z"
+      },
+      {
+        id: "lead-1010",
+        name: "MAYOR (PURN) H. ACHMAD HIDAYAT",
+        nopen: "195101011974011003",
+        nip: "195101011974011003",
+        nik: "3273020101510001",
+        birth_date: "1951-01-01",
+        age: 75,
+        phone: "081223456789",
+        address: "Jl. Gatot Subroto No. 120",
+        province: "Jawa Barat",
+        city: "Kota Bandung",
+        district: "Batununggal",
+        branch: "BANDUNG",
+        sk_type: "Pensiun ASABRI",
+        institution: "TNI AD Purnawirawan",
+        pay_office: "Bank BTPN Pensiun Bandung",
+        pension_salary: 5800000,
+        status: "baru",
+        follow_up_date: null,
+        source: "Database Asabri",
+        assigned_to: null,
+        assigned_name: null,
+        notes: "Pensiunan ASABRI, siap dihubungi untuk program Platinum.",
+        activities: [],
+        documents: [],
+        created_at: "2026-10-26T10:30:00.000Z",
+        updated_at: "2026-10-26T10:30:00.000Z"
+      }
+    );
+    changed = true;
   }
 
   return changed;
@@ -851,3 +1243,24 @@ export function getUploadedFile(id) {
 export function deleteUploadedFile(id) {
   return db.prepare("DELETE FROM uploaded_files WHERE id = ?").run(id);
 }
+
+export function getAllUploadedFiles() {
+  const rows = db.prepare("SELECT id, filename, mime_type, data, created_at FROM uploaded_files").all();
+  return rows.map((r) => ({
+    id: r.id,
+    filename: r.filename,
+    mime_type: r.mime_type,
+    created_at: r.created_at,
+    data_base64: Buffer.from(r.data).toString("base64")
+  }));
+}
+
+export function restoreUploadedFileFromBackup(id, filename, mimeType, dataBase64, createdAt) {
+  const buffer = Buffer.from(dataBase64, "base64");
+  db.prepare(`
+    INSERT INTO uploaded_files (id, filename, mime_type, data, created_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET filename = excluded.filename, mime_type = excluded.mime_type, data = excluded.data, created_at = excluded.created_at
+  `).run(id, filename, mimeType, buffer, createdAt || new Date().toISOString());
+}
+

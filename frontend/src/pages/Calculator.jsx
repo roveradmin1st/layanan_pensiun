@@ -764,7 +764,14 @@ function computeAms2LiveRecommendation(d, cfg) {
   let riskRate = 0;
   let riskRatePct = 0;
   if (age !== null && age >= 0) {
-    if (age <= 75) {
+    const matchedTier = (cfg?.tiers || []).find((t) => age >= t.minAge && age <= t.maxAge);
+    if (matchedTier) {
+      cat = matchedTier.name;
+      coopRatePct = Number(matchedTier.coopRateAnnual);
+      coopRate = coopRatePct / 100;
+      riskRatePct = Number(matchedTier.riskReserveRate);
+      riskRate = riskRatePct / 100;
+    } else if (age <= 75) {
       cat = "Pra Platinum";
       coopRatePct = 17;
       coopRate = 0.17;
@@ -1022,6 +1029,10 @@ export default function CalculatorPage() {
     if (user?.role === "super_admin" || user?.role === "admin_ops") {
       api.get("/calc/params").then((r) => {
         if (r.data?.partners) setPartnerParams(r.data.partners);
+      }).catch(() => {});
+    } else {
+      api.get("/calc/limits").then((r) => {
+        if (r.data?.limits) setPartnerParams(r.data.limits);
       }).catch(() => {});
     }
   }, [user]);

@@ -30,22 +30,33 @@ import {
   DOC_TEMPLATE,
   saveUploadedFile,
   getUploadedFile,
-  deleteUploadedFile
+  deleteUploadedFile,
+  getAllUploadedFiles,
+  restoreUploadedFileFromBackup
 } from "./db/database.js";
+import crypto from "node:crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4000);
 const IS_PROD = process.env.NODE_ENV === "production";
 const DEFAULT_DEV_JWT_SECRET = "lp_enterprise_jwt_secret_2026_ams2_bsi";
+const KNOWN_INSECURE_JWT_SECRETS = new Set([
+  "lp_enterprise_jwt_secret_2026_ams2_bsi",
+  "4f8b9e1a3c7d5f2e6a0b8c4d2e9f1a3b5c7e9d0f2a4b6c8d1e3f5a7b9c0d2e4f",
+  "lp_production_jwt_secret_min32chars_key_2026_enterprise",
+  "secret",
+  "changeme",
+  "12345678901234567890123456789012"
+]);
 
 if (
   IS_PROD &&
   (!process.env.JWT_SECRET ||
-    process.env.JWT_SECRET === DEFAULT_DEV_JWT_SECRET ||
-    String(process.env.JWT_SECRET).trim().length < 32)
+    String(process.env.JWT_SECRET).trim().length < 32 ||
+    KNOWN_INSECURE_JWT_SECRETS.has(String(process.env.JWT_SECRET).trim()))
 ) {
   console.error(
-    "[FATAL] Production startup aborted: JWT_SECRET wajib dikonfigurasi secara aman (minimal 32 karakter)."
+    "[FATAL] Production startup aborted: JWT_SECRET wajib dikonfigurasi secara aman (minimal 32 karakter dan tidak boleh menggunakan nilai contoh/fallback repo)."
   );
   process.exit(1);
 }
@@ -172,6 +183,51 @@ function canAccessBank(user, bankKey) {
     return isBsiBankKey(bankKey);
   }
   return true;
+}
+
+export function canAccessUserScope(actor, target) {
+  if (!actor || !target) return false;
+  if (actor.role === "super_admin" || actor.role === "admin_ops") return true;
+  if (isBsiScopedUser(actor) && !isBsiScopedUser(target)) return false;
+  return true;
+}
+
+export function detectSafeDocumentType(buffer, originalFilename = "") {
+  if (!buffer || buffer.length < 4) return null;
+  const headStr = buffer.slice(0, 256).toString("utf8").toLowerCase();
+  if (
+    headStr.includes("<html") ||
+    headStr.includes("<!doctype html") ||
+    headStr.includes("<script") ||
+    headStr.includes("<svg") ||
+    headStr.includes("<?xml") ||
+    headStr.includes("<iframe")
+  ) {
+    return null;
+  }
+  // PDF: %PDF- (0x25 0x50 0x44 0x46 0x2D)
+  if (buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46) {
+    return { mime: "application/pdf", ext: "pdf" };
+  }
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (
+    buffer.length >= 8 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  ) {
+    return { mime: "image/png", ext: "png" };
+  }
+  // JPEG: FF D8 FF
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return { mime: "image/jpeg", ext: "jpg" };
+  }
+  return null;
 }
 
 function canAccessLead(user, lead) {
@@ -329,6 +385,55 @@ app.post("/api/auth/change-password", requireAuth, (req, res) => {
     addAuditLog(req.user, "change_password", "user", "Memperbarui kata sandi akun", req.ip);
   });
   res.json({ ok: true });
+});
+
+const passwordResetTokens = new Map();
+
+app.post("/api/auth/forgot-password", (req, res) => {
+  const { email } = req.body || {};
+  if (!email || !String(email).trim()) {
+    return res.status(400).json({ detail: "Email wajib diisi." });
+  }
+  const store = getStore();
+  const user = store.users.find(
+    (u) => u.email.toLowerCase() === String(email).trim().toLowerCase() && u.active !== false
+  );
+  if (user) {
+    const token = crypto.randomBytes(32).toString("hex");
+    passwordResetTokens.set(token, {
+      email: user.email,
+      expiresAt: Date.now() + 60 * 60 * 1000 // 1 hour
+    });
+    addAuditLog(user, "forgot_password", user.email, "Permintaan reset kata sandi diajukan", req.ip);
+  }
+  res.json({ message: "Jika email terdaftar, tautan reset telah dikirim. Tautan berlaku selama 1 jam." });
+});
+
+app.post("/api/auth/reset-password", (req, res) => {
+  const { token, password } = req.body || {};
+  if (!token || !passwordResetTokens.has(token)) {
+    return res.status(400).json({ detail: "Tautan reset kata sandi tidak valid atau telah kedaluwarsa." });
+  }
+  const record = passwordResetTokens.get(token);
+  if (Date.now() > record.expiresAt) {
+    passwordResetTokens.delete(token);
+    return res.status(400).json({ detail: "Tautan reset kata sandi telah kedaluwarsa." });
+  }
+  if (typeof password !== "string" || password.length < 8) {
+    return res.status(400).json({ detail: "Kata sandi baru minimal 8 karakter." });
+  }
+  const store = getStore();
+  const user = store.users.find((u) => u.email.toLowerCase() === record.email.toLowerCase());
+  if (!user) {
+    passwordResetTokens.delete(token);
+    return res.status(404).json({ detail: "Pengguna tidak ditemukan." });
+  }
+  withTransaction(() => {
+    user.password_hash = hashPassword(password);
+    passwordResetTokens.delete(token);
+    addAuditLog(user, "reset_password", user.email, "Kata sandi berhasil diperbarui melalui token reset", req.ip);
+  });
+  res.json({ message: "Kata sandi berhasil diperbarui." });
 });
 
 // ============================================================================
@@ -560,6 +665,35 @@ app.get("/api/banks", requireAuth, (req, res) => {
       };
     });
   res.json({ banks });
+});
+
+app.get("/api/calc/limits", requireAuth, (req, res) => {
+  const store = getStore();
+  const p = store.partner_parameters || {};
+  const limits = {};
+  for (const [key, partner] of Object.entries(p)) {
+    if (typeof partner === "object" && partner !== null && canAccessBank(req.user, key)) {
+      limits[key] = {
+        name: partner.name || key,
+        maxTenorMonths: partner.maxTenorMonths,
+        maxEndAgeYears: partner.maxEndAgeYears,
+        maxEndAgeMonths: partner.maxEndAgeMonths,
+        maxPlafondAbsolute: partner.maxPlafondAbsolute,
+        maxEntryAgeYears: partner.maxEntryAgeYears,
+        maxInstallmentRatio: partner.maxInstallmentRatio,
+        plafondRoundingStep: partner.plafondRoundingStep,
+        tiers: (partner.tiers || []).map((t) => ({
+          id: t.id,
+          name: t.name,
+          minAge: t.minAge,
+          maxAge: t.maxAge,
+          coopRateAnnual: t.coopRateAnnual,
+          riskReserveRate: t.riskReserveRate
+        }))
+      };
+    }
+  }
+  res.json({ limits });
 });
 
 app.get("/api/calc/params", requireAuth, requireRoles("super_admin", "admin_ops"), (req, res) => {
@@ -1222,6 +1356,330 @@ app.post("/api/leads/assign", requireAuth, requireRoles("super_admin", "admin_op
   res.json({ updated: count });
 });
 
+// ============================================================================
+// LEAD REQUESTS & PROSPECT DISTRIBUTION ENGINE (MARKETING -> ADMIN OPS)
+// Aturan Bisnis & Tata Kelola Data:
+// 1. Otoritas Approval: Opsi A (Khusus Admin Ops & Super Admin / Owner).
+// 2. Batasan Permintaan: Maksimal 1 permohonan berstatus PENDING (anti-spam).
+// 3. Batasan Kuota: Maksimal 5 data per request (requested_count 1..5).
+// 4. Cadence Harian: Permohonan disetujui dibatasi 1 alokasi per hari kalender.
+//    Marketing dapat meminta kembali jika hari sudah berganti (hari esok).
+// 5. Eksekusi Alokasi: Transaksional atomik (withTransaction), anti race condition.
+// ============================================================================
+
+app.get("/api/lead-requests", requireAuth, (req, res) => {
+  const store = getStore();
+  const requests = store.lead_requests || [];
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  if (req.user.role === "marketing") {
+    const myRequests = requests.filter((r) => r.requester_id === req.user.id);
+    const pendingRequest = myRequests.find((r) => r.status === "PENDING") || null;
+    const todayApproved = myRequests.find(
+      (r) => r.status === "APPROVED" && (r.processed_at || r.created_at || "").slice(0, 10) === todayIso
+    );
+
+    // Hitung berapa leads aktif milik marketing yang masih berstatus "baru"
+    const myLeads = (store.leads || []).filter((l) => l.assigned_to === req.user.id);
+    const untouchedCount = myLeads.filter(
+      (l) => l.status === "baru" && (!l.activities || l.activities.length <= 1)
+    ).length;
+
+    return res.json({
+      items: myRequests,
+      can_request_today: !pendingRequest && !todayApproved,
+      pending_request: pendingRequest,
+      today_approved_count: todayApproved ? (todayApproved.allocated_count || todayApproved.requested_count || 0) : 0,
+      untouched_leads_count: untouchedCount,
+      daily_limit: 5,
+      active_limit: 1
+    });
+  }
+
+  // Admin Operasional & Super Admin: melihat seluruh antrean (bisa difilter cabang & status)
+  // Admin Cabang / Sales Manager: melihat antrean cabang penempatannya (read-only monitoring)
+  let list = [...requests];
+  if (req.user.role === "admin_branch" || req.user.role === "sales_manager") {
+    list = list.filter((r) => canAccessBranch(req.user, r.branch));
+  } else if (req.query.branch) {
+    list = list.filter((r) => r.branch === req.query.branch);
+  }
+
+  if (req.query.status) {
+    list = list.filter((r) => r.status === req.query.status);
+  }
+
+  // Sort: PENDING terlebih dahulu, lalu descending created_at
+  list.sort((a, b) => {
+    if (a.status === "PENDING" && b.status !== "PENDING") return -1;
+    if (a.status !== "PENDING" && b.status === "PENDING") return 1;
+    return String(b.created_at).localeCompare(String(a.created_at));
+  });
+
+  const pendingCount = list.filter((r) => r.status === "PENDING").length;
+
+  res.json({
+    items: list,
+    pending_count: pendingCount,
+    total: list.length
+  });
+});
+
+app.post("/api/lead-requests", requireAuth, requireRoles("marketing"), (req, res) => {
+  const store = getStore();
+  const body = req.body || {};
+  const requestedCount =
+    body.requested_count !== undefined && body.requested_count !== null
+      ? Number(body.requested_count)
+      : 5;
+
+  // 1. Validasi batas kuota: Maksimal 5 data prospek
+  if (!Number.isInteger(requestedCount) || requestedCount < 1 || requestedCount > 5) {
+    return res.status(400).json({
+      detail: "Jumlah data prospek yang diminta harus berupa bilangan bulat antara 1 hingga 5 data."
+    });
+  }
+
+  const existingRequests = store.lead_requests || [];
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  // 2. Validasi Anti-Spam: Maksimal 1 permohonan berstatus PENDING
+  const activePending = existingRequests.find(
+    (r) => r.requester_id === req.user.id && r.status === "PENDING"
+  );
+  if (activePending) {
+    return res.status(400).json({
+      detail: `Anda masih memiliki 1 permohonan aktif (${activePending.request_no}) yang sedang menunggu persetujuan Admin Operasional. Permohonan baru dapat diajukan setelah permohonan aktif selesai diproses.`
+    });
+  }
+
+  // 3. Validasi Cadence Harian: Maksimal 1 alokasi per hari ("Bisa minta lagi jika hari sudah berubah")
+  const todayApproved = existingRequests.find(
+    (r) =>
+      r.requester_id === req.user.id &&
+      r.status === "APPROVED" &&
+      (r.processed_at || r.created_at || "").slice(0, 10) === todayIso
+  );
+  if (todayApproved) {
+    return res.status(400).json({
+      detail: "Anda sudah mendapatkan alokasi data prospek untuk hari ini. Sesuai aturan tata kelola, permohonan kuota data berikutnya dapat diajukan kembali besok hari."
+    });
+  }
+
+  // 4. Burn-rate / Anti-Hoarding Check: Jika marketing masih memiliki > 15 leads baru yang belum disentuh
+  const myLeads = (store.leads || []).filter((l) => l.assigned_to === req.user.id);
+  const untouchedCount = myLeads.filter(
+    (l) => l.status === "baru" && (!l.activities || l.activities.length <= 1)
+  ).length;
+  if (untouchedCount > 15) {
+    return res.status(400).json({
+      detail: `Anda masih memiliki ${untouchedCount} data prospek yang belum di-follow up. Silakan tindak lanjuti data yang ada terlebih dahulu sebelum meminta data baru.`
+    });
+  }
+
+  const userBranch = req.user.branch || "BANDUNG";
+  const now = new Date().toISOString();
+  const yearMonth = now.slice(0, 7).replace("-", "");
+  const seq = String((store.lead_requests?.length || 0) + 1).padStart(4, "0");
+  const requestNo = `REQ-${yearMonth}-${seq}`;
+
+  const createdRequest = withTransaction(() => {
+    const item = {
+      id: `req-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      request_no: requestNo,
+      requester_id: req.user.id,
+      requester_name: req.user.name,
+      requester_email: req.user.email,
+      branch: userBranch,
+      requested_count: requestedCount,
+      target_segment: String(body.target_segment || "all").trim(),
+      target_bank: String(body.target_bank || "all").trim(),
+      notes: String(body.notes || "").trim(),
+      status: "PENDING",
+      allocated_lead_ids: [],
+      allocated_count: 0,
+      processed_by_id: null,
+      processed_by_name: null,
+      admin_notes: null,
+      created_at: now,
+      processed_at: null
+    };
+
+    store.lead_requests = store.lead_requests || [];
+    store.lead_requests.unshift(item);
+    addAuditLog(
+      req.user,
+      "create_lead_request",
+      item.request_no,
+      `Marketing ${req.user.name} mengajukan permohonan ${requestedCount} data prospek (${userBranch})`,
+      req.ip
+    );
+    return item;
+  });
+
+  res.status(201).json(createdRequest);
+});
+
+app.post(
+  "/api/lead-requests/:id/approve",
+  requireAuth,
+  requireRoles("super_admin", "admin_ops"),
+  (req, res) => {
+    const store = getStore();
+    const reqItem = (store.lead_requests || []).find((r) => r.id === req.params.id);
+    if (!reqItem) {
+      return res.status(404).json({ detail: "Permohonan data tidak ditemukan." });
+    }
+    if (reqItem.status !== "PENDING") {
+      return res.status(409).json({ detail: `Permohonan ${reqItem.request_no} sudah diproses sebelumnya (Status: ${reqItem.status}).` });
+    }
+
+    const requester = store.users.find((u) => u.id === reqItem.requester_id);
+    if (!requester || requester.active === false) {
+      return res.status(400).json({ detail: "Akun marketing pemohon sudah tidak aktif." });
+    }
+
+    const maxCount = reqItem.requested_count || 5;
+
+    const result = withTransaction(() => {
+      // Re-check idempotency in transaction
+      if (reqItem.status !== "PENDING") {
+        throw new Error("Permohonan sudah berstatus non-pending.");
+      }
+
+      // Query pool leads unassigned yang cocok dengan cabang & segmentasi
+      let candidates = (store.leads || []).filter((l) => {
+        if (l.assigned_to) return false;
+        if (l.branch !== reqItem.branch) return false;
+
+        // Filter segmentasi jika ada
+        if (reqItem.target_segment === "prapen") {
+          const age = Number(l.age || 0);
+          if (age < 50 || age > 59) return false;
+        } else if (reqItem.target_segment === "pensiun") {
+          const age = Number(l.age || 0);
+          if (age < 60) return false;
+        }
+
+        // Filter bank scope jika marketing memiliki bank_scope
+        if (isBsiScopedUser(requester)) {
+          if (Number(l.age || 0) > 70) return false;
+        }
+
+        return true;
+      });
+
+      // Fallback: Jika tidak ada yang cocok dengan segmen spesifik, ambil unassigned di cabang tersebut
+      if (!candidates.length) {
+        candidates = (store.leads || []).filter((l) => !l.assigned_to && l.branch === reqItem.branch);
+      }
+
+      if (!candidates.length) {
+        return {
+          ok: false,
+          error: `Stok data prospek belum ditugaskan (unassigned) di Cabang ${reqItem.branch} saat ini sedang kosong.`
+        };
+      }
+
+      // Ambil hingga maxCount data (FIFO: data terlama yang unassigned)
+      const allocatedLeads = candidates.slice(0, maxCount);
+      const now = new Date().toISOString();
+
+      for (const lead of allocatedLeads) {
+        lead.assigned_to = requester.id;
+        lead.assigned_name = requester.name;
+        lead.updated_at = now;
+        lead.activities = lead.activities || [];
+        lead.activities.unshift({
+          id: `act-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+          type: "system_allocation",
+          notes: `Data dialokasikan ke Marketing ${requester.name} via Permintaan Resmi ${reqItem.request_no}`,
+          created_at: now,
+          created_by: req.user.name
+        });
+      }
+
+      reqItem.status = "APPROVED";
+      reqItem.allocated_lead_ids = allocatedLeads.map((l) => l.id);
+      reqItem.allocated_count = allocatedLeads.length;
+      reqItem.processed_by_id = req.user.id;
+      reqItem.processed_by_name = req.user.name;
+      reqItem.processed_at = now;
+      reqItem.admin_notes =
+        req.body?.admin_notes ||
+        (allocatedLeads.length < maxCount
+          ? `Disetujui sebagian (${allocatedLeads.length}/${maxCount} data tersedia) oleh Admin Operasional`
+          : `Disetujui dan dialokasikan otomatis (${allocatedLeads.length} data) oleh Admin Operasional`);
+
+      addAuditLog(
+        req.user,
+        "approve_lead_request",
+        reqItem.request_no,
+        `Menyetujui permohonan ${reqItem.request_no} dan mengalokasikan ${allocatedLeads.length} leads ke ${requester.name} (${reqItem.branch})`,
+        req.ip
+      );
+
+      return { ok: true, allocatedCount: allocatedLeads.length, request: reqItem };
+    });
+
+    if (!result.ok) {
+      return res.status(400).json({ detail: result.error });
+    }
+
+    res.json({
+      success: true,
+      message: `Berhasil menyetujui permohonan dan mengalokasikan ${result.allocatedCount} data prospek ke ${requester.name}.`,
+      request: result.request,
+      allocated_count: result.allocatedCount
+    });
+  }
+);
+
+app.post(
+  "/api/lead-requests/:id/reject",
+  requireAuth,
+  requireRoles("super_admin", "admin_ops"),
+  (req, res) => {
+    const store = getStore();
+    const reqItem = (store.lead_requests || []).find((r) => r.id === req.params.id);
+    if (!reqItem) {
+      return res.status(404).json({ detail: "Permohonan data tidak ditemukan." });
+    }
+    if (reqItem.status !== "PENDING") {
+      return res.status(409).json({ detail: `Permohonan ${reqItem.request_no} sudah diproses sebelumnya (Status: ${reqItem.status}).` });
+    }
+
+    const reason = String(req.body?.reason || req.body?.admin_notes || "").trim();
+    if (!reason) {
+      return res.status(400).json({ detail: "Alasan penolakan permohonan wajib diisi." });
+    }
+
+    const now = new Date().toISOString();
+    const updated = withTransaction(() => {
+      reqItem.status = "REJECTED";
+      reqItem.admin_notes = reason;
+      reqItem.processed_by_id = req.user.id;
+      reqItem.processed_by_name = req.user.name;
+      reqItem.processed_at = now;
+
+      addAuditLog(
+        req.user,
+        "reject_lead_request",
+        reqItem.request_no,
+        `Menolak permohonan data ${reqItem.request_no} dari ${reqItem.requester_name}. Alasan: ${reason}`,
+        req.ip
+      );
+      return reqItem;
+    });
+
+    res.json({
+      success: true,
+      message: `Permohonan ${updated.request_no} berhasil ditolak.`,
+      request: updated
+    });
+  }
+);
+
 app.get("/api/leads/:id", requireAuth, (req, res) => {
   const store = getStore();
   const lead = store.leads.find((l) => l.id === req.params.id);
@@ -1328,9 +1786,15 @@ app.post("/api/leads/:id/documents", requireAuth, upload.single("file"), (req, r
     return res.status(403).json({ detail: "Anda tidak memiliki akses untuk mengunggah dokumen pada lead ini." });
   }
   if (!req.file) return res.status(400).json({ detail: "File tidak ditemukan" });
+  const detected = detectSafeDocumentType(req.file.buffer, req.file.originalname);
+  if (!detected) {
+    return res.status(400).json({
+      detail: "Format berkas tidak didukung atau mengandung konten aktif. Hanya file PDF, JPG, atau PNG asli yang diperbolehkan."
+    });
+  }
   const docMeta = withTransaction(() => {
     const docId = `ldoc-${Date.now()}`;
-    saveUploadedFile(docId, req.file.originalname, req.file.mimetype || "application/pdf", req.file.buffer);
+    saveUploadedFile(docId, req.file.originalname, detected.mime, req.file.buffer);
     const createdDoc = {
       id: docId,
       category: String(req.query.category || "KTP"),
@@ -1356,8 +1820,10 @@ app.get("/api/documents/:id/download", requireAuth, (req, res) => {
   }
   const file = getUploadedFile(req.params.id);
   if (!file) return res.status(404).json({ detail: "Dokumen tidak ditemukan" });
-  res.setHeader("Content-Type", file.mime_type);
+  res.setHeader("Content-Type", file.mime_type || "application/pdf");
   res.setHeader("Content-Disposition", `inline; filename="${file.filename}"`);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
   res.send(Buffer.from(file.data));
 });
 
@@ -1553,11 +2019,17 @@ app.post("/api/applications/:id/documents/:key", requireAuth, upload.single("fil
   }
   const doc = appItem.checklist.find((d) => d.key === req.params.key);
   if (!doc) return res.status(404).json({ detail: "Item dokumen tidak ditemukan" });
-  if (!req.file) return res.status(400).json({ detail: "Pilih file PDF" });
+  if (!req.file) return res.status(400).json({ detail: "Pilih file PDF, JPG, atau PNG" });
+  const detected = detectSafeDocumentType(req.file.buffer, req.file.originalname);
+  if (!detected) {
+    return res.status(400).json({
+      detail: "Format berkas tidak didukung atau mengandung konten aktif. Hanya file PDF, JPG, atau PNG asli yang diperbolehkan."
+    });
+  }
 
   withTransaction(() => {
     const fileId = `appdoc-${appItem.id}-${doc.key}`;
-    saveUploadedFile(fileId, req.file.originalname, "application/pdf", req.file.buffer);
+    saveUploadedFile(fileId, req.file.originalname, detected.mime, req.file.buffer);
     doc.status = "diunggah";
     doc.filename = req.file.originalname;
     doc.uploaded_at = new Date().toISOString();
@@ -1586,8 +2058,10 @@ app.get("/api/applications/:id/documents/:key", requireAuth, (req, res) => {
   const fileId = `appdoc-${appItem.id}-${req.params.key}`;
   const stored = getUploadedFile(fileId);
   if (stored) {
-    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Type", stored.mime_type || "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="${stored.filename}"`);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
     return res.send(Buffer.from(stored.data));
   }
   // Fallback generated PDF for pre-seeded demo documents
@@ -1595,6 +2069,8 @@ app.get("/api/applications/:id/documents/:key", requireAuth, (req, res) => {
   const pdfBuf = generateSimulationPdfBuffer(sim);
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `inline; filename="${req.params.key}.pdf"`);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
   res.send(pdfBuf);
 });
 
@@ -1821,12 +2297,21 @@ app.post("/api/claims", requireAuth, upload.single("file"), (req, res) => {
     claimAmount = Math.round(parsedAmt);
   }
 
+  let uploadedMime = "application/pdf";
+  if (req.file) {
+    const detected = detectSafeDocumentType(req.file.buffer, req.file.originalname);
+    if (!detected) {
+      return res.status(400).json({ detail: "Format berkas bukti tidak didukung atau mengandung konten aktif. Hanya PDF, JPG, atau PNG asli yang diperbolehkan." });
+    }
+    uploadedMime = detected.mime;
+  }
+
   const claim = withTransaction(() => {
     const seq = String(store.claims.length + 1).padStart(4, "0");
     const ym = new Date().toISOString().slice(0, 7).replace("-", "");
     const claimId = `clm-${Date.now()}`;
     if (req.file) {
-      saveUploadedFile(`${claimId}-booking`, req.file.originalname, req.file.mimetype || "application/pdf", req.file.buffer);
+      saveUploadedFile(`${claimId}-booking`, req.file.originalname, uploadedMime, req.file.buffer);
     }
 
     const createdClaim = {
@@ -1989,9 +2474,18 @@ app.post("/api/claims/:id/pay", requireAuth, requireRoles("super_admin", "admin_
     }
   }
 
+  let payFileMime = "application/pdf";
+  if (req.file) {
+    const detected = detectSafeDocumentType(req.file.buffer, req.file.originalname);
+    if (!detected) {
+      return res.status(400).json({ detail: "Format bukti transfer tidak didukung atau mengandung konten aktif. Hanya PDF, JPG, atau PNG asli yang diperbolehkan." });
+    }
+    payFileMime = detected.mime;
+  }
+
   withTransaction(() => {
     if (req.file) {
-      saveUploadedFile(`${claim.id}-payment`, req.file.originalname, req.file.mimetype || "application/pdf", req.file.buffer);
+      saveUploadedFile(`${claim.id}-payment`, req.file.originalname, payFileMime, req.file.buffer);
       claim.payment_proof = req.file.originalname;
     }
     if (parsedAmount !== null) claim.amount = Math.round(parsedAmount);
@@ -2021,8 +2515,12 @@ app.post("/api/claims/:id/proof", requireAuth, upload.single("file"), (req, res)
   if (!req.file) {
     return res.status(400).json({ detail: "File bukti wajib diunggah." });
   }
+  const detected = detectSafeDocumentType(req.file.buffer, req.file.originalname);
+  if (!detected) {
+    return res.status(400).json({ detail: "Format berkas bukti tidak didukung atau mengandung konten aktif. Hanya PDF, JPG, atau PNG asli yang diperbolehkan." });
+  }
   withTransaction(() => {
-    saveUploadedFile(`${claim.id}-booking`, req.file.originalname, req.file.mimetype || "application/pdf", req.file.buffer);
+    saveUploadedFile(`${claim.id}-booking`, req.file.originalname, detected.mime, req.file.buffer);
     claim.booking_proof = req.file.originalname;
   });
   res.json(claim);
@@ -2040,12 +2538,11 @@ app.get("/api/claims/:id/file/:type", requireAuth, (req, res) => {
   if (stored) {
     res.setHeader("Content-Type", stored.mime_type || "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="${stored.filename}"`);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
     return res.send(Buffer.from(stored.data));
   }
-  const pdfBuf = generateSimulationPdfBuffer(store.simulations[0]);
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `inline; filename="bukti_${fileType}.pdf"`);
-  res.send(pdfBuf);
+  return res.status(404).json({ detail: `Berkas bukti ${fileType === "payment" ? "pembayaran" : "booking"} belum diunggah.` });
 });
 
 // ============================================================================
@@ -2057,11 +2554,27 @@ app.get("/api/users", requireAuth, requireRoles("super_admin", "admin_ops", "adm
   if (!isGlobalBranchScope(req.user)) {
     users = users.filter((u) => canAccessBranch(req.user, u.branch));
   }
+  if (isBsiScopedUser(req.user)) {
+    users = users.filter((u) => isBsiScopedUser(u));
+  }
   const list = users.map((u) => ({
     ...sanitizeUser(u),
     lead_count: store.leads.filter((l) => l.assigned_to === u.id).length
   }));
   res.json(list);
+});
+
+app.get("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops", "admin_branch", "sales_manager"), (req, res) => {
+  const store = getStore();
+  const target = store.users.find((u) => u.id === req.params.id);
+  if (!target) return res.status(404).json({ detail: "Pengguna tidak ditemukan" });
+  if (!canAccessBranch(req.user, target.branch)) {
+    return res.status(403).json({ detail: "Anda tidak memiliki akses ke pengguna cabang lain." });
+  }
+  if (!canAccessUserScope(req.user, target)) {
+    return res.status(403).json({ detail: "Admin BSI tidak dapat mengakses data pengguna di luar cakupan BSI." });
+  }
+  res.json(sanitizeUser(target));
 });
 
 app.post("/api/users", requireAuth, requireRoles("super_admin", "admin_ops", "admin_branch", "sales_manager"), (req, res) => {
@@ -2076,6 +2589,9 @@ app.post("/api/users", requireAuth, requireRoles("super_admin", "admin_ops", "ad
   }
   if ((req.user.role === "admin_branch" || req.user.role === "sales_manager") && targetRole !== "marketing") {
     return res.status(403).json({ detail: `${ROLE_LABEL[req.user.role]} hanya dapat membuat akun Marketing.` });
+  }
+  if (isBsiScopedUser(req.user) && body.bank_scope && body.bank_scope !== "bsi_only") {
+    return res.status(403).json({ detail: "Admin BSI hanya dapat membuat pengguna dengan cakupan khusus BSI." });
   }
   if (!body.email || !body.name) {
     return res.status(400).json({ detail: "Nama dan email wajib diisi." });
@@ -2124,6 +2640,9 @@ app.patch("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops"
   if (!target) return res.status(404).json({ detail: "Pengguna tidak ditemukan" });
   if (!canAccessBranch(req.user, target.branch)) {
     return res.status(403).json({ detail: "Anda tidak memiliki akses untuk mengubah pengguna cabang lain." });
+  }
+  if (!canAccessUserScope(req.user, target)) {
+    return res.status(403).json({ detail: "Admin BSI hanya dapat mengelola pengguna dengan cakupan BSI." });
   }
   if (req.user.role === "admin_ops" && !["admin_branch", "sales_manager", "marketing"].includes(target.role)) {
     return res.status(403).json({ detail: "Admin Operasional hanya dapat mengubah akun Admin Cabang/Mitra, Sales Manager, atau Marketing." });
@@ -2186,10 +2705,15 @@ app.get("/api/audit-logs", requireAuth, requireRoles("super_admin", "admin_ops")
 
 app.get("/api/backup", requireAuth, requireRoles("super_admin"), (req, res) => {
   const store = getStore();
-  addAuditLog(req.user, "download_backup", "database", "Mengunduh salinan backup JSON database", req.ip);
+  const files = getAllUploadedFiles();
+  const backupPayload = {
+    ...store,
+    _uploaded_files: files
+  };
+  addAuditLog(req.user, "download_backup", "database", "Mengunduh salinan backup JSON database lengkap dengan berkas dokumen", req.ip);
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Content-Disposition", 'attachment; filename="layanan_pensiunan_backup.json"');
-  res.send(JSON.stringify(store, null, 2));
+  res.send(JSON.stringify(backupPayload, null, 2));
 });
 
 app.post("/api/backup/restore", requireAuth, requireRoles("super_admin"), upload.single("file"), (req, res) => {
@@ -2202,7 +2726,7 @@ app.post("/api/backup/restore", requireAuth, requireRoles("super_admin"), upload
   }
   const store = getStore();
   const restored = withTransaction(() => {
-    const counts = { leads: 0, simulations: 0, applications: 0 };
+    const counts = { leads: 0, simulations: 0, applications: 0, claims: 0, users: 0, files: 0 };
     if (Array.isArray(incoming.leads)) {
       store.leads = incoming.leads;
       counts.leads = incoming.leads.length;
@@ -2223,7 +2747,27 @@ app.post("/api/backup/restore", requireAuth, requireRoles("super_admin"), upload
       store.users = incoming.users;
       counts.users = incoming.users.length;
     }
-    addAuditLog(req.user, "restore_backup", "database", `Memulihkan database (${counts.leads} leads)`, req.ip);
+    if (Array.isArray(incoming.lead_requests)) {
+      store.lead_requests = incoming.lead_requests;
+      counts.lead_requests = incoming.lead_requests.length;
+    } else {
+      store.lead_requests = [];
+    }
+    if (Array.isArray(incoming.parameter_proposals)) {
+      store.parameter_proposals = incoming.parameter_proposals;
+    }
+    if (incoming.partner_parameters && typeof incoming.partner_parameters === "object") {
+      store.partner_parameters = incoming.partner_parameters;
+    }
+    if (Array.isArray(incoming._uploaded_files)) {
+      for (const f of incoming._uploaded_files) {
+        if (f.id && f.filename && f.data_base64) {
+          restoreUploadedFileFromBackup(f.id, f.filename, f.mime_type, f.data_base64, f.created_at);
+          counts.files++;
+        }
+      }
+    }
+    addAuditLog(req.user, "restore_backup", "database", `Memulihkan database (${counts.leads} leads, ${counts.files} files)`, req.ip);
     return counts;
   });
   res.json({ restored });

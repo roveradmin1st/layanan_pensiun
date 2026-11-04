@@ -11,7 +11,7 @@ services:
       NODE_ENV: production
       PORT: 4000
       HOST: 0.0.0.0
-      JWT_SECRET: ${JWT_SECRET:-lp_production_jwt_secret_min32chars_key_2026_enterprise}
+      JWT_SECRET: ${JWT_SECRET}
     volumes:
       - ./backend/data:/app/data
     ports:

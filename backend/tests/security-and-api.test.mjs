@@ -51,6 +51,20 @@ const marketingToken = await login("marketing@layananpensiunan.id");
 const initialBackupRes = await api("GET", "/api/backup", { token: superToken });
 assert.equal(initialBackupRes.status, 200, "Super Admin harus dapat mengunduh backup");
 const initialStoreSnapshot = initialBackupRes.data;
+initialStoreSnapshot.lead_requests = [];
+
+// Reset lead_requests at startup to ensure 100% test idempotency
+const initCleanForm = new FormData();
+initCleanForm.append(
+  "file",
+  new Blob([JSON.stringify(initialStoreSnapshot)], { type: "application/json" }),
+  "restore.json"
+);
+await api("POST", "/api/backup/restore", {
+  token: superToken,
+  body: initCleanForm,
+  isForm: true
+});
 
 try {
   // --------------------------------------------------------------------------
@@ -331,6 +345,66 @@ try {
   assert.equal(mktDashboard.status, 200);
   assert.equal(mktDashboard.data.financials.est_gross_revenue, undefined, "Omzet kotor 4% perusahaan tidak boleh bocor ke marketing");
   assert.equal(mktDashboard.data.financials.net_company_profit, undefined, "Net profit perusahaan tidak boleh bocor ke marketing");
+
+  // 3d. Fitur Permintaan Data Prospek (Marketing -> Admin Operasional)
+  // - Validasi Batas Kuota: Maksimal 5 data
+  const reqTooMany = await api("POST", "/api/lead-requests", {
+    token: marketingToken,
+    body: { requested_count: 10, notes: "Minta 10 data" }
+  });
+  assert.equal(reqTooMany.status, 400, "Permintaan lebih dari 5 data wajib DITOLAK (400)");
+
+  const reqZero = await api("POST", "/api/lead-requests", {
+    token: marketingToken,
+    body: { requested_count: 0 }
+  });
+  assert.equal(reqZero.status, 400, "Permintaan 0 data wajib DITOLAK (400)");
+
+  // - Submit Permintaan Sah (5 data)
+  const validLeadReq = await api("POST", "/api/lead-requests", {
+    token: marketingToken,
+    body: { requested_count: 5, target_segment: "all", notes: "Persiapan kanvasing pensiunan Taspen" }
+  });
+  assert.equal(validLeadReq.status, 201, "Marketing harus berhasil mengajukan 5 data prospek");
+  assert.equal(validLeadReq.data.status, "PENDING");
+  assert.equal(validLeadReq.data.requested_count, 5);
+  const createdReqId = validLeadReq.data.id;
+
+  // - Anti-Spam Guard: Ditolak jika masih ada permohonan PENDING
+  const spamReqAttempt = await api("POST", "/api/lead-requests", {
+    token: marketingToken,
+    body: { requested_count: 3, notes: "Permintaan kedua berturut-turut" }
+  });
+  assert.equal(spamReqAttempt.status, 400, "Permohonan kedua saat status masih PENDING wajib DITOLAK (400)");
+
+  // - Opsi A: Admin Cabang & Sales Manager DILARANG (403) menyetujui permohonan data
+  const branchApproveAttempt = await api("POST", `/api/lead-requests/${createdReqId}/approve`, {
+    token: adminBranchToken
+  });
+  assert.equal(branchApproveAttempt.status, 403, "Admin Cabang wajib DITOLAK (403) menyetujui data (Opsi A)");
+
+  const mgrApproveAttempt = await api("POST", `/api/lead-requests/${createdReqId}/approve`, {
+    token: managerToken
+  });
+  assert.equal(mgrApproveAttempt.status, 403, "Sales Manager wajib DITOLAK (403) menyetujui data (Opsi A)");
+
+  // - Admin Operasional menyetujui dan mengalokasikan data (Auto FIFO)
+  const opsApproveRes = await api("POST", `/api/lead-requests/${createdReqId}/approve`, {
+    token: adminOpsToken,
+    body: { admin_notes: "Disetujui 5 data untuk kanvasing" }
+  });
+  assert.equal(opsApproveRes.status, 200, "Admin Operasional harus berhasil menyetujui permohonan data");
+  assert.equal(opsApproveRes.data.request.status, "APPROVED");
+  assert.ok(opsApproveRes.data.allocated_count > 0, "Minimal harus ada data yang dialokasikan");
+  assert.ok(opsApproveRes.data.allocated_count <= 5, "Jumlah alokasi tidak boleh melebihi 5 data");
+
+  // - Cadence Harian: Jika sudah disetujui pada hari yang sama, permintaan baru ditolak sampai hari berganti
+  const sameDayReqAttempt = await api("POST", "/api/lead-requests", {
+    token: marketingToken,
+    body: { requested_count: 5, notes: "Minta lagi di hari yang sama" }
+  });
+  assert.equal(sameDayReqAttempt.status, 400, "Permintaan kedua pada hari yang sama wajib DITOLAK (400)");
+  assert.match(sameDayReqAttempt.data.detail, /besok hari/i);
 
   console.log("  ✓ PASS: Otorisasi Role, Cabang, Bank-Scope (Aturan Owner) & anti-mass-assignment terverifikasi.");
 
