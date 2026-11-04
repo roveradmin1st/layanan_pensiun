@@ -36,6 +36,7 @@ frontend/dist/
 frontend/build/
 
 # Operating System and Editor files
+.git_old/
 .DS_Store
 Thumbs.db
 desktop.ini

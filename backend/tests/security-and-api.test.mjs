@@ -302,6 +302,36 @@ try {
   });
   assert.equal(massAssignAttempt.status, 403, "Percobaan ubah assigned_to/branch oleh marketing harus ditolak (403)");
 
+  // 3c. Proteksi Parameter Mitra Bank & Pengaturan Sistem (Anti-Leak ke Marketing / Cabang)
+  const superCalcParams = await api("GET", "/api/calc/params", { token: superToken });
+  assert.equal(superCalcParams.status, 200, "Super Admin (Owner) harus dapat mengakses parameter kalkulator");
+  assert.ok(superCalcParams.data.partners, "Super Admin harus menerima struktur partners");
+
+  const adminOpsCalcParams = await api("GET", "/api/calc/params", { token: adminOpsToken });
+  assert.equal(adminOpsCalcParams.status, 200, "Admin Operasional harus dapat mengakses parameter kalkulator");
+
+  const mktCalcParams = await api("GET", "/api/calc/params", { token: marketingToken });
+  assert.equal(mktCalcParams.status, 403, "Marketing wajib DITOLAK (403) dari endpoint parameter mitra bank (/calc/params)");
+
+  const mgrCalcParams = await api("GET", "/api/calc/params", { token: managerToken });
+  assert.equal(mgrCalcParams.status, 403, "Sales Manager wajib DITOLAK (403) dari endpoint parameter mitra bank (/calc/params)");
+
+  const branchCalcParams = await api("GET", "/api/calc/params", { token: adminBranchToken });
+  assert.equal(branchCalcParams.status, 403, "Admin Cabang wajib DITOLAK (403) dari endpoint parameter mitra bank (/calc/params)");
+
+  // Marketing juga ditolak saat mencoba update parameter
+  const mktPutParams = await api("PUT", "/api/calc/params/ams2", {
+    token: marketingToken,
+    body: { updates: { bankRateAnnual: 10 } }
+  });
+  assert.equal(mktPutParams.status, 403, "Marketing wajib ditolak (403) mengubah parameter mitra");
+
+  // Dashboard Marketing tidak boleh membocorkan estimasi omzet kotor perusahaan atau profit bersih
+  const mktDashboard = await api("GET", "/api/dashboard", { token: marketingToken });
+  assert.equal(mktDashboard.status, 200);
+  assert.equal(mktDashboard.data.financials.est_gross_revenue, undefined, "Omzet kotor 4% perusahaan tidak boleh bocor ke marketing");
+  assert.equal(mktDashboard.data.financials.net_company_profit, undefined, "Net profit perusahaan tidak boleh bocor ke marketing");
+
   console.log("  ✓ PASS: Otorisasi Role, Cabang, Bank-Scope (Aturan Owner) & anti-mass-assignment terverifikasi.");
 
   // --------------------------------------------------------------------------

@@ -410,9 +410,7 @@ app.get("/api/dashboard", requireAuth, (req, res) => {
         remaining_target,
         pipeline_target_coverage_pct,
         total_booking_volume,
-        est_gross_revenue,
         total_paid_incentives: myPaidIncentives,
-        net_company_profit,
         pipeline_value,
         booking_count: bookingApps.length,
         pending_claims_count: pending_claims.length
@@ -564,7 +562,7 @@ app.get("/api/banks", requireAuth, (req, res) => {
   res.json({ banks });
 });
 
-app.get("/api/calc/params", requireAuth, (req, res) => {
+app.get("/api/calc/params", requireAuth, requireRoles("super_admin", "admin_ops"), (req, res) => {
   const store = getStore();
   const ams2 = store.partner_parameters.ams2;
   res.json({

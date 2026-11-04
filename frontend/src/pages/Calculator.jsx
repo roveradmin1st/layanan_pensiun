@@ -1019,10 +1019,12 @@ export default function CalculatorPage() {
       setBanks(r.data.banks || []);
       if (r.data.banks?.length && !bankKey) setBankKey(r.data.banks[0].key);
     });
-    api.get("/calc/params").then((r) => {
-      if (r.data?.partners) setPartnerParams(r.data.partners);
-    }).catch(() => {});
-  }, []);
+    if (user?.role === "super_admin" || user?.role === "admin_ops") {
+      api.get("/calc/params").then((r) => {
+        if (r.data?.partners) setPartnerParams(r.data.partners);
+      }).catch(() => {});
+    }
+  }, [user]);
 
   useEffect(() => {
     if (!leadId) return;

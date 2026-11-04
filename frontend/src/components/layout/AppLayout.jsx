@@ -28,7 +28,7 @@ const MOBILE_BOTTOM_NAV = [
   { to: "/leads", label: "Leads", icon: Users },
   { to: "/kalkulator", label: "Kalkulator", icon: Calculator },
   { to: "/progress", label: "Progress", icon: ListChecks },
-  { to: "/pengaturan", label: "Parameter", icon: Settings },
+  { to: "/pengaturan", label: "Pengaturan", icon: Settings },
 ];
 
 function NavItems({ user, onNavigate }) {

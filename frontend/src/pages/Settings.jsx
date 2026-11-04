@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { Download, Upload, ShieldCheck, Save, RotateCcw, CheckCircle2, XCircle, Sliders, LogOut } from "lucide-react";
+import { Download, Upload, ShieldCheck, Save, RotateCcw, CheckCircle2, XCircle, Sliders, LogOut, User, Smartphone } from "lucide-react";
 import { api, errMsg, downloadFile } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { rp, ROLE_LABEL } from "../lib/format";
@@ -124,10 +124,8 @@ function DynamicPartnerParams({ user }) {
         <p className="mb-4 text-xs text-slate-500">
           Pilih mitra bank di bawah ini untuk melihat atau menyesuaikan suku bunga, batas usia, tenor, plafon maksimal, DSR/DBR, serta komponen biaya.
           {user.role === "super_admin"
-            ? " Sebagai Super Admin, perubahan Anda langsung aktif di kalkulator."
-            : user.role === "admin_ops"
-            ? " Sebagai Admin Operasional, perubahan Anda akan dikirim sebagai usulan (Dual Control) ke Super Admin."
-            : " Sebagai Marketing, Anda memiliki akses baca (View Only) pada parameter aktif."}
+            ? " Sebagai Super Admin (Owner), perubahan Anda langsung aktif pada mesin kalkulator seluruh cabang."
+            : " Sebagai Admin Operasional, setiap perubahan akan dikirim sebagai usulan (Dual Control) ke Super Admin untuk disetujui."}
         </p>
 
         <div className="mb-6 flex gap-2.5 border-b border-slate-100 pb-4 lp-scroll-x -mx-4 px-4 sm:mx-0 sm:px-0">
@@ -374,6 +372,101 @@ function Backup() {
   );
 }
 
+function UserProfileCard({ user }) {
+  return (
+    <section className="lp-card space-y-4 p-6" data-testid="user-profile-card">
+      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+        <div className="flex items-center gap-2">
+          <User className="h-5 w-5 text-[#351080]" />
+          <h2 className="font-display font-bold text-slate-900">Profil &amp; Informasi Pengguna</h2>
+        </div>
+        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
+          <CheckCircle2 className="h-3.5 w-3.5" /> Akun Terverifikasi
+        </span>
+      </div>
+
+      <div className="flex items-center gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-[#351080] text-xl font-bold text-white shadow-sm">
+          {user.name?.[0]?.toUpperCase()}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-base font-bold text-slate-900">{user.name}</p>
+          <p className="truncate text-xs text-slate-500">{user.email}</p>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            <span className="rounded-md bg-[#351080]/10 px-2 py-0.5 text-xs font-bold text-[#351080]">
+              {ROLE_LABEL[user.role] || user.role}
+            </span>
+            <span className="rounded-md bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700">
+              Cabang: {user.branch || "PUSAT"}
+            </span>
+            {user.role === "admin_branch" && (
+              <span
+                className={`rounded-md px-2 py-0.5 text-xs font-semibold ${
+                  user.bank_scope === "bsi_only" ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-700"
+                }`}
+              >
+                {user.bank_scope === "bsi_only" ? "Khusus BSI" : "Semua Mitra"}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-3 pt-1 text-xs sm:grid-cols-2">
+        <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
+          <span className="font-medium text-slate-400">ID Pengguna</span>
+          <p className="mt-0.5 font-mono font-bold text-slate-800">{user.id}</p>
+        </div>
+        <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
+          <span className="font-medium text-slate-400">Penempatan Wilayah</span>
+          <p className="mt-0.5 font-semibold text-slate-800">{user.branch || "Kantor Pusat Operasional"}</p>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-blue-100 bg-blue-50/70 p-3.5 text-xs text-blue-900 flex items-start gap-2.5">
+        <ShieldCheck className="h-4 w-4 shrink-0 text-blue-600 mt-0.5" />
+        <p className="leading-relaxed">
+          Hak akses akun dibatasi sesuai standar tata kelola perbankan (RBAC). Untuk perubahan nama, email, atau mutasi cabang, silakan ajukan permohonan ke Admin Operasional / Super Admin.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function AppSystemInfoCard() {
+  return (
+    <section className="lp-card space-y-4 p-6" data-testid="app-info-card">
+      <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+        <Smartphone className="h-5 w-5 text-[#078D67]" />
+        <h2 className="font-display font-bold text-slate-900">Informasi SuperApps PWA</h2>
+      </div>
+
+      <div className="space-y-3 text-xs">
+        <div className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/80 p-3">
+          <span className="font-medium text-slate-500">Versi SuperApps Enterprise</span>
+          <span className="font-mono font-bold text-[#351080]">v2.6.2 (Production Ready)</span>
+        </div>
+        <div className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/80 p-3">
+          <span className="font-medium text-slate-500">Koneksi Layanan</span>
+          <span className="inline-flex items-center gap-1 font-semibold text-emerald-700">
+            <span className="h-2 w-2 rounded-full bg-emerald-500"></span> Online (Terhubung)
+          </span>
+        </div>
+        <div className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/80 p-3">
+          <span className="font-medium text-slate-500">Keamanan Cache PWA</span>
+          <span className="font-semibold text-slate-700">Shell Terenkripsi &amp; Terisolasi</span>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 text-xs text-slate-600 space-y-1">
+        <p className="font-bold text-slate-800">Pusat Dukungan Operasional &amp; Bantuan:</p>
+        <p>Email: <span className="font-mono text-slate-700">operasional@layananpensiunan.id</span></p>
+        <p>Hotline Helpdesk Cabang: Hari Kerja 08.00 – 17.00 WIB</p>
+      </div>
+    </section>
+  );
+}
+
 function AccountLogout({ user }) {
   const { logout } = useAuth();
   const nav = useNavigate();
@@ -410,17 +503,40 @@ function AccountLogout({ user }) {
 
 export default function SettingsPage() {
   const { user } = useAuth();
+  const isCentral = user?.role === "super_admin" || user?.role === "admin_ops";
+
   return (
     <div>
-      <PageHeader eyebrow="Pengaturan & Parameter Mitra" title="Pengaturan Enterprise" desc="Kelola parameter aturan mitra bank secara dinamis, keamanan akun, dan pencadangan database." />
-      <div className="grid gap-6 xl:grid-cols-[1.55fr_1fr]">
-        <DynamicPartnerParams user={user} />
-        <div className="space-y-6">
-          <AccountLogout user={user} />
-          <ChangePassword />
-          {user.role === "super_admin" && <Backup />}
+      <PageHeader
+        eyebrow={isCentral ? "Pengaturan Enterprise & Parameter Sistem" : "Pengaturan Akun & Profil"}
+        title={isCentral ? "Pengaturan Sistem & Parameter Mitra" : "Pengaturan Akun"}
+        desc={
+          isCentral
+            ? "Kelola parameter aturan mitra bank secara dinamis, usulan dual control, keamanan akun, dan pencadangan database."
+            : "Kelola profil pribadi, keamanan kata sandi, dan preferensi aplikasi operasional Anda."
+        }
+      />
+      {isCentral ? (
+        <div className="grid gap-6 xl:grid-cols-[1.55fr_1fr]">
+          <DynamicPartnerParams user={user} />
+          <div className="space-y-6">
+            <AccountLogout user={user} />
+            <ChangePassword />
+            {user.role === "super_admin" && <Backup />}
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="grid gap-6 lg:grid-cols-2">
+          <div className="space-y-6">
+            <UserProfileCard user={user} />
+            <AccountLogout user={user} />
+          </div>
+          <div className="space-y-6">
+            <ChangePassword />
+            <AppSystemInfoCard />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
