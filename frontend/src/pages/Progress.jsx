@@ -390,7 +390,29 @@ export default function Progress() {
       <PageHeader
         eyebrow="Pengajuan"
         title="List Progress Leads"
-        desc={user.role === "marketing" ? "Progress pengajuan calon debitur milik Anda." : user.role === "admin_ops" ? `Pengajuan marketing cabang ${user.branch}.` : "Seluruh pengajuan di semua cabang."}
+        desc={
+          user.bank_scope === "bsi_only"
+            ? `Pengajuan pembiayaan khusus Bank Syariah Indonesia (BSI) di Cabang ${user.branch || "Anda"}.`
+            : user.role === "marketing"
+            ? "Progress pengajuan calon debitur milik Anda."
+            : user.role === "admin_branch"
+            ? `Pengajuan seluruh mitra bank di Cabang ${user.branch || "Anda"}.`
+            : user.role === "admin_ops"
+            ? `Pengajuan operasional seluruh cabang.`
+            : "Seluruh pengajuan di semua cabang."
+        }
+        actions={
+          user.bank_scope === "bsi_only" ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-bold text-[#078D67]" data-testid="scope-badge-bsi">
+              <span className="h-2 w-2 rounded-full bg-[#078D67] animate-pulse" />
+              Otoritas: Khusus Bank Syariah Indonesia (BSI)
+            </span>
+          ) : user.role === "admin_branch" ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700" data-testid="scope-badge-all">
+              Otoritas: Multi Mitra (All Bank)
+            </span>
+          ) : null
+        }
       />
       <div className="lp-card">
         <FilterBar>

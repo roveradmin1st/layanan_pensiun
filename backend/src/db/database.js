@@ -112,14 +112,27 @@ function createInitialState() {
     },
     {
       id: "u-branch-1",
-      name: "DEDY KURNIAWAN",
+      name: "DEDY KURNIAWAN (Admin Cabang All Bank)",
       email: "admincabang@layananpensiunan.id",
       password_hash: defaultPwdHash,
       role: "admin_branch",
       branch: "BANDUNG",
+      bank_scope: "all_bank",
       phone: "081265001122",
       active: true,
       created_at: "2026-01-16T09:00:00.000Z"
+    },
+    {
+      id: "u-branch-bsi-1",
+      name: "FAUZI RACHMAN (Admin Cabang Khusus BSI)",
+      email: "admincabang.bsi@layananpensiunan.id",
+      password_hash: defaultPwdHash,
+      role: "admin_branch",
+      branch: "BANDUNG",
+      bank_scope: "bsi_only",
+      phone: "081277008899",
+      active: true,
+      created_at: "2026-01-17T09:00:00.000Z"
     },
     {
       id: "u-sm-1",
@@ -494,6 +507,7 @@ function createInitialState() {
       application_id: "app-3002",
       app_no: "APP-202610-0002",
       lead_name: "HJ. ENDANG SULISTYOWATI",
+      bank_key: "ams2",
       bank_name: "Koperasi Asia Madani Sejahtera (AMS2)",
       marketing_id: "u-mkt-1",
       marketing_name: "ANDI PRATAMA",
@@ -515,6 +529,34 @@ function createInitialState() {
         { id: "ch-2", action: "PAID", note: "Klaim disetujui & dibayarkan (PAID)", user_name: "RINA KARTIKA SARI", at: "2026-10-24T10:00:00.000Z" }
       ],
       created_at: "2026-10-23T13:50:00.000Z"
+    },
+    {
+      id: "clm-4002",
+      claim_no: "CLM-202610-0002",
+      application_id: "app-3003",
+      app_no: "APP-202610-0003",
+      lead_name: "DRS. BAMBANG HERMAWAN",
+      bank_key: "bsi_prapen",
+      bank_name: "Bank Syariah Indonesia (BSI)",
+      marketing_id: "u-mkt-1",
+      marketing_name: "ANDI PRATAMA",
+      branch: "BANDUNG",
+      booking_date: "2026-10-25",
+      credit_no: "PK-BSI-2026-00412",
+      amount: 4500000,
+      status: "SUBMITTED",
+      notes: "Pengajuan klaim insentif pencairan BSI Dekade Berkah Rp320 Juta.",
+      revision_note: null,
+      reject_reason: null,
+      booking_proof: "foto_akad_bambang.pdf",
+      payment_proof: null,
+      paid_at: null,
+      paid_by: null,
+      payment_note: null,
+      history: [
+        { id: "ch-10", action: "SUBMITTED", note: "Klaim diajukan oleh Marketing beserta foto akad", user_name: "ANDI PRATAMA", at: "2026-10-25T14:00:00.000Z" }
+      ],
+      created_at: "2026-10-25T13:50:00.000Z"
     }
   ];
 
@@ -582,17 +624,72 @@ function ensureStoreUpgrades(state) {
     }
   }
 
-  if (!state.users.some((u) => u.role === "admin_branch")) {
+  if (!state.users.some((u) => u.email === "admincabang@layananpensiunan.id")) {
     state.users.push({
       id: "u-branch-1",
-      name: "DEDY KURNIAWAN",
+      name: "DEDY KURNIAWAN (Admin Cabang All Bank)",
       email: "admincabang@layananpensiunan.id",
       password_hash: defaultPwdHash,
       role: "admin_branch",
       branch: "BANDUNG",
+      bank_scope: "all_bank",
       phone: "081265001122",
       active: true,
       created_at: "2026-01-16T09:00:00.000Z"
+    });
+    changed = true;
+  } else {
+    const uBranch1 = state.users.find((u) => u.email === "admincabang@layananpensiunan.id");
+    if (uBranch1 && !uBranch1.bank_scope) {
+      uBranch1.bank_scope = "all_bank";
+      changed = true;
+    }
+  }
+
+  if (!state.users.some((u) => u.email === "admincabang.bsi@layananpensiunan.id")) {
+    state.users.push({
+      id: "u-branch-bsi-1",
+      name: "FAUZI RACHMAN (Admin Cabang Khusus BSI)",
+      email: "admincabang.bsi@layananpensiunan.id",
+      password_hash: defaultPwdHash,
+      role: "admin_branch",
+      branch: "BANDUNG",
+      bank_scope: "bsi_only",
+      phone: "081277008899",
+      active: true,
+      created_at: "2026-01-17T09:00:00.000Z"
+    });
+    changed = true;
+  }
+
+  if (Array.isArray(state.claims) && !state.claims.some((c) => c.application_id === "app-3003")) {
+    state.claims.push({
+      id: "clm-4002",
+      claim_no: "CLM-202610-0002",
+      application_id: "app-3003",
+      app_no: "APP-202610-0003",
+      lead_name: "DRS. BAMBANG HERMAWAN",
+      bank_key: "bsi_prapen",
+      bank_name: "Bank Syariah Indonesia (BSI)",
+      marketing_id: "u-mkt-1",
+      marketing_name: "ANDI PRATAMA",
+      branch: "BANDUNG",
+      booking_date: "2026-10-25",
+      credit_no: "PK-BSI-2026-00412",
+      amount: 4500000,
+      status: "SUBMITTED",
+      notes: "Pengajuan klaim insentif pencairan BSI Dekade Berkah Rp320 Juta.",
+      revision_note: null,
+      reject_reason: null,
+      booking_proof: "foto_akad_bambang.pdf",
+      payment_proof: null,
+      paid_at: null,
+      paid_by: null,
+      payment_note: null,
+      history: [
+        { id: "ch-10", action: "SUBMITTED", note: "Klaim diajukan oleh Marketing beserta foto akad", user_name: "ANDI PRATAMA", at: "2026-10-25T14:00:00.000Z" }
+      ],
+      created_at: "2026-10-25T13:50:00.000Z"
     });
     changed = true;
   }

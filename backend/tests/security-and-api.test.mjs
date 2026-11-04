@@ -220,6 +220,45 @@ try {
   });
   assert.equal(bsiOnlyAms2Attempt.status, 403, "Akun bsi_only tidak boleh mencampuri produk All Bank (AMS2)");
 
+  // Validasi Otoritas Transaksi: Admin Cabang All Bank vs Admin Cabang Khusus BSI
+  const allBankAppsRes = await api("GET", "/api/applications", { token: adminBranchToken });
+  assert.equal(allBankAppsRes.status, 200);
+  const allBankAppKeys = allBankAppsRes.data.items.map((a) => a.bank_key || a.bank_name);
+  assert.ok(allBankAppKeys.some((k) => String(k).includes("ams2")), "Admin Cabang All Bank harus dapat melihat pengajuan AMS2");
+  assert.ok(allBankAppKeys.some((k) => String(k).includes("bsi")), "Admin Cabang All Bank harus dapat melihat pengajuan BSI");
+
+  const bsiOnlyAppsRes = await api("GET", "/api/applications", { token: bsiOnlyToken });
+  assert.equal(bsiOnlyAppsRes.status, 200);
+  assert.ok(bsiOnlyAppsRes.data.items.length > 0, "Admin Cabang BSI harus melihat pengajuan BSI");
+  for (const item of bsiOnlyAppsRes.data.items) {
+    const k = String(item.bank_key || item.bank_name || "").toLowerCase();
+    assert.ok(k.includes("bsi"), `Admin Cabang BSI dilarang melihat transaksi non-BSI: ${item.bank_name}`);
+  }
+
+  // Percobaan akses langsung ID pengajuan bank lain (AMS2) oleh Admin Cabang BSI wajib 403
+  const bsiDirectViewAms2App = await api("GET", "/api/applications/app-3001", { token: bsiOnlyToken });
+  assert.equal(bsiDirectViewAms2App.status, 403, "Admin Cabang BSI wajib ditolak (403) mengakses pengajuan AMS2");
+
+  // Validasi Riwayat Simulasi: Admin Cabang BSI hanya melihat simulasi BSI
+  const bsiOnlySimsRes = await api("GET", "/api/simulations", { token: bsiOnlyToken });
+  assert.equal(bsiOnlySimsRes.status, 200);
+  for (const simItem of bsiOnlySimsRes.data.items) {
+    const k = String(simItem.bank_key || simItem.result?.bank_key || "").toLowerCase();
+    assert.ok(k.includes("bsi"), `Simulasi non-BSI tidak boleh bocor ke akun BSI: ${simItem.sim_no}`);
+  }
+  const bsiDirectViewAms2Sim = await api("GET", "/api/simulations/sim-2001", { token: bsiOnlyToken });
+  assert.equal(bsiDirectViewAms2Sim.status, 403, "Admin Cabang BSI wajib ditolak (403) mengakses simulasi AMS2");
+
+  // Validasi Klaim Insentif: Admin Cabang BSI hanya melihat klaim BSI
+  const bsiOnlyClaimsRes = await api("GET", "/api/claims", { token: bsiOnlyToken });
+  assert.equal(bsiOnlyClaimsRes.status, 200);
+  for (const clm of bsiOnlyClaimsRes.data.items) {
+    const k = String(clm.bank_key || clm.bank_name || "").toLowerCase();
+    assert.ok(k.includes("bsi"), `Klaim non-BSI tidak boleh bocor ke akun BSI: ${clm.claim_no}`);
+  }
+  const bsiDirectViewAms2Claim = await api("GET", "/api/claims/clm-4001", { token: bsiOnlyToken });
+  assert.equal(bsiDirectViewAms2Claim.status, 403, "Admin Cabang BSI wajib ditolak (403) mengakses klaim AMS2");
+
   // 3b. Cross-branch & Cross-marketing Lead isolation + Mass-assignment protection
   const sbyLeadRes = await api("POST", "/api/leads", {
     token: adminOpsToken,

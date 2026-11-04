@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Search, Loader2 } from "lucide-react";
 import { api } from "../lib/api";
 import { rp, fmtDateTime } from "../lib/format";
+import { useAuth } from "../context/AuthContext";
 import { PageHeader, Pager, Empty, DesktopTable, MobileList, ListCard, TableSkeleton, CardListSkeleton } from "../components/common";
 import { Input } from "../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
@@ -10,6 +11,7 @@ import ResultView from "../components/calc/ResultView";
 import { AiSummary, DownloadActions } from "../components/calc/SimExtras";
 
 export default function Simulations() {
+  const { user } = useAuth();
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
   const [data, setData] = useState(null);
@@ -24,7 +26,27 @@ export default function Simulations() {
 
   return (
     <div>
-      <PageHeader eyebrow="Layanan Pensiunan" title="Riwayat Simulasi" desc="Arsip seluruh simulasi pembiayaan yang telah tersimpan beserta dokumen PDF & ringkasan resmi." />
+      <PageHeader
+        eyebrow="Layanan Pensiunan"
+        title="Riwayat Simulasi"
+        desc={
+          user?.bank_scope === "bsi_only"
+            ? `Arsip simulasi pembiayaan khusus Bank Syariah Indonesia (BSI) di Cabang ${user.branch || "Anda"}.`
+            : "Arsip seluruh simulasi pembiayaan yang telah tersimpan beserta dokumen PDF & ringkasan resmi."
+        }
+        actions={
+          user?.bank_scope === "bsi_only" ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-bold text-[#078D67]" data-testid="scope-badge-sim-bsi">
+              <span className="h-2 w-2 rounded-full bg-[#078D67] animate-pulse" />
+              Otoritas: Khusus BSI
+            </span>
+          ) : user?.role === "admin_branch" ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700" data-testid="scope-badge-sim-all">
+              Otoritas: Multi Mitra (All Bank)
+            </span>
+          ) : null
+        }
+      />
       <div className="lp-card">
         <div className="border-b border-slate-100 p-4">
           <div className="relative max-w-md">

@@ -153,13 +153,23 @@ function canAccessBranch(user, entityBranch) {
   return String(entityBranch).trim().toUpperCase() === String(user.branch || "").trim().toUpperCase();
 }
 
+export function isBsiBankKey(bankKey) {
+  const k = String(bankKey || "").trim().toLowerCase();
+  return k === "bsi_prapen" || k === "bsi" || k.includes("bsi") || k.includes("syariah indonesia");
+}
+
+export function isBsiScopedUser(user) {
+  if (!user) return false;
+  const scope = String(user.bank_scope || "").trim().toLowerCase();
+  return scope === "bsi_only" || scope === "bsi" || scope === "bsi_prapen";
+}
+
 // Aturan Owner: Admin Cabang All Bank dapat melihat seluruh bank (termasuk BSI),
-// sedangkan akun khusus BSI (bank_scope === "bsi_only") tidak boleh mencampuri bank lain di Cabang All Bank.
+// sedangkan akun khusus BSI (bank_scope === "bsi_only") tidak boleh mencampuri atau melihat bank lain.
 function canAccessBank(user, bankKey) {
   if (!user) return false;
-  const normalizedBank = String(bankKey || "ams2").trim().toLowerCase();
-  if (user.bank_scope === "bsi_only") {
-    return normalizedBank === "bsi_prapen";
+  if (isBsiScopedUser(user)) {
+    return isBsiBankKey(bankKey);
   }
   return true;
 }
@@ -175,7 +185,7 @@ function canAccessLead(user, lead) {
 
 function canAccessSimulation(user, sim, store) {
   if (!user || !sim) return false;
-  const simBank = sim.bank_key || sim.result?.bank_key || "ams2";
+  const simBank = sim.bank_key || sim.result?.bank_key || sim.bank_name || "ams2";
   if (!canAccessBank(user, simBank)) return false;
   if (user.role === "super_admin" || user.role === "admin_ops") return true;
   if (user.role === "admin_branch" || user.role === "sales_manager") {
@@ -191,7 +201,8 @@ function canAccessSimulation(user, sim, store) {
 
 function canAccessApplication(user, appItem) {
   if (!user || !appItem) return false;
-  if (!canAccessBank(user, appItem.bank_key || "ams2")) return false;
+  const appBank = appItem.bank_key || appItem.bank_name || "ams2";
+  if (!canAccessBank(user, appBank)) return false;
   if (user.role === "super_admin" || user.role === "admin_ops") return true;
   if (user.role === "admin_branch" || user.role === "sales_manager") {
     return canAccessBranch(user, appItem.branch);
@@ -436,11 +447,11 @@ app.get("/api/dashboard", requireAuth, (req, res) => {
 
   const marketing_leaderboard = marketers.map((m) => {
     const mLeads = store.leads.filter((l) => l.assigned_to === m.id);
-    const mSims = store.simulations.filter((s) => s.marketing_id === m.id);
-    const mApps = store.applications.filter((a) => a.marketing_id === m.id && !a.rejected);
+    const mSims = store.simulations.filter((s) => s.marketing_id === m.id && canAccessSimulation(req.user, s, store));
+    const mApps = store.applications.filter((a) => a.marketing_id === m.id && !a.rejected && canAccessApplication(req.user, a));
     const mBookingApps = mApps.filter((a) => a.stage === "booking_live");
     const mBookingVolume = mBookingApps.reduce((acc, a) => acc + (Number(a.plafond) || 0), 0);
-    const mPaidClaims = store.claims.filter((c) => c.marketing_id === m.id && c.status === "PAID");
+    const mPaidClaims = store.claims.filter((c) => c.marketing_id === m.id && c.status === "PAID" && canAccessClaim(req.user, c));
     const mPaidIncentives = mPaidClaims.reduce((acc, c) => acc + (Number(c.amount) || 0), 0);
     const aktivitas_7h = mLeads.reduce((acc, l) => acc + (l.activities?.length || 0), 0);
     const convRate = mLeads.length > 0 ? Math.round((mBookingApps.length / mLeads.length) * 100) : 0;
@@ -1847,6 +1858,16 @@ app.post("/api/claims", requireAuth, upload.single("file"), (req, res) => {
     addAuditLog(req.user, "create_claim", createdClaim.claim_no, `Membuat klaim insentif ${createdClaim.claim_no} (${createdClaim.app_no})`, req.ip);
     return createdClaim;
   });
+  res.json(claim);
+});
+
+app.get("/api/claims/:id", requireAuth, (req, res) => {
+  const store = getStore();
+  const claim = store.claims.find((c) => c.id === req.params.id);
+  if (!claim) return res.status(404).json({ detail: "Klaim tidak ditemukan" });
+  if (!canAccessClaim(req.user, claim)) {
+    return res.status(403).json({ detail: "Anda tidak memiliki akses pada klaim ini." });
+  }
   res.json(claim);
 });
 

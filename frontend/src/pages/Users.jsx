@@ -15,7 +15,21 @@ import { Button } from "../components/ui/button";
 
 function UserDialog({ open, onOpenChange, editing, onSaved, me }) {
   const [v, setV] = useState({});
-  useEffect(() => { setV(editing ? { ...editing, password: "" } : { name: "", email: "", role: "marketing", branch: me?.branch || "", phone: "", password: "" }); }, [editing, open, me]);
+  useEffect(() => {
+    setV(
+      editing
+        ? { ...editing, password: "", bank_scope: editing.bank_scope || "all_bank" }
+        : {
+            name: "",
+            email: "",
+            role: "marketing",
+            branch: me?.branch || "",
+            bank_scope: me?.bank_scope === "bsi_only" ? "bsi_only" : "all_bank",
+            phone: "",
+            password: ""
+          }
+    );
+  }, [editing, open, me]);
   const roles =
     me.role === "super_admin"
       ? ["super_admin", "admin_ops", "admin_branch", "sales_manager", "marketing"]
@@ -26,10 +40,22 @@ function UserDialog({ open, onOpenChange, editing, onSaved, me }) {
     e.preventDefault();
     try {
       if (editing) {
-        const body = { name: v.name, role: v.role, branch: v.branch, phone: v.phone, active: v.active };
+        const body = {
+          name: v.name,
+          role: v.role,
+          branch: v.branch,
+          bank_scope: v.bank_scope || "all_bank",
+          phone: v.phone,
+          active: v.active
+        };
         if (v.password) body.password = v.password;
         await api.patch(`/users/${editing.id}`, body);
-      } else await api.post("/users", v);
+      } else {
+        await api.post("/users", {
+          ...v,
+          bank_scope: v.bank_scope || "all_bank"
+        });
+      }
       toast.success("Pengguna disimpan");
       onOpenChange(false); onSaved();
     } catch (err) { toast.error(errMsg(err)); }
@@ -48,6 +74,29 @@ function UserDialog({ open, onOpenChange, editing, onSaved, me }) {
             <Select value={v.role} onValueChange={(r) => setV({ ...v, role: r })}><SelectTrigger data-testid="user-form-role"><SelectValue /></SelectTrigger>
               <SelectContent>{roles.map((r) => <SelectItem key={r} value={r}>{ROLE_LABEL[r]}</SelectItem>)}</SelectContent></Select></div>
           <div className="grid grid-cols-2 gap-3">{field("branch", "Cabang")}{field("phone", "Telepon")}</div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="u-bank-scope">Cakupan Mitra Bank (Bank Scope)</Label>
+            <Select
+              value={v.bank_scope || "all_bank"}
+              disabled={me.role !== "super_admin" && me.role !== "admin_ops" && me.bank_scope === "bsi_only"}
+              onValueChange={(val) => setV({ ...v, bank_scope: val })}
+            >
+              <SelectTrigger id="u-bank-scope" data-testid="user-form-bank-scope">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all_bank">Semua Bank (All Bank / Multi Mitra)</SelectItem>
+                <SelectItem value="bsi_only">Khusus BSI (Bank Syariah Indonesia Only)</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-[11px] text-slate-500">
+              {v.bank_scope === "bsi_only"
+                ? "Akun khusus BSI: hanya dapat melihat, menghitung, dan memproses transaksi BSI."
+                : "Akun All Bank: berwenang memantau seluruh transaksi mitra bank (AMS2, BSI, Capital, Mestika)."}
+            </p>
+          </div>
+
           {field("password", editing ? "Kata sandi baru (opsional)" : "Kata sandi awal (min. 8)", { type: "password", required: !editing, minLength: 8 })}
           {editing && <label className="flex items-center gap-3 text-sm"><Switch checked={v.active} onCheckedChange={(c) => setV({ ...v, active: c })} data-testid="user-form-active" />Akun aktif</label>}
           <DialogFooter><Button type="submit" className="bg-[#351080] hover:bg-[#2a0c66]" data-testid="user-form-submit">Simpan</Button></DialogFooter>
@@ -84,6 +133,7 @@ export default function UsersPage() {
                 <TableHead>Email</TableHead>
                 <TableHead>Peran</TableHead>
                 <TableHead>Cabang</TableHead>
+                <TableHead>Cakupan Bank</TableHead>
                 <TableHead>Leads</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="w-[60px]" />
@@ -100,6 +150,17 @@ export default function UsersPage() {
                     </span>
                   </TableCell>
                   <TableCell>{u.branch || "-"}</TableCell>
+                  <TableCell>
+                    {u.bank_scope === "bsi_only" ? (
+                      <span className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-[#078D67]" data-testid={`user-scope-${u.id}`}>
+                        Khusus BSI
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600" data-testid={`user-scope-${u.id}`}>
+                        Semua Bank
+                      </span>
+                    )}
+                  </TableCell>
                   <TableCell className="lp-num">{u.lead_count}</TableCell>
                   <TableCell>
                     {u.active ? (
@@ -142,6 +203,7 @@ export default function UsersPage() {
               }
               meta={[
                 u.branch || "PUSAT",
+                u.bank_scope === "bsi_only" ? "Khusus BSI" : "Semua Bank",
                 `${u.lead_count} leads`,
                 u.active ? "Aktif" : "Nonaktif",
               ]}
