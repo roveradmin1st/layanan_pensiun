@@ -1373,6 +1373,9 @@ app.get("/api/lead-requests", requireAuth, (req, res) => {
   const todayIso = new Date().toISOString().slice(0, 10);
 
   if (req.user.role === "marketing") {
+    const rawBranch = req.user.branch;
+    const normalizedBranch = typeof rawBranch === "string" ? rawBranch.trim().toUpperCase() : "";
+    const isBranchValid = Boolean(normalizedBranch && normalizedBranch !== "PUSAT" && normalizedBranch !== "PUSAT JAKARTA");
     const myRequests = requests.filter((r) => r.requester_id === req.user.id);
     const pendingRequest = myRequests.find((r) => r.status === "PENDING") || null;
     const todayApproved = myRequests.find(
@@ -1385,9 +1388,25 @@ app.get("/api/lead-requests", requireAuth, (req, res) => {
       (l) => l.status === "baru" && (!l.activities || l.activities.length <= 1)
     ).length;
 
+    // Hitung stok prospek unassigned yang ada di cabang marketing ini secara real-time
+    const unassignedInBranch = isBranchValid
+      ? (store.leads || []).filter(
+          (l) => !l.assigned_to && String(l.branch || "").trim().toUpperCase() === normalizedBranch
+        )
+      : [];
+
+    const branchStock = {
+      total_unassigned: unassignedInBranch.length,
+      prapen_unassigned: unassignedInBranch.filter((l) => Number(l.age || 0) >= 50 && Number(l.age || 0) <= 59).length,
+      pensiun_unassigned: unassignedInBranch.filter((l) => Number(l.age || 0) >= 60).length
+    };
+
     return res.json({
       items: myRequests,
-      can_request_today: !pendingRequest && !todayApproved,
+      user_branch: isBranchValid ? normalizedBranch : null,
+      branch_valid: isBranchValid,
+      branch_stock: branchStock,
+      can_request_today: !pendingRequest && !todayApproved && isBranchValid && unassignedInBranch.length > 0,
       pending_request: pendingRequest,
       today_approved_count: todayApproved ? (todayApproved.allocated_count || todayApproved.requested_count || 0) : 0,
       untouched_leads_count: untouchedCount,
@@ -1477,7 +1496,25 @@ app.post("/api/lead-requests", requireAuth, requireRoles("marketing"), (req, res
     });
   }
 
-  const userBranch = req.user.branch || "BANDUNG";
+  // 5. Validasi Cabang Resmi Pemohon (Anti-Fraud & Anti-Data Leak)
+  const rawBranch = req.user.branch;
+  const userBranch = typeof rawBranch === "string" ? rawBranch.trim().toUpperCase() : "";
+  if (!userBranch || userBranch === "PUSAT" || userBranch === "PUSAT JAKARTA") {
+    return res.status(400).json({
+      detail: "Akun Anda belum memiliki penugasan kantor cabang resmi. Hubungi Admin Operasional untuk menetapkan cabang Anda sebelum mengajukan data prospek."
+    });
+  }
+
+  // 6. Validasi Ketersediaan Stok Unassigned di Cabang Pemohon (Real-Time Pre-Check)
+  const unassignedInBranch = (store.leads || []).filter(
+    (l) => !l.assigned_to && String(l.branch || "").trim().toUpperCase() === userBranch
+  );
+  if (unassignedInBranch.length === 0) {
+    return res.status(400).json({
+      detail: `Stok data prospek belum ditugaskan (unassigned) untuk Cabang ${userBranch} saat ini sedang kosong (0 data). Silakan hubungi Admin Operasional untuk penambahan database cabang.`
+    });
+  }
+
   const now = new Date().toISOString();
   const yearMonth = now.slice(0, 7).replace("-", "");
   const seq = String((store.lead_requests?.length || 0) + 1).padStart(4, "0");
@@ -1539,6 +1576,15 @@ app.post(
       return res.status(400).json({ detail: "Akun marketing pemohon sudah tidak aktif." });
     }
 
+    // Verifikasi keselarasan cabang aktual marketing dengan cabang permohonan
+    const requesterBranch = String(requester.branch || "").trim().toUpperCase();
+    const reqItemBranch = String(reqItem.branch || "").trim().toUpperCase();
+    if (!requesterBranch || requesterBranch !== reqItemBranch) {
+      return res.status(400).json({
+        detail: `Cabang pemohon (${requesterBranch || "TIDAK ADA"}) tidak cocok dengan cabang permohonan (${reqItemBranch}). Permohonan dibatalkan guna mencegah salah alokasi wilayah.`
+      });
+    }
+
     const maxCount = reqItem.requested_count || 5;
 
     const result = withTransaction(() => {
@@ -1547,10 +1593,11 @@ app.post(
         throw new Error("Permohonan sudah berstatus non-pending.");
       }
 
-      // Query pool leads unassigned yang cocok dengan cabang & segmentasi
+      // Query pool leads unassigned yang cocok dengan cabang (normalized) & segmentasi
       let candidates = (store.leads || []).filter((l) => {
         if (l.assigned_to) return false;
-        if (l.branch !== reqItem.branch) return false;
+        const leadBranch = String(l.branch || "").trim().toUpperCase();
+        if (!leadBranch || leadBranch !== reqItemBranch) return false;
 
         // Filter segmentasi jika ada
         if (reqItem.target_segment === "prapen") {
@@ -1569,15 +1616,23 @@ app.post(
         return true;
       });
 
-      // Fallback: Jika tidak ada yang cocok dengan segmen spesifik, ambil unassigned di cabang tersebut
+      // Fallback: Jika tidak ada yang cocok dengan segmen spesifik, ambil unassigned di cabang tersebut dengan tetap patuh bank-scope
       if (!candidates.length) {
-        candidates = (store.leads || []).filter((l) => !l.assigned_to && l.branch === reqItem.branch);
+        candidates = (store.leads || []).filter((l) => {
+          if (l.assigned_to) return false;
+          const leadBranch = String(l.branch || "").trim().toUpperCase();
+          if (!leadBranch || leadBranch !== reqItemBranch) return false;
+          if (isBsiScopedUser(requester)) {
+            if (Number(l.age || 0) > 70) return false;
+          }
+          return true;
+        });
       }
 
       if (!candidates.length) {
         return {
           ok: false,
-          error: `Stok data prospek belum ditugaskan (unassigned) di Cabang ${reqItem.branch} saat ini sedang kosong.`
+          error: `Stok data prospek belum ditugaskan (unassigned) di Cabang ${reqItemBranch} saat ini sedang kosong.`
         };
       }
 
@@ -1615,7 +1670,7 @@ app.post(
         req.user,
         "approve_lead_request",
         reqItem.request_no,
-        `Menyetujui permohonan ${reqItem.request_no} dan mengalokasikan ${allocatedLeads.length} leads ke ${requester.name} (${reqItem.branch})`,
+        `Menyetujui permohonan ${reqItem.request_no} dan mengalokasikan ${allocatedLeads.length} leads ke ${requester.name} (${reqItemBranch})`,
         req.ip
       );
 
@@ -2600,7 +2655,7 @@ app.post("/api/users", requireAuth, requireRoles("super_admin", "admin_ops", "ad
     return res.status(400).json({ detail: "Kata sandi minimal 8 karakter." });
   }
   const targetBranch = isGlobalBranchScope(req.user)
-    ? (body.branch || req.user.branch || "BANDUNG")
+    ? (body.branch !== undefined ? String(body.branch).trim().toUpperCase() : (req.user.branch || "BANDUNG"))
     : (req.user.branch || "BANDUNG");
   if (!canAccessBranch(req.user, targetBranch)) {
     return res.status(403).json({ detail: "Anda tidak dapat membuat pengguna untuk cabang lain." });

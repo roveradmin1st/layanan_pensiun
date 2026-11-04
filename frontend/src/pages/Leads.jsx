@@ -122,6 +122,11 @@ function LeadRequestModal({ open, onOpenChange, requestMeta, onSaved }) {
               <AlertCircle className="h-4 w-4 text-amber-600" />
               <span>Permohonan Belum Dapat Diajukan</span>
             </div>
+            {requestMeta?.branch_valid === false && (
+              <p>
+                Akun Anda belum memiliki penugasan kantor cabang resmi. Hubungi Admin Operasional untuk menetapkan cabang Anda sebelum mengajukan data prospek.
+              </p>
+            )}
             {requestMeta?.pending_request && (
               <p>
                 Anda masih memiliki 1 permohonan aktif (<b>{requestMeta.pending_request.request_no}</b>) yang sedang berstatus <b>PENDING</b> menunggu persetujuan Admin Operasional.
@@ -137,9 +142,28 @@ function LeadRequestModal({ open, onOpenChange, requestMeta, onSaved }) {
                 Anda masih memiliki <b>{requestMeta.untouched_leads_count} prospek belum di-follow up</b>. Silakan tindak lanjuti prospek yang ada terlebih dahulu.
               </p>
             )}
+            {requestMeta?.branch_stock?.total_unassigned === 0 && !requestMeta?.pending_request && requestMeta?.today_approved_count === 0 && (
+              <p>
+                Stok data prospek belum ditugaskan (unassigned) di Cabang <b>{requestMeta?.user_branch || "Anda"}</b> saat ini sedang kosong (0 data). Silakan hubungi Admin Operasional untuk penambahan/import database.
+              </p>
+            )}
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4 pt-2">
+            <div className="rounded-xl border border-blue-100 bg-blue-50/70 p-3 text-xs text-blue-900 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-slate-600">🏢 Cabang Penugasan:</span>
+                <span className="rounded-md bg-blue-200/80 px-2.5 py-0.5 font-bold text-blue-950">
+                  {requestMeta?.user_branch || "BANDUNG"}
+                </span>
+              </div>
+              <div className="text-right">
+                <span className="text-slate-500">Stok Cabang: </span>
+                <span className="font-bold text-emerald-700">
+                  {requestMeta?.branch_stock?.total_unassigned || 0} Siap Alokasi
+                </span>
+              </div>
+            </div>
             <div>
               <Label className="text-xs font-semibold text-slate-700">
                 Jumlah Data yang Diminta (Maks. 5 permohonan per hari)

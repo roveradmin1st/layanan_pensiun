@@ -52,8 +52,14 @@ const initialBackupRes = await api("GET", "/api/backup", { token: superToken });
 assert.equal(initialBackupRes.status, 200, "Super Admin harus dapat mengunduh backup");
 const initialStoreSnapshot = initialBackupRes.data;
 initialStoreSnapshot.lead_requests = [];
+for (const lead of initialStoreSnapshot.leads || []) {
+  if (["lead-1006", "lead-1007", "lead-1008", "lead-1009", "lead-1010"].includes(lead.id)) {
+    lead.assigned_to = null;
+    lead.assigned_name = null;
+  }
+}
 
-// Reset lead_requests at startup to ensure 100% test idempotency
+// Reset lead_requests & unassigned stock at startup to ensure 100% test idempotency
 const initCleanForm = new FormData();
 initCleanForm.append(
   "file",
@@ -346,7 +352,42 @@ try {
   assert.equal(mktDashboard.data.financials.est_gross_revenue, undefined, "Omzet kotor 4% perusahaan tidak boleh bocor ke marketing");
   assert.equal(mktDashboard.data.financials.net_company_profit, undefined, "Net profit perusahaan tidak boleh bocor ke marketing");
 
-  // 3d. Fitur Permintaan Data Prospek (Marketing -> Admin Operasional)
+  // 3d. Fitur Permintaan Data Prospek & Validasi Cabang Anti-Fraud (Marketing -> Admin Operasional)
+  // - Verifikasi metadata stok cabang & kepatuhan identitas cabang
+  const mktMetaRes = await api("GET", "/api/lead-requests", { token: marketingToken });
+  assert.equal(mktMetaRes.status, 200);
+  assert.equal(mktMetaRes.data.user_branch, "BANDUNG", "Cabang marketing pemohon harus terdeteksi BANDUNG");
+  assert.equal(mktMetaRes.data.branch_valid, true, "Cabang marketing harus valid");
+  assert.ok(mktMetaRes.data.branch_stock.total_unassigned >= 5, "Stok unassigned Bandung harus tersedia minimal 5");
+
+  // - Proteksi Anti-Fraud 1: Akun marketing tanpa cabang resmi wajib DITOLAK (400)
+  const noBranchEmail = `mkt_nobranch_${Date.now()}@pensiun.com`;
+  await api("POST", "/api/users", {
+    token: superToken,
+    body: { name: "Mkt Tanpa Cabang", email: noBranchEmail, password: "Password123!", role: "marketing", branch: "" }
+  });
+  const noBranchToken = await login(noBranchEmail, "Password123!");
+  const noBranchReqAttempt = await api("POST", "/api/lead-requests", {
+    token: noBranchToken,
+    body: { requested_count: 5 }
+  });
+  assert.equal(noBranchReqAttempt.status, 400, "Marketing tanpa cabang penugasan resmi wajib DITOLAK (400)");
+  assert.match(noBranchReqAttempt.data.detail, /belum memiliki penugasan kantor cabang resmi/i);
+
+  // - Proteksi Anti-Fraud 2: Marketing dari cabang tanpa stok unassigned (0 stok) wajib DITOLAK (400)
+  const zeroStockEmail = `mkt_sby_${Date.now()}@pensiun.com`;
+  await api("POST", "/api/users", {
+    token: superToken,
+    body: { name: "Mkt Surabaya Stok Nol", email: zeroStockEmail, password: "Password123!", role: "marketing", branch: "SURABAYA" }
+  });
+  const zeroStockToken = await login(zeroStockEmail, "Password123!");
+  const zeroStockReqAttempt = await api("POST", "/api/lead-requests", {
+    token: zeroStockToken,
+    body: { requested_count: 3 }
+  });
+  assert.equal(zeroStockReqAttempt.status, 400, "Marketing dari cabang dengan stok 0 wajib DITOLAK (400)");
+  assert.match(zeroStockReqAttempt.data.detail, /stok data prospek belum ditugaskan .* sedang kosong/i);
+
   // - Validasi Batas Kuota: Maksimal 5 data
   const reqTooMany = await api("POST", "/api/lead-requests", {
     token: marketingToken,
@@ -360,14 +401,20 @@ try {
   });
   assert.equal(reqZero.status, 400, "Permintaan 0 data wajib DITOLAK (400)");
 
-  // - Submit Permintaan Sah (5 data)
+  // - Submit Permintaan Sah (5 data) + Proteksi Anti-Tampering Cabang (Input branch diabaikan, dipaksa sesuai profil server)
   const validLeadReq = await api("POST", "/api/lead-requests", {
     token: marketingToken,
-    body: { requested_count: 5, target_segment: "all", notes: "Persiapan kanvasing pensiunan Taspen" }
+    body: {
+      requested_count: 5,
+      target_segment: "all",
+      notes: "Persiapan kanvasing pensiunan Taspen",
+      branch: "MEDAN" // Percobaan tampering wilayah ke cabang lain
+    }
   });
   assert.equal(validLeadReq.status, 201, "Marketing harus berhasil mengajukan 5 data prospek");
   assert.equal(validLeadReq.data.status, "PENDING");
   assert.equal(validLeadReq.data.requested_count, 5);
+  assert.equal(validLeadReq.data.branch, "BANDUNG", "Sistem wajib mengabaikan tampering dan memaksakan cabang resmi BANDUNG");
   const createdReqId = validLeadReq.data.id;
 
   // - Anti-Spam Guard: Ditolak jika masih ada permohonan PENDING
@@ -397,6 +444,13 @@ try {
   assert.equal(opsApproveRes.data.request.status, "APPROVED");
   assert.ok(opsApproveRes.data.allocated_count > 0, "Minimal harus ada data yang dialokasikan");
   assert.ok(opsApproveRes.data.allocated_count <= 5, "Jumlah alokasi tidak boleh melebihi 5 data");
+
+  // - Verifikasi Seluruh Leads yang Dialokasikan Berasal dari Cabang BANDUNG (Anti-Cross-Branch Leak)
+  const mktFreshLeads = await api("GET", "/api/leads", { token: marketingToken });
+  assert.equal(mktFreshLeads.status, 200);
+  for (const lead of mktFreshLeads.data.items) {
+    assert.equal(lead.branch, "BANDUNG", `Lead ${lead.id} harus berasal dari Cabang BANDUNG, bukan cabang lain`);
+  }
 
   // - Cadence Harian: Jika sudah disetujui pada hari yang sama, permintaan baru ditolak sampai hari berganti
   const sameDayReqAttempt = await api("POST", "/api/lead-requests", {
