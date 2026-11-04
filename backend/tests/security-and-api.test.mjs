@@ -7,6 +7,9 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import fs from "node:fs";
+import vm from "node:vm";
+import jwt from "jsonwebtoken";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BASE_URL = process.env.API_BASE_URL || "http://localhost:4000";
@@ -184,6 +187,33 @@ try {
   });
   assert.equal(prodWeakJwtProc.status, 1, "Server produksi wajib gagal start jika JWT_SECRET lemah/kosong");
   assert.match(prodWeakJwtProc.stderr, /\[FATAL\] Production startup aborted/);
+
+  // 2e. Hardened JWT Fallback: Rejection of example/repo fallback keys & token spoofing (P0 fix)
+  for (const fallbackSecret of [
+    "4f8b9e1a3c7d5f2e6a0b8c4d2e9f1a3b5c7e9d0f2a4b6c8d1e3f5a7b9c0d2e4f",
+    "lp_production_jwt_secret_min32chars_key_2026_enterprise"
+  ]) {
+    const prodFallbackProc = spawnSync(process.execPath, [serverPath], {
+      env: { ...process.env, NODE_ENV: "production", JWT_SECRET: fallbackSecret, PORT: "4099" },
+      encoding: "utf8",
+      timeout: 5000
+    });
+    assert.equal(prodFallbackProc.status, 1, "Server produksi wajib gagal start jika JWT_SECRET memakai nilai fallback contoh dari repo");
+    assert.match(prodFallbackProc.stderr, /\[FATAL\] Production startup aborted/);
+  }
+
+  // Token signed with repo fallback key against active server must be rejected with 401 Unauthorized
+  const forgedToken = jwt.sign({ sub: "u-1", role: "super_admin" }, "4f8b9e1a3c7d5f2e6a0b8c4d2e9f1a3b5c7e9d0f2a4b6c8d1e3f5a7b9c0d2e4f", { expiresIn: "1h" });
+  const forgedAuthAttempt = await api("GET", "/api/auth/me", { token: forgedToken });
+  assert.equal(forgedAuthAttempt.status, 401, "Token yang ditandatangani dengan kunci contoh repo wajib DITOLAK (401)");
+
+  // 2f. Forgot-Password and Reset-Password Verification (Probe regression)
+  const fpReq = await api("POST", "/api/auth/forgot-password", { body: { email: "marketing@layananpensiunan.id" } });
+  assert.equal(fpReq.status, 200, "Endpoint forgot-password harus 200 OK");
+  assert.ok(fpReq.data.message);
+
+  const rpBadReq = await api("POST", "/api/auth/reset-password", { body: { token: "token_palsu_123", password: "NewPassword123!" } });
+  assert.equal(rpBadReq.status, 400, "Reset password dengan token tidak valid harus 400");
   console.log("  ✓ PASS: Celah autentikasi tertutup & proteksi JWT_SECRET produksi aktif.");
 
   // --------------------------------------------------------------------------
@@ -208,6 +238,43 @@ try {
   assert.equal(createBsiOnlyUser.status, 200);
   assert.equal(createBsiOnlyUser.data.bank_scope, "bsi_only");
   const bsiOnlyToken = await login(bsiOnlyEmail, "BsiPassword123!");
+
+  // 3a.0 Kebijakan Pengelolaan User Lintas Scope (P1 Fix):
+  // Admin Cabang Khusus BSI dilarang melihat, membaca, me-reset password, atau menonaktifkan pengguna All Bank
+  const allUsersUnderBsiAdmin = await api("GET", "/api/users", { token: bsiOnlyToken });
+  assert.equal(allUsersUnderBsiAdmin.status, 200);
+  for (const u of allUsersUnderBsiAdmin.data) {
+    assert.equal(u.bank_scope, "bsi_only", "Admin BSI hanya boleh melihat user dengan scope bsi_only");
+  }
+
+  // Percobaan baca detail user marketing all_bank (u-mkt-1) oleh Admin BSI wajib 403
+  const bsiReadMktAllBank = await api("GET", "/api/users/u-mkt-1", { token: bsiOnlyToken });
+  assert.equal(bsiReadMktAllBank.status, 403, "Admin BSI dilarang membaca data akun user all_bank (403)");
+
+  // Percobaan reset password user marketing all_bank oleh Admin BSI wajib 403
+  const bsiPatchMktPass = await api("PATCH", "/api/users/u-mkt-1", {
+    token: bsiOnlyToken,
+    body: { password: "HackedPassword99!" }
+  });
+  assert.equal(bsiPatchMktPass.status, 403, "Admin BSI dilarang me-reset kata sandi user all_bank lintas scope (403)");
+
+  // Percobaan deaktivasi user marketing all_bank oleh Admin BSI wajib 403
+  const bsiDeactMkt = await api("PATCH", "/api/users/u-mkt-1", {
+    token: bsiOnlyToken,
+    body: { active: false }
+  });
+  assert.equal(bsiDeactMkt.status, 403, "Admin BSI dilarang menonaktifkan user all_bank lintas scope (403)");
+
+  // Verifikasi kata sandi target TIDAK berubah
+  const hackedLoginAttempt = await api("POST", "/api/auth/login", {
+    body: { email: "marketing@layananpensiunan.id", password: "HackedPassword99!" }
+  });
+  assert.equal(hackedLoginAttempt.status, 401, "Password target tidak boleh berubah setelah request lintas scope ditolak");
+
+  const legitimateLogin = await api("POST", "/api/auth/login", {
+    body: { email: "marketing@layananpensiunan.id", password: "Password123!" }
+  });
+  assert.equal(legitimateLogin.status, 200, "Password asli target harus tetap utuh dan login 200 OK");
 
   // Admin Cabang All Bank (cabang@pensiun.com) sees all banks including bsi_prapen & ams2
   const allBankListRes = await api("GET", "/api/banks", { token: adminBranchToken });
@@ -351,6 +418,61 @@ try {
   assert.equal(mktDashboard.status, 200);
   assert.equal(mktDashboard.data.financials.est_gross_revenue, undefined, "Omzet kotor 4% perusahaan tidak boleh bocor ke marketing");
   assert.equal(mktDashboard.data.financials.net_company_profit, undefined, "Net profit perusahaan tidak boleh bocor ke marketing");
+
+  // 3c.2 Live Recommendation & Limits Consistency between Server and Marketing (P1 regression fix)
+  // Super Admin updates AMS2 max tenor to 60 months
+  const updateTenorRes = await api("PUT", "/api/calc/params/ams2", {
+    token: superToken,
+    body: { updates: { maxTenorMonths: 60 } }
+  });
+  assert.equal(updateTenorRes.status, 200);
+
+  // Marketing retrieves limited safe parameters via /calc/limits
+  const mktLimitsRes = await api("GET", "/api/calc/limits", { token: marketingToken });
+  assert.equal(mktLimitsRes.status, 200, "Marketing harus dapat mengakses batas parameter operasional (/calc/limits)");
+  assert.equal(mktLimitsRes.data.limits.ams2.maxTenorMonths, 60, "Batas tenor AMS2 harus 60 bulan setelah diubah Super Admin");
+
+  // Marketing is still forbidden from viewing full sensitive admin parameters
+  const mktSensitiveParams = await api("GET", "/api/calc/params", { token: marketingToken });
+  assert.equal(mktSensitiveParams.status, 403, "Marketing tetap wajib DITOLAK (403) dari parameter lengkap admin");
+
+  // API Calculator (/api/calc/max) returns max tenor 60
+  const ams2MaxRes = await api("POST", "/api/calc/max", {
+    token: marketingToken,
+    body: { bank_key: "ams2", birth_date: "1970-01-01", salary: 5000000 }
+  });
+  assert.equal(ams2MaxRes.status, 200);
+  assert.equal(ams2MaxRes.data.max_tenor, 60, "Rekomendasi kalkulator server harus menghasilkan 60 bulan");
+  assert.equal(ams2MaxRes.data.rec_max_tenor, 60, "Rekomendasi tenor server harus 60 bulan");
+
+  // Node VM test: Frontend helper computeAms2LiveRecommendation must match API 100%
+  const calcPath = path.resolve(__dirname, "../../frontend/src/pages/Calculator.jsx");
+  if (fs.existsSync(calcPath)) {
+    const calcSrc = fs.readFileSync(calcPath, "utf8");
+    const helperCode = calcSrc.slice(
+      calcSrc.indexOf("function addMonthsClampedLocal"),
+      calcSrc.indexOf("export default function CalculatorPage")
+    );
+    const sandbox = { console };
+    vm.createContext(sandbox);
+    vm.runInContext(helperCode, sandbox);
+    const testInput = {
+      ams2_birth_iso: "1970-01-01",
+      ams2_process_iso: "2026-11-04",
+      salary: 5000000,
+      ams2_req_loan: 50000000,
+      ams2_req_tenor: 120
+    };
+    const recResult = sandbox.computeAms2LiveRecommendation(testInput, mktLimitsRes.data.limits.ams2);
+    assert.equal(recResult.recMaxTenor, 60, "Helper frontend di Node VM wajib menghasilkan 60 bulan");
+    assert.equal(recResult.recMaxTenor, ams2MaxRes.data.max_tenor, "Hasil helper frontend dan server API wajib konsisten 100%");
+  }
+
+  // Restore AMS2 max tenor to 120
+  await api("PUT", "/api/calc/params/ams2", {
+    token: superToken,
+    body: { updates: { maxTenorMonths: 120 } }
+  });
 
   // 3d. Fitur Permintaan Data Prospek & Validasi Cabang Anti-Fraud (Marketing -> Admin Operasional)
   // - Verifikasi metadata stok cabang & kepatuhan identitas cabang
@@ -692,6 +814,64 @@ try {
     isForm: true
   });
   assert.equal(dupPayClaim.status, 409, "Pembayaran ulang pada klaim yang sudah PAID harus ditolak (409)");
+
+  // 4e. Upload Security: Reject active formats (HTML/scripts/SVG) & signature sniffing & secure serving (P1 fix)
+  // Attempt to upload HTML file disguised as document
+  const formHtml = new FormData();
+  formHtml.append(
+    "file",
+    new Blob(["<html><head><script>alert('xss')</script></head><body>evil</body></html>"], { type: "text/html" }),
+    "document.html"
+  );
+  const rejectHtmlUpload = await api("POST", `/api/leads/${ownLead.id}/documents`, {
+    token: marketingToken,
+    body: formHtml,
+    isForm: true
+  });
+  assert.equal(rejectHtmlUpload.status, 400, "Unggah file HTML harus DITOLAK (400)");
+  assert.match(rejectHtmlUpload.data.detail, /hanya file.*pdf.*jpg.*png/i);
+
+  // Attempt to upload HTML disguised with .pdf extension and application/pdf MIME
+  const formSpoofed = new FormData();
+  formSpoofed.append(
+    "file",
+    new Blob(["<html><body>dummy content without pdf header</body></html>"], { type: "application/pdf" }),
+    "fake.pdf"
+  );
+  const rejectSpoofedUpload = await api("POST", `/api/leads/${ownLead.id}/documents`, {
+    token: marketingToken,
+    body: formSpoofed,
+    isForm: true
+  });
+  assert.equal(rejectSpoofedUpload.status, 400, "File bukan PDF asli (magic bytes mismatch) harus DITOLAK (400)");
+
+  // Upload authentic PDF
+  const validPdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0x0a, 0x25, 0xd0, 0xd4, 0xc5, 0xd8, 0x0a]);
+  const formPdf = new FormData();
+  formPdf.append("file", new Blob([validPdfBytes], { type: "application/pdf" }), "ktp_asli.pdf");
+  const uploadPdfRes = await api("POST", `/api/leads/${ownLead.id}/documents?category=KTP`, {
+    token: marketingToken,
+    body: formPdf,
+    isForm: true
+  });
+  assert.equal(uploadPdfRes.status, 200, "Unggah PDF asli harus berhasil (200)");
+  const uploadedDocId = uploadPdfRes.data.id;
+
+  // Download uploaded document: check security headers (X-Content-Type-Options: nosniff, CSP sandbox)
+  const downloadDocRes = await api("GET", `/api/documents/${uploadedDocId}/download`, { token: marketingToken });
+  assert.equal(downloadDocRes.status, 200);
+  assert.equal(downloadDocRes.headers.get("x-content-type-options"), "nosniff", "Header nosniff wajib ada");
+  assert.match(downloadDocRes.headers.get("content-security-policy") || "", /sandbox/, "CSP sandbox wajib ada");
+  assert.notEqual(downloadDocRes.headers.get("content-type"), "text/html", "Content-Type tidak boleh text/html");
+
+  // Missing claim payment file returns 404 (Probe regression fix)
+  const missingClaimFileRes = await api("GET", "/api/claims/clm-4002/file/payment", { token: superToken });
+  assert.equal(missingClaimFileRes.status, 404, "Berkas pembayaran yang belum diunggah harus menghasilkan 404 Not Found");
+
+  // Full backup verification: backup includes _uploaded_files
+  const checkBackupRes = await api("GET", "/api/backup", { token: superToken });
+  assert.equal(checkBackupRes.status, 200);
+  assert.ok(Array.isArray(checkBackupRes.data._uploaded_files), "Backup harus menyertakan array _uploaded_files");
 
   console.log("  ✓ PASS: Seluruh aturan bisnis & integritas transaksional terverifikasi.");
 } finally {
