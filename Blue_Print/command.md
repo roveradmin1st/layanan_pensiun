@@ -1,83 +1,169 @@
-# Pemeriksaan ulang branch setelah push
+# Audit persetujuan dokumen pengajuan — 5 November 2026 WIB
 
-Tanggal: 4 November 2026 WIB. Branch: `fix/security-and-operational-integrity`.
+Permintaan: memvalidasi kegagalan persetujuan dokumen satu per satu oleh Super Admin/Admin Operasional, kelolosan pengajuan tanpa pemeriksaan berkas yang benar, serta kesesuaian kode migrasi dengan GitHub. Ruang lingkup pekerjaan ini adalah audit; tidak ada perubahan kode aplikasi, push, deployment, atau perubahan database pengguna.
 
-Commit remote yang diuji: **`f262fa5cba5a2df9f18b522ded4adf5054193225`**.
-Commit audit sebelumnya: `05a62a547f82546f99e898e1539e13f4c4c3122c`.
-`main` tetap `52ac0b883d903bca2dd35c3dd3ca43a8243d662f`. Hash kedua branch diperiksa ulang setelah tes. Checkout kerja awal tetap bersih; tidak ada perubahan source, merge, push, atau deployment.
+**Kesimpulan:** ditemukan dua bug utama pada commit `c693d42422dae82b033a74e632d5f0911540427c`: kontrak status persetujuan frontend/backend berbeda, dan tahap pengajuan tidak memeriksa kelayakan dokumen. Keduanya direproduksi lewat HTTP pada salinan commit yang bersih dengan database sintetis, `NODE_ENV=production`, JWT acak, dan listener loopback. Pengujian tidak menggunakan VPS atau database klien.
 
-**Keputusan: pembaruan pengaturan/RBAC sudah terverifikasi, tetapi penghalang rilis utama sebelumnya masih dapat direproduksi. Kandidat belum lulus gate penggunaan operasional.**
+## 1. Pemeriksaan GitHub dan batas verifikasi VPS
 
-## Perbaikan yang sudah masuk dan lulus
+Hasil `git ls-remote --heads origin` serta fetch saat audit:
 
-Commit terbaru mengubah delapan file, terutama pengaturan akun dan pembatasan parameter bank.
+| Branch | SHA |
+|---|---|
+| `fix/security-and-operational-integrity` | `c693d42422dae82b033a74e632d5f0911540427c` |
+| `main` | `52ac0b883d903bca2dd35c3dd3ca43a8243d662f` |
 
-- `GET /api/calc/params`: Super Admin dan Admin Ops mendapat 200; Marketing, Sales Manager, dan Admin Cabang mendapat 403.
-- Marketing ditolak mengubah parameter bank melalui PUT.
-- Dashboard Marketing tidak mengirim field omzet kotor dan laba bersih perusahaan yang diuji.
-- Halaman pengaturan memisahkan profil pribadi dan parameter admin pusat; kalkulator tidak lagi meminta parameter lengkap untuk role non-pusat.
-- `npm test`: **19 lulus, 0 gagal, 0 skipped**.
-- `npm run build`: **lulus**, 2.598 modul, selesai 4,40 detik pada mesin audit.
-- Suite HTTP keamanan asli termasuk kasus pembatasan pengaturan baru: **lulus dengan fixture BSI**. Pada seed bersih, suite masih gagal di baris 228 karena aplikasi BSI yang diharapkan tidak tersedia. Fixture dibuat melalui API pada database audit; kode tes tidak diubah.
+Tidak ada commit yang lebih baru pada kedua branch tersebut saat diperiksa. Kandidat yang dipasang melalui panduan migrasi adalah `c693d42`, sehingga bug ini memang ada pada kode yang sudah di-push dan menjadi dasar deployment.
 
-Bukti: [tes backend](/workspace/audit-2026-11-04/recheck-f262fa5/test.log), [build](/workspace/audit-2026-11-04/recheck-f262fa5/build.log), [suite dengan fixture](/workspace/audit-2026-11-04/recheck-f262fa5/security-with-fixture.log), [suite pada seed bersih](/workspace/audit-2026-11-04/recheck-f262fa5/security-fresh.log).
+**Pembaruan verifikasi VPS:** pengguna sudah memberikan hasil pembacaan cwd proses dan checksum. Proses berjalan dari `/srv/layanan-pensiunan/releases/layanan-pensiunan-c693d42-uat/backend`. Keempat checksum (`server.js`, `database.js`, `dist/index.html`, dan bundle `Progress-D0fDWUrm.js`) cocok dengan acuan. Dengan demikian file runtime yang terkait temuan ini sesuai dengan kandidat yang diaudit. Bukti berasal dari output yang diberikan pengguna; agent tidak mengakses VPS secara langsung. Pemeriksaan empat file ini tidak mengklaim seluruh filesystem/configuration/database telah diverifikasi.
 
-## Temuan yang masih harus ditutup
+Backend dan frontend sumber dalam arsip audit berasal dari SHA yang sama. Checkout asli `/workspace/layanan_pensiun` tetap bersih dan tidak dipindahkan dari `main`.
 
-| Prioritas | Temuan dan bukti pengujian ulang | Perbaikan yang diperlukan |
-|---|---|---|
-| **P0** | Fallback JWT di konfigurasi PM2 masih ada. Server production audit menerima token yang ditandatangani dengan nilai fallback dari repo, menghasilkan HTTP 200 sebagai `super_admin`. [Konfigurasi](/workspace/audit-2026-11-04/recheck-f262fa5/ecosystem.config.cjs:16), [hasil](/workspace/audit-2026-11-04/recheck-f262fa5/default-key-result.json). | Hapus fallback produksi pada PM2/Compose; injeksikan kunci acak unik. Tolak kunci kosong/nilai contoh. Uji sesi yang dibuat menggunakan nilai contoh harus 401. |
-| **P1** | Admin `bsi_only` masih bisa PATCH password marketing `all_bank` di cabang yang sama: PATCH 200, login memakai password baru 200, dan akses AMS2 tersedia. [Handler](/workspace/audit-2026-11-04/recheck-f262fa5/backend/src/server.js:2121), [hasil](/workspace/audit-2026-11-04/recheck-f262fa5/bank-scope-user-result.json). | Kebijakan pengelolaan user harus memeriksa scope target selain role/cabang. Cakup list/read/reset/deaktivasi. Reset lintas scope wajib 403 dan password target tidak berubah. |
-| **P1** | HTML inert masih diterima dan dilayani `Content-Type: text/html`, `Content-Disposition: inline`, tanpa CSP sandbox. Tidak ada skrip berbahaya yang dijalankan dalam audit. [Upload](/workspace/audit-2026-11-04/recheck-f262fa5/backend/src/server.js:1323), [hasil](/workspace/audit-2026-11-04/recheck-f262fa5/upload-type-result.json). | Tolak format aktif dan periksa signature isi file; jangan mengandalkan MIME/ekstensi klien. Sajikan dokumen secara aman dan uji PDF/JPG/PNG yang diizinkan. |
-| **P1 — regresi dari perubahan baru** | Role Marketing kini tidak menerima `partnerParams`, sedangkan rekomendasi live memakai fallback lokal. Saat Super Admin mengubah maksimum tenor AMS2 menjadi 60 bulan pada database audit, helper rekomendasi Marketing menghasilkan **120 bulan**, sementara API kalkulator menghasilkan **60 bulan**. [Pengambilan parameter](/workspace/audit-2026-11-04/recheck-f262fa5/frontend/src/pages/Calculator.jsx:1022), [fallback helper](/workspace/audit-2026-11-04/recheck-f262fa5/frontend/src/pages/Calculator.jsx:745), [hasil](/workspace/audit-2026-11-04/recheck-f262fa5/live-recommendation-result.json). | Gunakan hasil rekomendasi dari server atau endpoint terbatas yang hanya mengembalikan batas/hasil yang dibutuhkan. Pertahankan proteksi parameter admin. Uji perubahan konfigurasi muncul konsisten pada Admin dan Marketing. Bukti ini menjalankan helper frontend asli di Node VM dan membandingkannya dengan API; interaksi browser belum diuji. |
+## 2. P1 — Tombol Terima per berkas selalu ditolak backend
 
-## Kekurangan lama yang masih terkonfirmasi
+- `frontend/src/pages/Progress.jsx:175` menjalankan `review(d.key, "diterima")`.
+- Fungsi di `:114–117` mengirim nilai tersebut ke `POST /api/applications/:id/documents/:key/review`.
+- `backend/src/server.js:2132` memang mengizinkan `super_admin`, `admin_ops`, dan `admin_branch`.
+- Namun whitelist pada `:2143` hanya mengizinkan `lengkap`, `ditolak`, dan `diunggah`.
+- Hasil untuk Super Admin maupun Admin Operasional: **HTTP400, `Status verifikasi dokumen tidak valid.`** Status berkas tetap `diunggah`.
 
-- Probe production tambahan: **14 kasus; 10 lulus dan 4 gagal**. Kasus gagal: forgot-password 404, reset-password 404, backup JSON tidak berisi bytes dokumen, dan bukti pembayaran yang belum ada tetap dibalas PDF pengganti 200. [Hasil](/workspace/audit-2026-11-04/recheck-f262fa5/production-probe-results.json).
-- Akun seed/upgrade otomatis, hash password statis, dan fallback reseed pada kegagalan state belum berubah dari audit sebelumnya. Tidak diuji ulang secara terpisah pada task ini; temuan berdasarkan perbandingan source dengan commit sebelumnya.
-- Suite keamanan masih di luar `npm test`. Lulusnya suite tersebut belum mencakup celah reset user lintas scope, HTML inline, atau konfigurasi fallback JWT.
+Kontrol uji dengan status `lengkap` menghasilkan200, tetapi bukan solusi operasional: UI menghitung dan menampilkan status diterima berdasarkan `diterima`, bukan `lengkap`. Seed/checklist juga memakai `diterima`. Mengubah tombol menjadi `lengkap` saja akan membuat status dan indikator kelengkapan tidak konsisten.
 
-## Langkah cepat pasti
+Riwayat Git menunjukkan whitelist yang tidak selaras ditambahkan pada commit `60a44b447526b66ed1d33793d6484ae0110a55de`, 1 November 2026. Frontend sudah mengirim `diterima` sebelumnya. Ini regresi kode, bukan bukti pembatasan role Super Admin atau konfigurasi Nginx.
 
-1. Tutup P0 dan tiga temuan P1 pada tabel, lalu tambahkan regression case yang mereproduksi masing-masing.
-2. Jalankan kembali build, 19 tes, suite keamanan dengan fixture mandiri, serta probe production pada SHA final.
-3. Gunakan runbook migrasi sebelumnya: satu proses backend, Node 24, reverse proxy HTTPS, akses penguji terbatas, data UAT sintetis, JWT unik, akun penguji unik, dan backup SQLite penuh.
-4. Jalankan checklist admin pada 5 November 2026 WIB. Pengujian VPS, DNS/TLS, browser/PWA, kapasitas, serta data aktual tetap belum dilakukan.
+## 3. P1 — Pengajuan dapat maju walaupun dokumen kosong, belum diperiksa, atau ditolak
 
-[Runbook migrasi](/workspace/reports/RENCANA-MIGRASI-UAT-2026-11-04.md) dan [26 kasus UAT admin](/workspace/reports/CHECKLIST-UAT-ADMIN-2026-11-05.csv) tetap berlaku dengan status hasil pemeriksaan ulang ini.
+`frontend/src/pages/Progress.jsx:203–205` menampilkan Ajukan/Teruskan berdasarkan tahap dan pihak yang menunggu. Kondisi tombol tidak memeriksa bahwa seluruh berkas wajib sudah diterima. `backend/src/server.js:2228–2241` kemudian menjalankan submit/forward tanpa validasi checklist.
+
+Reproduksi lewat alur yang juga tersedia pada UI:
+
+1. Buat lead dan simulasi sintetis yang layak, lalu buat pengajuan baru.
+2. Upload satu PDF pada checklist pengajuan.
+3. Tolak berkas tersebut dengan alasan ketidaksesuaian identitas; API berhasil200.
+4. Marketing mengajukan kembali; API submit berhasil200 meskipun satu berkas masih ditolak dan tujuh belum diunggah.
+5. Super Admin atau Admin Operasional meneruskan pengajuan; API forward berhasil200 dan stage menjadi `verifikasi_bank`.
+6. Dokumen tetap berstatus `ditolak`; tujuh lainnya tetap kosong. Pengajuan maju tanpa menjadikan semua berkas diterima.
+
+Kasus tambahan yang terbukti:
+
+- **0/8 dokumen diunggah:** submit200 dan forward200.
+- **8/8 diunggah, 0 diterima:** forward200 tanpa review individual.
+- Pemanggilan `advance` langsung dari fase upload juga berhasil200, menuju `pengajuan_bank` tanpa berkas.
+
+Jadi yang terlihat sebagai “approve sekaligus” sebenarnya perpindahan tahap pengajuan yang **melewati validasi dokumen**. Setelah berpindah dari `upload_dokumen`, UI menyembunyikan tombol review individual (`Progress.jsx:173`), sehingga pengguna makin sulit melanjutkan pemeriksaan per berkas.
+
+Penolakan individual sendiri sudah ada dan mewajibkan catatan: tanpa alasan400, dengan alasan200. Yang tidak berjalan adalah persetujuan individual dan penguncian tahap berikutnya ketika berkas belum memenuhi syarat.
+
+## 4. Temuan terkait yang perlu masuk desain perbaikan
+
+**Berkas harus benar-benar ada.** Review API menerima `lengkap` bahkan pada item dengan `filename=null` dan tanpa unggahan. Endpoint unduh pengajuan (`server.js:2122`) juga mengembalikan PDF simulasi pengganti ketika BLOB dokumen tidak ada; kontrol uji pada pengajuan baru menghasilkan200. Keberhasilan unduh200 tidak selalu berarti berkas persyaratan yang sesungguhnya tersedia.
+
+**Dokumen lead dan dokumen pengajuan adalah dua tempat berbeda.** `LeadDetailSheet.jsx:19–60` menyediakan upload/buka/hapus, tanpa review dokumen. Metadata lead disimpan dalam `lead.documents`; pengajuan baru membuat delapan checklist kosong (`server.js:1166–1173`). Satu dokumen yang diunggah di lead menghasilkan0 dokumen pada checklist pengajuan baru. Jika dokumen lead ingin dipakai kembali, perlu aturan pemetaan dan pilihan berkas yang jelas, tanpa otomatis menganggapnya sudah disetujui.
+
+**Indikator UI mencampur unggah dan persetujuan.** `Progress.jsx:119` menghitung `diunggah` dan `diterima` bersama. Angka8/8 berarti semua berkas diunggah/tersedia menurut status, bukan delapan berkas sudah diverifikasi. Perlu dua indikator: jumlah diunggah dan jumlah diterima.
+
+**Tampilan role perlu diselaraskan.** `isAdmin` mencakup Sales Manager sehingga UI bisa menampilkan tombol review, sementara API menolak403. Ini temuan terpisah dari kegagalan dua role yang dilaporkan pengguna; jangan memperluas hak akses Sales Manager hanya untuk menghilangkan error.
+
+## 5. Bukti pengujian
+
+| Skenario | Hasil aktual |
+|---|---|
+| Super Admin menerima PDF dengan payload dari UI | 400, status tetap `diunggah` |
+| Admin Operasional menerima PDF dengan payload dari UI | 400, status tetap `diunggah` |
+| Kedua role menolak tanpa alasan | 400 |
+| Kedua role menolak dengan alasan | 200, status `ditolak` |
+| Satu dokumen ditolak + tujuh kosong, lalu submit/forward | 200 untuk kedua role, stage `verifikasi_bank` |
+| Delapan diunggah, tidak ada review diterima, lalu forward | 200 |
+| Seluruh dokumen kosong, lalu submit/forward | 200 |
+| `advance` dipanggil langsung saat upload | 200 |
+| Marketing/Sales Manager mencoba review | 403 |
+| `lengkap` untuk item tanpa file | 200, filename tetap null |
+
+Script utama menyelesaikan12 kasus bukti dengan exit0: assertion-nya membuktikan perilaku saat ini, **bukan menyatakan aplikasi sudah lulus kebutuhan bisnis**. Kontrol tambahan membuktikan penerimaan item tanpa file dan PDF pengganti. Tidak ada tes destruktif dijalankan pada aplikasi live.
+
+Suite keamanan lama tidak mencakup route review dokumen. Pada `backend/tests/security-and-api.test.mjs:650–699`, pengajuan langsung diteruskan/dimajukan tanpa menyiapkan delapan berkas dan review yang valid. Ini menjelaskan mengapa suite sebelumnya lulus, tetapi bug approval tidak tertangkap. Fixture dan assertion perlu diperbaiki saat guard bisnis diterapkan; jangan sekadar melonggarkan test agar hijau.
+
+## 6. Usulan aturan bisnis yang dapat ditinjau sebelum pengeditan
+
+1. **Status per dokumen konsisten:** kosong → diunggah/menunggu review → diterima atau ditolak/perlu revisi. Gunakan `diterima` sebagai nilai kanonis; nilai lama `lengkap`, jika harus didukung, perlu dipetakan dengan mempertimbangkan bukti unggahan/review. Jangan otomatis mempercayai status lama tanpa bukti.
+2. **Review per berkas:** petugas yang berwenang membaca berkas, memilih Terima atau Tolak, dan mengisi alasan saat menolak. Simpan siapa, kapan, dan versi berkas yang diperiksa.
+3. **Validasi file:** item yang kosong, BLOB hilang, atau versi berubah tidak dapat diterima. Jenis/ukuran file diperiksa mesin; kebenaran isi dan kecocokan identitas tetap penilaian petugas kecuali nanti dibuat fitur verifikasi tambahan.
+4. **Reupload:** hanya berkas yang diganti kembali menjadi menunggu review. Persetujuan versi sebelumnya tidak otomatis berlaku untuk versi baru; berkas lain yang tidak berubah mempertahankan statusnya.
+5. **Submit untuk pemeriksaan:** seluruh persyaratan wajib yang berlaku sudah diunggah dan tidak sedang ditolak tanpa perbaikan. Submit belum berarti semua sudah diterima.
+6. **Teruskan ke bank:** seluruh dokumen wajib memiliki file yang valid dan status diterima pada versi terbaru. Satu berkas kosong, ditolak, atau menunggu review harus memblokir aksi dan menampilkan daftar berkas penghambat.
+7. **Validasi di backend dan UI:** tombol boleh nonaktif untuk membantu pengguna, tetapi route forward/advance tetap menolak permintaan langsung yang melompati pemeriksaan atau tahap.
+8. **Tahap dan revisi eksplisit:** perubahan dokumen setelah tahap bank memerlukan alur revisi terkontrol; tidak diam-diam mengubah dokumen yang sudah ditinjau.
+9. **Data yang sudah terlanjur maju:** jangan otomatis menurunkan tahap, menghapus, atau menandai seluruh checklist diterima. Identifikasi pengajuan terdampak melalui pemeriksaan baca-saja, lalu tentukan rekonsiliasi dengan pemilik sistem.
+
+Persyaratan berkas yang tidak berlaku bagi kasus tertentu perlu kebijakan tersendiri; jangan menganggap dokumen kosong otomatis boleh dilewati. Reuse dokumen lead membutuhkan pemetaan kategori ke checklist dan versi file yang jelas, bukan persetujuan otomatis.
+
+## 7. Kriteria penerimaan perbaikan
+
+- Super Admin dan Admin Operasional dapat menerima masing-masing berkas melalui tombol UI; hasil bertahan setelah refresh dan restart pada database uji.
+- Menolak satu berkas dengan alasan hanya mengubah berkas terkait, menampilkan alasan, dan menghalangi penerusan pengajuan.
+- Reupload berkas ditolak mengubah statusnya menjadi menunggu review; tujuh berkas lain tidak ikut direset.
+- Semua berkas kosong, sebagian kosong, sebagian belum direview, serta satu berkas ditolak menghasilkan penolakan forward pada API, bukan hanya tombol nonaktif.
+- Setelah semua syarat diterima pada versi yang benar, forward berhasil dan history mencatat aktor/waktu.
+- Versi berkas yang berubah sejak petugas membukanya menghasilkan konflik/reload sebelum review disimpan, bukan persetujuan terhadap file yang belum dibaca.
+- Pengguna tanpa role/cabang/bank-scope yang sesuai tetap ditolak; tombol UI sesuai izin tersebut.
+- Dokumen yang tidak ada tidak diganti diam-diam dengan PDF simulasi sebagai bukti persyaratan.
+- Fixture keamanan memasukkan unggahan/review yang nyata sebelum menguji tahap bank. Seluruh tes memakai data sintetis.
+
+Komponen yang diperkirakan terdampak: `backend/src/server.js`, `frontend/src/pages/Progress.jsx`, tes API khusus dokumen, serta normalisasi data terbatas jika status legacy ditemukan. Pemetaan lead ke pengajuan dan rekonsiliasi data lama perlu ruang lingkup yang dinyatakan terpisah. **Belum ada patch diterapkan.**
+
+## 8. Checksum acuan untuk pemeriksaan VPS
+
+| File | SHA256 |
+|---|---|
+| `backend/src/server.js` | `530355fb04ccfb0c1aabc01223ae70b5d3144a7b6ccd83baba6c7a063a4aa5b3` |
+| `backend/src/db/database.js` | `da003e4e0f5274048139531f0123b6e358b2cbe68ab8e1d38501a6089b266594` |
+| `frontend/dist/index.html` | `70563dee3a6d245f46c7df1a025308e710676268535fd9299de37d0cad497fce` |
+| `frontend/dist/assets/Progress-D0fDWUrm.js` | `1309ddc0e1e48758b7fbcc45acb06ec9ddb835f96166c96b010a314ce106fa3a` |
+
+Backend acuan berasal dari arsip Git c693d42. Frontend acuan adalah build cloud dari commit/lockfile yang sama; nama bundle juga cocok dengan output build VPS yang diberikan pengguna. Perbedaan checksum perlu ditelusuri (termasuk kondisi build), bukan otomatis dianggap ada perubahan tidak sah.
+
+Bukti lokal:
+
+- [Reproduksi utama](/workspace/audit-2026-11-05/document-approval/reproduction.log)
+- [Hasil terstruktur](/workspace/audit-2026-11-05/document-approval/results.json)
+
 
 ---
 
-## Status Penyelesaian Temuan & Kesiapan Migrasi (5 November 2026 WIB)
+## 9. Status Implementasi & Resolusi Temuan (5 November 2026 WIB Malam)
 
-**Commit Final: `deb8a22`** pada branch `fix/security-and-operational-integrity`.  
-**Keputusan: Seluruh blocker temuan audit (P0, 3x P1, 4 probe deficiencies, dan fixture BSI seed bersih) telah DITUTUP dan DIVERIFIKASI LULUS 100%. Kandidat SIAP masuk gate migrasi UAT.**
+Telah diimplementasikan perbaikan komprehensif pada backend, frontend, dan security test suite untuk menutup temuan audit persetujuan dokumen serta menyelaraskan kewenangan Sales Manager sesuai insight klien:
 
-### Matriks Penyelesaian Temuan
+### A. Penutupan Bug Persetujuan Dokumen (P1)
+1. **Whitelist & Normalisasi Status Dokumen**:
+   - Endpoint `POST /api/applications/:id/documents/:key/review` kini menerima status `"diterima"` (dan menormalisasi `"lengkap"` legacy menjadi `"diterima"`).
+   - Menolak (HTTP 400) review persetujuan dokumen jika berkas belum diunggah (`!doc.filename`).
+   - Endpoint unduh dokumen `GET /api/applications/:id/documents/:key` mengembalikan HTTP 404 jika berkas belum diunggah (menghilangkan silent fake PDF).
+   - Catatan revisi wajib diisi jika status `"ditolak"`. Reupload dokumen hanya mengubah status dokumen terkait menjadi `diunggah` tanpa mereset dokumen lain.
 
-| Prioritas | Temuan Audit | Status | Tindakan Penyelesaian & Bukti Regresi |
-|---|---|---|---|
-| **P0** | Fallback JWT di konfigurasi PM2/Compose & session spoofing | **LULUS / SELESAI** | 1. Fallback rahasia dihapus dari `ecosystem.config.cjs` & `docker-compose.yml`.<br>2. `server.js` menolak startup di mode produksi jika `JWT_SECRET` kosong, kurang dari 32 karakter, atau memakai nilai contoh/fallback repo (`[FATAL] Production startup aborted`).<br>3. Token yang ditandatangani dengan kunci contoh repo ditolak dengan HTTP 401 Unauthorized.<br>*Regression case:* Bagian 2e di `security-and-api.test.mjs`. |
-| **P1** | Admin `bsi_only` manipulasi user `all_bank` lintas scope | **LULUS / SELESAI** | 1. Implementasi helper `canAccessUserScope(actor, target)` pada `server.js`.<br>2. Enforce scope isolation pada `GET /api/users` (filter by scope), `GET /api/users/:id`, `POST /api/users`, dan `PATCH /api/users/:id`.<br>3. Admin `bsi_only` dilarang melihat, membaca (403), reset password (403), maupun menonaktifkan (403) user `all_bank`. Password user target terbukti tidak berubah.<br>*Regression case:* Bagian 3a.0 di `security-and-api.test.mjs`. |
-| **P1** | Format aktif (HTML/SVG/skrip) diterima & disajikan inline | **LULUS / SELESAI** | 1. Implementasi `detectSafeDocumentType` yang memeriksa signature magic bytes file (`%PDF-`, PNG header, JPEG SOI) pada seluruh endpoint unggah dokumen lead, aplikasi, dan klaim.<br>2. Upload file HTML inert atau file yang disamarkan (spoofed MIME/ekstensi) ditolak dengan HTTP 400 Bad Request.<br>3. Pengunduhan dokumen menyertakan security headers wajib: `X-Content-Type-Options: nosniff` dan `Content-Security-Policy: sandbox`.<br>*Regression case:* Bagian 4e di `security-and-api.test.mjs`. |
-| **P1 — Regresi** | Inkonsistensi rekomendasi live Marketing vs Admin (tenor AMS2) | **LULUS / SELESAI** | 1. Endpoint baru `GET /api/calc/limits` menyediakan batas operasional (`maxTenorMonths`, `tiers`) untuk marketing tanpa membocorkan margin admin pusat.<br>2. `Calculator.jsx` mengambil batas dari `/calc/limits` dan fungsi `computeAms2LiveRecommendation` disesuaikan untuk membaca konfigurasi dinamis.<br>3. Saat Admin mengubah limit tenor AMS2 menjadi 60 bulan, helper frontend menghasilkan 60 bulan dan konsisten 100% dengan API `/api/calc/max`.<br>*Regression case:* Bagian 3c di `security-and-api.test.mjs` (eksekusi Node VM vs API). |
-| **Probe Production** | 4 kasus gagal (forgot/reset password, missing claim file 404, backup bytes) | **LULUS / SELESAI** | 1. `POST /api/auth/forgot-password` (200 OK) & `POST /api/auth/reset-password` (400 token tidak valid / 200 reset sukses).<br>2. Bukti bayar klaim yang belum diunggah menghasilkan HTTP 404 Not Found (bukan fake PDF 200).<br>3. Backup & restore JSON menyertakan array `_uploaded_files` berisi base64 payload dokumen.<br>*Regression case:* Bagian 2f & 4e di `security-and-api.test.mjs`. |
-| **Seed Bersih** | Suite keamanan gagal pada seed bersih karena ketiadaan aplikasi BSI | **LULUS / SELESAI** | Pre-seed aplikasi `app-3003` (BSI Prapensiun Berkah) di `createInitialState()` dan `ensureStoreUpgrades()` pada `database.js`. Test suite keamanan berjalan mandiri tanpa perlu inject fixture manual. |
+### B. Penguncian Tahapan Pengajuan (P1)
+1. **Validasi Sebelum Pengajuan (Submit)**:
+   - Endpoint `POST /api/applications/:id/action` dengan aksi `submit` mewajibkan seluruh 8 dokumen persyaratan telah diunggah dan tidak ada yang berstatus `ditolak` (HTTP 400 jika belum lengkap).
+2. **Validasi Sebelum Diteruskan ke Bank (Forward & Advance)**:
+   - Aksi `forward` dan aksi `advance` dari tahap `upload_dokumen` mewajibkan seluruh dokumen dalam checklist telah berstatus `"diterima"` dan memiliki berkas valid. Permintaan langsung yang melompati berkas ditolak dengan HTTP 400 disertai daftar berkas yang belum disetujui.
+3. **Indikator & Proteksi UI (`Progress.jsx`)**:
+   - Indikator kelengkapan memisahkan jumlah diunggah dan jumlah disetujui/diterima (`X/8 Diunggah • Y/8 Diterima`).
+   - Tombol Terima/Tolak hanya muncul bagi petugas yang berwenang (`super_admin`, `admin_ops`, `admin_branch`) dan hanya pada dokumen yang berkas fisiknya sudah terunggah.
+   - Tombol Submit dan Forward menampilkan notifikasi validasi jika syarat berkas belum terpenuhi.
 
-### Hasil Verifikasi Lengkap
+### C. Penyelarasan Peran & Kewenangan Sales Manager (Insight Klien)
+1. **Approval Klaim**:
+   - Sales Manager dilarang menyetujui (`approve`) atau menolak (`reject`) klaim. Wewenang persetujuan & pencairan klaim mutlak berada di `super_admin` dan `admin_ops` (HTTP 403 jika diakses peran lain).
+2. **Tambah Pengguna Baru**:
+   - Penambahan tim baru dibatasi mutlak untuk `super_admin` dan `admin_ops` (`POST /api/users` -> HTTP 403 bagi Sales Manager). Tombol "Tambah Pengguna" di UI disembunyikan untuk Sales Manager.
+3. **Perubahan Data Pengguna (Edit Tim)**:
+   - Sales Manager berwenang mengubah profil tim marketing di cabangnya sendiri (`PATCH /api/users/:id` -> HTTP 200).
+   - Dilarang keras mengubah pengguna di luar cabangnya (HTTP 403), dilarang mengubah role pengguna, dan dilarang memindahkan cabang tim.
+4. **Fungsi Supervisi & Monitoring**:
+   - Sales Manager difokuskan untuk melihat performa tim di cabangnya via Dashboard (leaderboard marketing, volume closing, pipeline) dan memantau status pembayaran insentif tim (melihat daftar klaim & bukti bayar yang telah disetujui/dibayarkan).
+   - Navigasi Audit Log di sidebar disesuaikan khusus untuk `super_admin` dan `admin_ops`.
 
-1. **Baseline Regression Backend (`npm test`)**:
-   - `tests/baseline-regression.test.mjs`, `tests/bsi-pensiun-preview.test.mjs`, `tests/bsi-pensiun-api.test.mjs`.
-   - **19 lulus, 0 gagal, 0 skipped** (durasi ~3 detik).
-2. **Security, RBAC & Operational Integrity Suite (`security-and-api.test.mjs`)**:
-   - 5/5 bagian lulus 100%:
-     - [1/5] Baseline Regression Kalkulator BSI PP10 via API (Akurat 100%).
-     - [2/5] Penutupan Celah Autentikasi, JWT Fallback Rejection, Forgot/Reset Password.
-     - [3/5] Otorisasi Role, Cabang, Bank-Scope Isolation (User Mgmt), Konsistensi Rekomendasi AMS2, Alur Leads & Anti-Fraud.
-     - [4/5] Aturan Bisnis, Upload Magic Bytes Sniffing, Missing Claim File 404, Backup Dokumen.
-     - [5/5] Pemulihan snapshot database otomatis ke kondisi bersih.
-   - **Status: 100% PASS**.
-3. **Frontend Production Build (`npm run build`)**:
-   - Vite v5.4.21: 2.598 modul ditransformasi tanpa error (durasi ~43 detik).
-4. **Kesiapan UAT 5 November 2026 WIB**:
-   - Seluruh blocker telah selesai diatasi dan siap digunakan untuk migrasi UAT sesuai checklist admin.
+### D. Hasil Verifikasi Otomatis
+- **Baseline Regression Backend (`npm test`)**: 19 lulus, 0 gagal.
+- **Security, RBAC, Business Rules & Regression Test Suite**: 5/5 suite lulus 100% (termasuk verifikasi review status diterima, guard dokumen kosong, guard forward sebelum diterima, serta proteksi kewenangan Sales Manager).
+- **Frontend Production Build (`npm run build`)**: Lulus, 2.598 modul ditransformasi tanpa error.

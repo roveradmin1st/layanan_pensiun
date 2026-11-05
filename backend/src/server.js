@@ -2110,6 +2110,10 @@ app.get("/api/applications/:id/documents/:key", requireAuth, (req, res) => {
   if (!canAccessApplication(req.user, appItem)) {
     return res.status(403).json({ detail: "Anda tidak memiliki akses untuk melihat dokumen pengajuan ini." });
   }
+  const doc = appItem.checklist.find((d) => d.key === req.params.key);
+  if (!doc || !doc.filename) {
+    return res.status(404).json({ detail: "Berkas dokumen belum diunggah." });
+  }
   const fileId = `appdoc-${appItem.id}-${req.params.key}`;
   const stored = getUploadedFile(fileId);
   if (stored) {
@@ -2119,14 +2123,17 @@ app.get("/api/applications/:id/documents/:key", requireAuth, (req, res) => {
     res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
     return res.send(Buffer.from(stored.data));
   }
-  // Fallback generated PDF for pre-seeded demo documents
-  const sim = store.simulations.find((s) => s.id === appItem.sim_id) || store.simulations[0];
-  const pdfBuf = generateSimulationPdfBuffer(sim);
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `inline; filename="${req.params.key}.pdf"`);
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
-  res.send(pdfBuf);
+  // Fallback for pre-seeded demo documents with defined filename
+  if (doc.filename) {
+    const sim = store.simulations.find((s) => s.id === appItem.sim_id) || store.simulations[0];
+    const pdfBuf = generateSimulationPdfBuffer(sim);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${doc.filename}"`);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+    return res.send(pdfBuf);
+  }
+  return res.status(404).json({ detail: "Berkas dokumen tidak ditemukan." });
 });
 
 app.post("/api/applications/:id/documents/:key/review", requireAuth, requireRoles("super_admin", "admin_ops", "admin_branch"), (req, res) => {
@@ -2140,23 +2147,34 @@ app.post("/api/applications/:id/documents/:key/review", requireAuth, requireRole
   if (!doc) return res.status(404).json({ detail: "Dokumen tidak ditemukan" });
 
   const { status, note } = req.body || {};
-  if (!["lengkap", "ditolak", "diunggah"].includes(status)) {
+  const normalizedStatus = status === "lengkap" ? "diterima" : status;
+  if (!["diterima", "ditolak", "diunggah"].includes(normalizedStatus)) {
     return res.status(400).json({ detail: "Status verifikasi dokumen tidak valid." });
   }
-  if (status === "ditolak" && !String(note || "").trim()) {
+  if (normalizedStatus === "diterima" && !doc.filename) {
+    return res.status(400).json({ detail: "Dokumen belum diunggah sehingga tidak dapat disetujui (diterima)." });
+  }
+  if (normalizedStatus === "ditolak" && !String(note || "").trim()) {
     return res.status(400).json({ detail: "Catatan alasan penolakan/revisi dokumen wajib diisi." });
   }
 
   withTransaction(() => {
-    doc.status = status;
+    doc.status = normalizedStatus;
     doc.note = note || "";
-    if (status === "ditolak") {
+    doc.reviewed_by = req.user.name;
+    doc.reviewed_at = new Date().toISOString();
+    if (normalizedStatus === "ditolak") {
       appItem.pending = { party: "marketing", type: "revisi", note: `Revisi dokumen ${doc.label}: ${note}` };
+    } else if (normalizedStatus === "diterima") {
+      const allAccepted = appItem.checklist.every((d) => d.status === "diterima" && d.filename);
+      if (allAccepted && appItem.pending?.type === "revisi") {
+        appItem.pending = { party: "admin_ops", type: "pemeriksaan", note: "Seluruh dokumen telah diperbaiki dan diterima." };
+      }
     }
     appItem.history.push({
       id: `h-${Date.now()}`,
-      action: `review_${status}`,
-      note: `${doc.label}: ${status}${note ? ` (${note})` : ""}`,
+      action: `review_${normalizedStatus}`,
+      note: `${doc.label}: ${normalizedStatus}${note ? ` (${note})` : ""}`,
       user_name: req.user.name,
       role: req.user.role,
       at: new Date().toISOString()
@@ -2203,6 +2221,28 @@ app.post("/api/applications/:id/action", requireAuth, (req, res) => {
   }
 
   // Validate required inputs before transaction
+  if (action === "submit") {
+    const unuploaded = (appItem.checklist || []).filter((d) => !d.filename);
+    if (unuploaded.length > 0) {
+      return res.status(400).json({
+        detail: `Tidak dapat mengajukan pemeriksaan: masih ada ${unuploaded.length} dokumen yang belum diunggah (${unuploaded.map((d) => d.label).join(", ")}).`
+      });
+    }
+    const rejected = (appItem.checklist || []).filter((d) => d.status === "ditolak");
+    if (rejected.length > 0) {
+      return res.status(400).json({
+        detail: `Tidak dapat mengajukan pemeriksaan: terdapat ${rejected.length} dokumen berstatus ditolak yang perlu diperbaiki (${rejected.map((d) => d.label).join(", ")}).`
+      });
+    }
+  }
+  if (action === "forward") {
+    const notAccepted = (appItem.checklist || []).filter((d) => d.status !== "diterima" || !d.filename);
+    if (notAccepted.length > 0) {
+      return res.status(400).json({
+        detail: `Pengajuan belum dapat diteruskan ke bank: terdapat ${notAccepted.length} dokumen yang belum diverifikasi dan disetujui (${notAccepted.map((d) => d.label).join(", ")}).`
+      });
+    }
+  }
   if (action === "request_revision" && !String(note || "").trim()) {
     return res.status(400).json({ detail: "Catatan revisi wajib diisi" });
   }
@@ -2216,6 +2256,14 @@ app.post("/api/applications/:id/action", requireAuth, (req, res) => {
     return res.status(400).json({ detail: "Alasan penolakan bank wajib diisi" });
   }
   if (action === "advance") {
+    if (appItem.stage === "upload_dokumen") {
+      const notAccepted = (appItem.checklist || []).filter((d) => d.status !== "diterima" || !d.filename);
+      if (notAccepted.length > 0) {
+        return res.status(400).json({
+          detail: `Tahap pengajuan tidak dapat dimajukan: seluruh dokumen wajib diverifikasi dan disetujui (diterima) terlebih dahulu (${notAccepted.map((d) => d.label).join(", ")}).`
+        });
+      }
+    }
     const nextIdx = Math.min(APP_STAGES.length - 2, appItem.stage_index + 1);
     const nextStage = APP_STAGES[nextIdx];
     if (nextStage.key === "booking_live" && (!booking_date || !credit_no)) {
@@ -2416,15 +2464,22 @@ app.post("/api/claims/:id/action", requireAuth, (req, res) => {
   if (!canAccessClaim(req.user, claim)) {
     return res.status(403).json({ detail: "Anda tidak memiliki akses pada klaim ini." });
   }
-  if (claim.status === "PAID") {
-    return res.status(400).json({ detail: "Klaim yang sudah dibayar (PAID) bersifat final dan tidak dapat diubah." });
-  }
-
   const { action, note, amount } = req.body || {};
   const map = { submit: "SUBMITTED", review: "REVIEW", revision: "REVISION", approve: "PAID", reject: "REJECTED" };
   const nextStatus = map[action];
   if (!nextStatus) {
     return res.status(400).json({ detail: "Aksi klaim tidak valid." });
+  }
+
+  if (action === "approve" && !["super_admin", "admin_ops"].includes(req.user.role)) {
+    return res.status(403).json({ detail: "Hanya Admin Operasional atau Super Admin yang berwenang menyetujui klaim." });
+  }
+  if (action === "reject" && !["super_admin", "admin_ops"].includes(req.user.role)) {
+    return res.status(403).json({ detail: "Hanya Admin Operasional atau Super Admin yang berwenang menolak klaim." });
+  }
+
+  if (claim.status === "PAID") {
+    return res.status(400).json({ detail: "Klaim yang sudah dibayar (PAID) bersifat final dan tidak dapat diubah." });
   }
 
   // Validate amount modification authorization & non-negative business rule
@@ -2632,7 +2687,7 @@ app.get("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops", 
   res.json(sanitizeUser(target));
 });
 
-app.post("/api/users", requireAuth, requireRoles("super_admin", "admin_ops", "admin_branch", "sales_manager"), (req, res) => {
+app.post("/api/users", requireAuth, requireRoles("super_admin", "admin_ops"), (req, res) => {
   const store = getStore();
   const body = req.body || {};
   const targetRole = body.role || "marketing";
@@ -2641,9 +2696,6 @@ app.post("/api/users", requireAuth, requireRoles("super_admin", "admin_ops", "ad
   }
   if (req.user.role === "admin_ops" && !["admin_branch", "sales_manager", "marketing"].includes(targetRole)) {
     return res.status(403).json({ detail: "Admin Operasional hanya dapat membuat akun Admin Cabang/Mitra, Sales Manager, atau Marketing." });
-  }
-  if ((req.user.role === "admin_branch" || req.user.role === "sales_manager") && targetRole !== "marketing") {
-    return res.status(403).json({ detail: `${ROLE_LABEL[req.user.role]} hanya dapat membuat akun Marketing.` });
   }
   if (isBsiScopedUser(req.user) && body.bank_scope && body.bank_scope !== "bsi_only") {
     return res.status(403).json({ detail: "Admin BSI hanya dapat membuat pengguna dengan cakupan khusus BSI." });

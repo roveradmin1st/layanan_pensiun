@@ -116,12 +116,16 @@ function DocChecklist({ app, admin, canUpload, onChanged }) {
     if (status === "ditolak" && !note) return;
     try { await api.post(`/applications/${app.id}/documents/${key}/review`, { status, note }); toast.success(status === "ditolak" ? "Dokumen ditandai perlu revisi" : "Dokumen diterima"); onChanged(); } catch (e) { toast.error(errMsg(e)); }
   };
-  const done = app.checklist.filter((d) => ["diunggah", "diterima"].includes(d.status)).length;
+  const totalDocs = app.checklist.length;
+  const uploadedDocs = app.checklist.filter((d) => Boolean(d.filename)).length;
+  const acceptedDocs = app.checklist.filter((d) => d.status === "diterima").length;
+  const rejectedDocs = app.checklist.filter((d) => d.status === "ditolak").length;
   return (
     <div data-testid="doc-checklist">
       <input ref={ref} type="file" accept="application/pdf,.pdf" className="hidden" onChange={(e) => upload(e.target.files[0])} data-testid="app-doc-file-input" />
       <p className="mb-2 text-xs text-slate-500" data-testid="doc-progress">
-        Kelengkapan Berkas: <b className="font-semibold text-slate-800">{done}/{app.checklist.length}</b> dokumen (PDF)
+        Kelengkapan Berkas: <b className="font-semibold text-slate-800">{uploadedDocs}/{totalDocs}</b> Diunggah • <b className="font-semibold text-[#078D67]">{acceptedDocs}/{totalDocs}</b> Diterima
+        {rejectedDocs > 0 && <span className="ml-2 font-semibold text-red-600">• {rejectedDocs} Perlu Revisi</span>}
       </p>
       <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white">
         {app.checklist.map((d) => (
@@ -170,14 +174,18 @@ function DocChecklist({ app, admin, canUpload, onChanged }) {
                   <FileUp className="h-3.5 w-3.5" />
                 </Button>
               )}
-              {admin && d.status && app.stage === "upload_dokumen" && (
+              {admin && d.filename && app.stage === "upload_dokumen" && (
                 <>
-                  <Button size="sm" variant="ghost" className="h-8 text-[#078D67] hover:bg-emerald-50 px-2 font-medium" onClick={() => review(d.key, "diterima")} data-testid={`accept-${d.key}`}>
-                    Terima
-                  </Button>
-                  <Button size="sm" variant="ghost" className="h-8 text-red-600 hover:bg-red-50 px-2 font-medium" onClick={() => review(d.key, "ditolak")} data-testid={`reject-${d.key}`}>
-                    Tolak
-                  </Button>
+                  {d.status !== "diterima" && (
+                    <Button size="sm" variant="ghost" className="h-8 text-[#078D67] hover:bg-emerald-50 px-2 font-medium" onClick={() => review(d.key, "diterima")} data-testid={`accept-${d.key}`}>
+                      Terima
+                    </Button>
+                  )}
+                  {d.status !== "ditolak" && (
+                    <Button size="sm" variant="ghost" className="h-8 text-red-600 hover:bg-red-50 px-2 font-medium" onClick={() => review(d.key, "ditolak")} data-testid={`reject-${d.key}`}>
+                      Tolak
+                    </Button>
+                  )}
                 </>
               )}
             </div>
@@ -192,22 +200,62 @@ function ActionPanel({ app, user, onChanged }) {
   const [v, setV] = useState({ note: "", process_date: new Date().toISOString().slice(0, 10), ref_no: "", booking_date: "", credit_no: "" });
   const [busy, setBusy] = useState(false);
   const role = user.role, p = app.pending || {};
+  const isOpsOrAdmin = ["super_admin", "admin_ops", "admin_branch"].includes(role);
+  const isMarketing = role === "marketing";
+
+  const totalDocs = app.checklist?.length || 0;
+  const uploadedDocs = (app.checklist || []).filter((d) => Boolean(d.filename)).length;
+  const acceptedDocs = (app.checklist || []).filter((d) => d.status === "diterima").length;
+  const rejectedDocs = (app.checklist || []).filter((d) => d.status === "ditolak").length;
+  const allUploaded = totalDocs > 0 && uploadedDocs === totalDocs && rejectedDocs === 0;
+  const allAccepted = totalDocs > 0 && acceptedDocs === totalDocs;
+
   const run = async (action, confirmMsg) => {
+    if (action === "submit" && !allUploaded) {
+      if (rejectedDocs > 0) {
+        return toast.error("Tidak dapat mengajukan: masih ada dokumen berstatus ditolak yang perlu diperbaiki.");
+      }
+      return toast.error(`Tidak dapat mengajukan: masih ada ${totalDocs - uploadedDocs} dokumen yang belum diunggah.`);
+    }
+    if (action === "forward" && !allAccepted) {
+      return toast.error(`Pengajuan belum dapat diteruskan ke bank: ${totalDocs - acceptedDocs} dari ${totalDocs} dokumen belum disetujui.`);
+    }
     if (confirmMsg && !window.confirm(confirmMsg)) return;
     setBusy(true);
-    try { await api.post(`/applications/${app.id}/action`, { action, ...v }); toast.success("Status pengajuan diperbarui"); setV({ ...v, note: "" }); onChanged(); } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
+    try {
+      await api.post(`/applications/${app.id}/action`, { action, ...v });
+      toast.success("Status pengajuan diperbarui");
+      setV({ ...v, note: "" });
+      onChanged();
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
   };
   const acts = [];
   const pre = app.stage === "upload_dokumen";
   if (app.rejected) return <p className="rounded-xl bg-red-50 p-3 text-sm text-red-700">Ditolak bank: {app.reject_reason}</p>;
-  if (pre && p.party === "marketing" && (role === "marketing" || isAdmin(user))) acts.push(["submit", "Ajukan untuk Pemeriksaan", "bg-[#351080]"]);
-  if (isAdmin(user) && pre && !["validate", "pemeriksaan_validate"].includes(p.type)) acts.push(["request_revision", "Kembalikan ke Marketing (Revisi)", "bg-[#F28A19]"]);
-  if (isAdmin(user) && pre && p.party === "admin_ops" && p.type === "pemeriksaan") acts.push(["forward", `Teruskan ke ${app.bank_name}`, "bg-[#078D67]", `Teruskan pengajuan ke ${app.bank_name}?`]);
-  if (role === "super_admin" && !["validate", "pemeriksaan_validate"].includes(p.type) && app.stage !== "booking_live") acts.push(["validate", "Validate (kembalikan ke Admin Ops)", "bg-red-600"]);
-  if (role === "admin_ops" && p.type === "validate") acts.push(["resolve_validate", "Tandai Validate Sudah Diperbaiki", "bg-[#351080]"]);
-  if (role === "super_admin" && p.type === "pemeriksaan_validate") acts.push(["accept_validate", "Terima Perbaikan Validate", "bg-[#078D67]"]);
+  if (pre && p.party === "marketing" && (isMarketing || isOpsOrAdmin)) {
+    acts.push(["submit", "Ajukan untuk Pemeriksaan", "bg-[#351080]"]);
+  }
+  if (isOpsOrAdmin && pre && !["validate", "pemeriksaan_validate"].includes(p.type)) {
+    acts.push(["request_revision", "Kembalikan ke Marketing (Revisi)", "bg-[#F28A19]"]);
+  }
+  if (isOpsOrAdmin && pre && p.party === "admin_ops" && p.type === "pemeriksaan") {
+    acts.push(["forward", `Teruskan ke ${app.bank_name}`, "bg-[#078D67]", `Teruskan pengajuan ke ${app.bank_name}?`]);
+  }
+  if (role === "super_admin" && !["validate", "pemeriksaan_validate"].includes(p.type) && app.stage !== "booking_live") {
+    acts.push(["validate", "Validate (kembalikan ke Admin Ops)", "bg-red-600"]);
+  }
+  if (role === "admin_ops" && p.type === "validate") {
+    acts.push(["resolve_validate", "Tandai Validate Sudah Diperbaiki", "bg-[#351080]"]);
+  }
+  if (role === "super_admin" && p.type === "pemeriksaan_validate") {
+    acts.push(["accept_validate", "Terima Perbaikan Validate", "bg-[#078D67]"]);
+  }
   const nextIdx = app.stage_index + 1;
-  if (isAdmin(user) && app.stage_index >= 2 && nextIdx < app.stages.length && !app.pending) {
+  if (isOpsOrAdmin && app.stage_index >= 2 && nextIdx < app.stages.length && !app.pending) {
     acts.push(["advance", `Lanjut ke ${app.stages[nextIdx].label}`, "bg-[#5720B8]", `Konfirmasi tahap ${app.stages[nextIdx].label} telah benar-benar terjadi?`]);
     acts.push(["reject_bank", "Ditolak Bank", "bg-red-600", "Tandai pengajuan ditolak bank?"]);
   }
@@ -238,7 +286,13 @@ function AppDetail({ appId, onClose, onChanged }) {
   const load = useCallback(() => appId && api.get(`/applications/${appId}`).then((r) => setApp(r.data)).catch((e) => { toast.error(errMsg(e)); onClose(); }), [appId, onClose]);
   useEffect(() => { setApp(null); load(); }, [load]);
   const changed = () => { load(); onChanged(); };
-  const canUpload = app && app.stage === "upload_dokumen" && !app.rejected && (isAdmin(user) || app.pending?.party === "marketing");
+  const canReview = ["super_admin", "admin_ops", "admin_branch"].includes(user?.role);
+  const canUpload =
+    app &&
+    app.stage === "upload_dokumen" &&
+    !app.rejected &&
+    user?.role !== "sales_manager" &&
+    (["super_admin", "admin_ops", "admin_branch"].includes(user?.role) || app.pending?.party === "marketing");
   return (
     <Sheet open={!!appId} onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="w-full overflow-y-auto bg-white sm:max-w-2xl" data-testid="app-detail-sheet">
@@ -342,7 +396,7 @@ function AppDetail({ appId, onClose, onChanged }) {
 
             <div className="space-y-2">
               <p className="font-display text-sm font-bold text-[#17223B]">Dokumen Calon Debitur</p>
-              <DocChecklist app={app} admin={isAdmin(user)} canUpload={canUpload} onChanged={changed} />
+              <DocChecklist app={app} admin={canReview} canUpload={canUpload} onChanged={changed} />
             </div>
 
             <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-2">

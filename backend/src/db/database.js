@@ -1135,6 +1135,15 @@ function ensureStoreUpgrades(state) {
     changed = true;
   }
 
+  for (const app of state.applications || []) {
+    for (const d of app.checklist || []) {
+      if (d.status === "lengkap") {
+        d.status = "diterima";
+        changed = true;
+      }
+    }
+  }
+
   return changed;
 }
 

@@ -71,15 +71,18 @@ function UserDialog({ open, onOpenChange, editing, onSaved, me }) {
           {field("name", "Nama lengkap", { required: true })}
           {!editing && field("email", "Email", { type: "email", required: true })}
           <div className="space-y-1.5"><Label>Peran</Label>
-            <Select value={v.role} onValueChange={(r) => setV({ ...v, role: r })}><SelectTrigger data-testid="user-form-role"><SelectValue /></SelectTrigger>
+            <Select value={v.role} disabled={me.role !== "super_admin" && me.role !== "admin_ops"} onValueChange={(r) => setV({ ...v, role: r })}><SelectTrigger data-testid="user-form-role"><SelectValue /></SelectTrigger>
               <SelectContent>{roles.map((r) => <SelectItem key={r} value={r}>{ROLE_LABEL[r]}</SelectItem>)}</SelectContent></Select></div>
-          <div className="grid grid-cols-2 gap-3">{field("branch", "Cabang")}{field("phone", "Telepon")}</div>
+          <div className="grid grid-cols-2 gap-3">
+            {field("branch", "Cabang", { disabled: me.role !== "super_admin" && me.role !== "admin_ops" })}
+            {field("phone", "Telepon")}
+          </div>
 
           <div className="space-y-1.5">
             <Label htmlFor="u-bank-scope">Cakupan Mitra Bank (Bank Scope)</Label>
             <Select
               value={v.bank_scope || "all_bank"}
-              disabled={me.role !== "super_admin" && me.role !== "admin_ops" && me.bank_scope === "bsi_only"}
+              disabled={me.role !== "super_admin" && me.role !== "admin_ops"}
               onValueChange={(val) => setV({ ...v, bank_scope: val })}
             >
               <SelectTrigger id="u-bank-scope" data-testid="user-form-bank-scope">
@@ -116,13 +119,23 @@ export default function UsersPage() {
   const canEdit = (u) => {
     if (user.role === "super_admin") return true;
     if (user.role === "admin_ops") return ["admin_branch", "sales_manager", "marketing"].includes(u.role);
-    return u.role === "marketing";
+    if (user.role === "admin_branch" || user.role === "sales_manager") {
+      const isSameBranch = String(u.branch || "").trim().toUpperCase() === String(user.branch || "").trim().toUpperCase();
+      return u.role === "marketing" && isSameBranch;
+    }
+    return false;
   };
 
   return (
     <div>
       <PageHeader eyebrow="Administrasi" title="Pengguna & Peran" desc="Tidak ada registrasi publik. Seluruh akun dibuat oleh administrator yang berwenang."
-        actions={<CtaButton onClick={() => { setEditing(null); setOpen(true); }} data-testid="add-user-button"><Plus className="mr-2 h-4 w-4" />Tambah Pengguna</CtaButton>} />
+        actions={
+          ["super_admin", "admin_ops"].includes(user.role) ? (
+            <CtaButton onClick={() => { setEditing(null); setOpen(true); }} data-testid="add-user-button">
+              <Plus className="mr-2 h-4 w-4" />Tambah Pengguna
+            </CtaButton>
+          ) : null
+        } />
       <div className="lp-card">
         {/* Desktop Table View */}
         <DesktopTable testid="users-table">

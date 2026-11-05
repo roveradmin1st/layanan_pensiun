@@ -34,7 +34,11 @@ const MOBILE_BOTTOM_NAV = [
 function NavItems({ user, onNavigate }) {
   return (
     <nav className="flex flex-col gap-1" aria-label="Navigasi utama">
-      {NAV.filter((n) => !n.admin || isAdmin(user)).map(({ to, label, icon: Icon }) => (
+      {NAV.filter((n) => {
+        if (n.to === "/audit") return ["super_admin", "admin_ops"].includes(user?.role);
+        if (n.admin) return isAdmin(user);
+        return true;
+      }).map(({ to, label, icon: Icon }) => (
         <NavLink
           key={to}
           to={to}

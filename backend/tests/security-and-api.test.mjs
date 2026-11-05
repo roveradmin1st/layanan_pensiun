@@ -346,6 +346,53 @@ try {
   const bsiDirectViewAms2Claim = await api("GET", "/api/claims/clm-4001", { token: bsiOnlyToken });
   assert.equal(bsiDirectViewAms2Claim.status, 403, "Admin Cabang BSI wajib ditolak (403) mengakses klaim AMS2");
 
+  // 3a.1 Validasi Peran & Kewenangan Sales Manager (Insight Klien):
+  // 1. Sales Manager dilarang menambah pengguna baru -> wajib 403 (wewenang di Super Admin / Admin Ops)
+  const smCreateUserAttempt = await api("POST", "/api/users", {
+    token: managerToken,
+    body: {
+      name: "Akun Palsu SM",
+      email: "sm_create_attempt@pensiun.com",
+      password: "Password123!",
+      role: "marketing",
+      branch: "BANDUNG"
+    }
+  });
+  assert.equal(smCreateUserAttempt.status, 403, "Sales Manager dilarang membuat pengguna baru (403)");
+
+  // 2. Sales Manager dapat mengubah data pengguna marketing di cabangnya sendiri -> wajib 200
+  const smUpdateOwnTeam = await api("PATCH", "/api/users/u-mkt-1", {
+    token: managerToken,
+    body: { phone: "081299112233" }
+  });
+  assert.equal(smUpdateOwnTeam.status, 200, "Sales Manager harus dapat mengubah profil tim marketing cabangnya (200)");
+
+  // 3. Sales Manager dilarang mengubah pengguna cabang lain -> wajib 403
+  const smUpdateOtherBranch = await api("PATCH", "/api/users/u-ops-2", {
+    token: managerToken,
+    body: { phone: "081299000000" }
+  });
+  assert.equal(smUpdateOtherBranch.status, 403, "Sales Manager dilarang mengubah akun pengguna cabang lain (403)");
+
+  // 4. Sales Manager dilarang approval/reject klaim -> wajib 403 (wewenang di Super Admin / Admin Ops)
+  const smApproveClaimAttempt = await api("POST", "/api/claims/clm-4002/action", {
+    token: managerToken,
+    body: { action: "approve" }
+  });
+  assert.equal(smApproveClaimAttempt.status, 403, "Sales Manager dilarang menyetujui klaim (403)");
+
+  // 5. Sales Manager dilarang review dokumen pengajuan -> wajib 403 (wewenang di Super Admin / Admin Ops / Admin Cabang)
+  const smReviewDocAttempt = await api("POST", "/api/applications/app-3001/documents/ktp_pasangan/review", {
+    token: managerToken,
+    body: { status: "diterima" }
+  });
+  assert.equal(smReviewDocAttempt.status, 403, "Sales Manager dilarang mereview dokumen pengajuan (403)");
+
+  // 6. Sales Manager dapat memantau performa tim cabangnya via Dashboard
+  const smDashboardRes = await api("GET", "/api/dashboard", { token: managerToken });
+  assert.equal(smDashboardRes.status, 200, "Sales Manager dapat mengakses dashboard cabang");
+  assert.ok(Array.isArray(smDashboardRes.data.marketing_leaderboard), "Dashboard menyertakan performa tim marketing");
+
   // 3b. Cross-branch & Cross-marketing Lead isolation + Mass-assignment protection
   const sbyLeadRes = await api("POST", "/api/leads", {
     token: adminOpsToken,
@@ -672,11 +719,61 @@ try {
   });
   assert.equal(mktAdvanceAttempt.status, 403, "Marketing tidak boleh memajukan tahapan verifikasi bank (403)");
 
-  // Admin Ops advances application through stages to booking_live
-  await api("POST", `/api/applications/${createdApp.id}/action`, {
+  // P1 Document Checklist & Stage Guard Verification:
+  // 1. Submit sebelum seluruh dokumen diunggah -> wajib 400
+  const prematureSubmit = await api("POST", `/api/applications/${createdApp.id}/action`, {
+    token: marketingToken,
+    body: { action: "submit" }
+  });
+  assert.equal(prematureSubmit.status, 400, "Submit pengajuan sebelum seluruh dokumen diunggah wajib ditolak (400)");
+
+  // 2. Forward sebelum seluruh dokumen disetujui (diterima) -> wajib 400
+  const prematureForward = await api("POST", `/api/applications/${createdApp.id}/action`, {
     token: adminOpsToken,
     body: { action: "forward", ref_no: "REF-BSI-001" }
   });
+  assert.equal(prematureForward.status, 400, "Forward pengajuan sebelum dokumen diverifikasi & diterima wajib ditolak (400)");
+
+  // 3. Review diterima pada dokumen yang belum diunggah -> wajib 400
+  const badReviewEmpty = await api("POST", `/api/applications/${createdApp.id}/documents/ktp_pasangan/review`, {
+    token: adminOpsToken,
+    body: { status: "diterima" }
+  });
+  assert.equal(badReviewEmpty.status, 400, "Review diterima pada dokumen kosong wajib ditolak (400)");
+
+  // 4. Unduh dokumen yang belum diunggah -> wajib 404
+  const downloadEmptyDoc = await api("GET", `/api/applications/${createdApp.id}/documents/ktp_pasangan`, {
+    token: adminOpsToken
+  });
+  assert.equal(downloadEmptyDoc.status, 404, "Unduh dokumen yang belum diunggah wajib menghasilkan 404");
+
+  // 5. Unggah seluruh 8 dokumen persyaratan (PDF valid)
+  const validAppPdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0x0a]);
+  for (const docItem of createdApp.checklist) {
+    const docForm = new FormData();
+    docForm.append("file", new Blob([validAppPdfBytes], { type: "application/pdf" }), `${docItem.key}.pdf`);
+    const upDocRes = await api("POST", `/api/applications/${createdApp.id}/documents/${docItem.key}`, {
+      token: marketingToken,
+      body: docForm,
+      isForm: true
+    });
+    assert.equal(upDocRes.status, 200, `Unggah ${docItem.key} harus 200`);
+
+    // Review per-berkas: status diterima wajib 200 (P1 Fix)
+    const revDocRes = await api("POST", `/api/applications/${createdApp.id}/documents/${docItem.key}/review`, {
+      token: adminOpsToken,
+      body: { status: "diterima" }
+    });
+    assert.equal(revDocRes.status, 200, `Review dokumen ${docItem.key} status diterima wajib berhasil (200)`);
+    assert.equal(revDocRes.data.status, "diterima");
+  }
+
+  // Admin Ops advances application through stages to booking_live
+  const okForward = await api("POST", `/api/applications/${createdApp.id}/action`, {
+    token: adminOpsToken,
+    body: { action: "forward", ref_no: "REF-BSI-001" }
+  });
+  assert.equal(okForward.status, 200, "Forward setelah seluruh dokumen diterima harus berhasil (200)");
   // Stages: 2=verifikasi_bank -> 3=approval_komite -> 4=akad_kredit -> 5=pencairan_dana -> 6=booking_live
   for (let s = 0; s < 3; s++) {
     const adv = await api("POST", `/api/applications/${createdApp.id}/action`, {
