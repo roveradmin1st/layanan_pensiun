@@ -128,9 +128,10 @@ cp /srv/layanan-pensiunan/shared/data/enterprise.sqlite /srv/layanan-pensiunan/s
 cd /srv/layanan-pensiunan/releases
 git clone -b fix/security-and-operational-integrity https://github.com/roveradmin1st/layanan_pensiun.git layanan-pensiunan-7193586-uat
 
-# 4. Hubungkan database bersama (shared data) ke backend rilis baru
+# 4. Hubungkan database bersama (shared data) dan pasang dependencies backend
 cd /srv/layanan-pensiunan/releases/layanan-pensiunan-7193586-uat/backend
 ln -sfn /srv/layanan-pensiunan/shared/data data
+npm install --omit=dev --prefer-offline --no-audit
 
 # 5. Build frontend rilis baru
 cd /srv/layanan-pensiunan/releases/layanan-pensiunan-7193586-uat/frontend
@@ -195,9 +196,10 @@ echo "[2/6] Mengunduh kode terbaru dari branch $BRANCH..."
 git clone --depth 1 -b "$BRANCH" https://github.com/roveradmin1st/layanan_pensiun.git "$RELEASE_DIR"
 
 # 3. Setup Backend & Symlink Data
-echo "[3/6] Menyiapkan backend dan symlink shared data..."
+echo "[3/6] Menyiapkan backend, dependencies & symlink shared data..."
 cd "$RELEASE_DIR/backend"
 ln -sfn /srv/layanan-pensiunan/shared/data data
+npm install --omit=dev --prefer-offline --no-audit
 
 # 4. Build Frontend
 echo "[4/6] Membangun aset frontend production..."
