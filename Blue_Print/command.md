@@ -93,3 +93,144 @@ Tidak perlu `npm ci` ulang setiap kali mengganti satu file sumber jika dependenc
 **Suite keamanan HTTP belum termasuk `npm test` dan melakukan perubahan serta restore state. Suite tersebut dilarang diarahkan ke database yang sedang dipakai klien.** Beberapa pemeriksaannya mengasumsikan mode development; verifikasi production dibuat terpisah dengan konfigurasi yang tepat. Jangan mengganti assertion agar suite hanya tampak lulus.
 
 CI yang ditargetkan: install → tes → suite API terisolasi → build → paket dan checksum. Semua proses pengujian ditutup setelah selesai. Kontrol CI ini perlu diimplementasikan melalui perubahan repository yang disetujui; SOP tidak menyatakan workflow tersebut sudah tersedia.
+
+---
+
+**7. Standar Prosedur Operasional (SOP) Deployment VPS — Anti-Gagal (v2.0)**
+
+### A. Analisis Akar Masalah ("Mengapa Selalu Terkendala di Sini"):
+1. **Kendala Hak Akses (`Permission denied`)**:
+   - Akun default saat SSH login adalah `layananpensiunan` (UID biasa non-root).
+   - Direktori `/srv/layanan-pensiunan/` dan database `shared/data/enterprise.sqlite` dimiliki oleh `root` dan user sistem `lpapp`.
+   - **Aturan Wajib**: Setiap kali SSH ke VPS untuk deployment, langkah pertama **WAJIB** adalah beralih ke `root`:
+     ```bash
+     sudo -i
+     ```
+2. **Kendala `fatal: not a git repository`**:
+   - Folder rilis terdahulu (seperti `/srv/layanan-pensiunan/releases/layanan-pensiunan-c693d42-uat`) adalah direktori statis hasil build yang **tidak memiliki folder `.git`**.
+   - Melakukan `git fetch` atau `git checkout` di dalam folder tersebut pasti gagal dengan pesan `fatal: not a git repository`.
+   - **Aturan Wajib**: Untuk memasang commit baru, jangan pernah `git fetch` di dalam folder rilis lama. Selalu unduh rilis baru ke direktori rilis baru atau gunakan repositori pusat (`repo`).
+
+---
+
+### B. Prosedur Deployment Cepat Rilis Baru (Commit `7193586`)
+
+Jalankan perintah ini secara berurutan di terminal VPS Anda (dari kondisi `root`):
+
+```bash
+# 1. Pastikan Anda adalah root
+sudo -i
+
+# 2. Backup database SQLite yang sedang aktif di shared folder
+cp /srv/layanan-pensiunan/shared/data/enterprise.sqlite /srv/layanan-pensiunan/shared/data/enterprise_backup_$(date +%Y%m%d_%H%M%S).sqlite
+
+# 3. Masuk ke folder releases dan clone rilis terbaru (7193586)
+cd /srv/layanan-pensiunan/releases
+git clone -b fix/security-and-operational-integrity https://github.com/roveradmin1st/layanan_pensiun.git layanan-pensiunan-7193586-uat
+
+# 4. Hubungkan database bersama (shared data) ke backend rilis baru
+cd /srv/layanan-pensiunan/releases/layanan-pensiunan-7193586-uat/backend
+ln -sfn /srv/layanan-pensiunan/shared/data data
+
+# 5. Build frontend rilis baru
+cd /srv/layanan-pensiunan/releases/layanan-pensiunan-7193586-uat/frontend
+npm install --prefer-offline --no-audit
+npm run build
+
+# 6. Berikan kepemilikan file rilis ke user sistem lpapp
+chown -R lpapp:lpapp /srv/layanan-pensiunan/releases/layanan-pensiunan-7193586-uat
+
+# 7. Alihkan PM2 ke rilis baru
+sudo -u lpapp pm2 delete 0 || sudo -u lpapp pm2 delete layanan-pensiunan-api || true
+cd /srv/layanan-pensiunan/releases/layanan-pensiunan-7193586-uat/backend
+sudo -u lpapp pm2 start src/server.js --name layanan-pensiunan-api
+sudo -u lpapp pm2 save
+
+# 8. Periksa apakah Nginx menyajikan frontend rilis lama atau symlink
+# Cek lokasi root Nginx:
+grep -rn "root" /etc/nginx/sites-enabled/
+# Jika Nginx mengarah ke folder rilis lama (c693d42), perbarui symlink atau arahkan ke 7193586:
+ln -sfn /srv/layanan-pensiunan/releases/layanan-pensiunan-7193586-uat/frontend/dist /var/www/html/dist || true
+systemctl reload nginx
+
+# 9. Verifikasi akhir status rilis aktif
+sudo -u lpapp pm2 list
+```
+
+---
+
+### C. Solusi Permanen: Skrip Otomasi 1-Baris (`deploy.sh`)
+Untuk menghindari pengulangan perintah manual di masa depan, buat skrip `/srv/layanan-pensiunan/deploy.sh` di VPS:
+```bash
+cat << 'EOF' > /srv/layanan-pensiunan/deploy.sh
+#!/bin/bash
+set -e
+
+if [ "$EUID" -ne 0 ]; then
+  echo "[-] Harap jalankan skrip ini sebagai root: sudo /srv/layanan-pensiunan/deploy.sh"
+  exit 1
+fi
+
+BRANCH="fix/security-and-operational-integrity"
+COMMIT="${1:-HEAD}"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+
+echo "=========================================================="
+echo "[+] MEMULAI DEPLOYMENT OTOMATIS LAYANAN PENSIUNAN"
+echo "[+] Timestamp: $TIMESTAMP"
+echo "=========================================================="
+
+# 1. Backup Database
+echo "[1/6] Mencadangkan database SQLite..."
+if [ -f "/srv/layanan-pensiunan/shared/data/enterprise.sqlite" ]; then
+  cp /srv/layanan-pensiunan/shared/data/enterprise.sqlite "/srv/layanan-pensiunan/shared/data/enterprise_backup_${TIMESTAMP}.sqlite"
+  echo "      Backup berhasil dibuat: enterprise_backup_${TIMESTAMP}.sqlite"
+else
+  echo "      [!] File database di shared/data belum ditemukan, melewati backup."
+fi
+
+# 2. Clone Rilis Baru
+RELEASE_DIR="/srv/layanan-pensiunan/releases/release_${TIMESTAMP}"
+echo "[2/6] Mengunduh kode terbaru dari branch $BRANCH..."
+git clone --depth 1 -b "$BRANCH" https://github.com/roveradmin1st/layanan_pensiun.git "$RELEASE_DIR"
+
+# 3. Setup Backend & Symlink Data
+echo "[3/6] Menyiapkan backend dan symlink shared data..."
+cd "$RELEASE_DIR/backend"
+ln -sfn /srv/layanan-pensiunan/shared/data data
+
+# 4. Build Frontend
+echo "[4/6] Membangun aset frontend production..."
+cd "$RELEASE_DIR/frontend"
+npm install --prefer-offline --no-audit
+npm run build
+
+# 5. Set Permissions
+echo "[5/6] Mengatur kepemilikan berkas ke user lpapp..."
+chown -R lpapp:lpapp "$RELEASE_DIR"
+
+# 6. Alihkan Symlink Current & Restart PM2
+echo "[6/6] Mengalihkan layanan aktif..."
+ln -sfn "$RELEASE_DIR" /srv/layanan-pensiunan/current
+ln -sfn "$RELEASE_DIR/frontend/dist" /var/www/html/dist || true
+
+sudo -u lpapp pm2 delete 0 || sudo -u lpapp pm2 delete layanan-pensiunan-api || true
+cd "$RELEASE_DIR/backend"
+sudo -u lpapp pm2 start src/server.js --name layanan-pensiunan-api
+sudo -u lpapp pm2 save
+
+systemctl reload nginx || true
+
+echo "=========================================================="
+echo "[✓] DEPLOYMENT BERHASIL & AKTIF!"
+echo "=========================================================="
+sudo -u lpapp pm2 list
+EOF
+
+chmod +x /srv/layanan-pensiunan/deploy.sh
+```
+Dengan skrip di atas, di masa mendatang Anda cukup menjalankan:
+```bash
+sudo /srv/layanan-pensiunan/deploy.sh
+```
+dan seluruh proses backup, clone, build, symlink, hingga restart PM2 berjalan otomatis tanpa kendala!
