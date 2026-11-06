@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import {
@@ -467,7 +467,14 @@ function computeExactAgeLocal(dob, process) {
 function computeBsiLiveRecommendation(d, cfg = {}) {
   const dob = parseIsoDateLocal(d.bsi_birth_iso);
   const cairDate = parseIsoDateLocal(d.bsi_proyeksi_cair) || parseIsoDateLocal(todayIsoLocal());
-  const startAngsuranDate = parseIsoDateLocal(d.bsi_start_angsuran) || (cairDate ? new Date(cairDate.getFullYear(), cairDate.getMonth(), 1) : new Date());
+  const startAngsuranDate = parseIsoDateLocal(d.bsi_start_angsuran) || (cairDate ? new Date(cairDate.getFullYear(), cairDate.getMonth() + 1, 1) : new Date());
+
+  const subProduct = d.bsi_sub_product === "PP3" ? "PP3" : "PP10";
+  const prodCfg = cfg?.products?.[subProduct] || cfg || {};
+  const activeCfg = prodCfg.activePhase || prodCfg;
+  const retiredCfg = prodCfg.retiredPhase || prodCfg;
+  const loanCfg = prodCfg.loan || prodCfg;
+  const simasCfg = prodCfg.insurance || prodCfg.simasInsurance || {};
 
   const gp = Math.max(0, Number(d.gaji_pokok || 0));
   const um = Math.max(0, Number(d.uang_makan || 0));
@@ -477,7 +484,7 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
   const tht = Math.max(0, Number(d.tht || 0));
   const pensionSalary = Math.max(0, Number(d.pension_salary || 0));
 
-  const w = cfg.incomeWeights || {
+  const w = activeCfg.incomeWeights || {
     gajiPokok: 100,
     uangMakan: 90,
     tunjanganRutin1Bln: 90,
@@ -496,9 +503,9 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
   const thtRecognized = Math.round(tht * ((Number(w.tht) || 75) / 100));
 
   const statusGaji = d.bsi_status_gaji || "payroll";
-  const dbrPayroll = Number(cfg.dbrActivePayroll) || 70;
-  const dbrColek = Number(cfg.dbrActivePayrollColek) || 80;
-  const dbrNonPayroll = Number(cfg.dbrActiveNonPayroll) || 50;
+  const dbrPayroll = Number(activeCfg.dbrActivePayroll) || 70;
+  const dbrColek = Number(activeCfg.dbrActivePayrollColek) || 80;
+  const dbrNonPayroll = Number(activeCfg.dbrActiveNonPayroll) || 50;
   const chosenColekDbr = Number(d.bsi_dbr_chosen) === 80 ? Math.min(dbrColek, 80) : dbrPayroll;
   const dbrRate = statusGaji === "non_payroll"
     ? dbrNonPayroll
@@ -511,6 +518,8 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
     ? "Non Payroll"
     : "Payroll";
 
+  const dsrPensionRate = Number(retiredCfg.maxInstallmentRatioPercent ?? retiredCfg.dsrMaxPercent ?? prodCfg.dsrPensionMax) || 90;
+
   const angsuranBsi = Math.max(0, Number(d.angsuran_bsi || 0));
   const angsuranSelainBsi = Math.max(0, Number(d.angsuran_selain_bsi || 0));
   let akseptasiAktifRaw = 0;
@@ -520,13 +529,23 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
     akseptasiAktifRaw = Math.max(0, recognizedSalaryRaw - angsuranBsi - angsuranSelainBsi) * (dbrRate / 100);
   }
   const akseptasiAktif = Math.floor(Math.max(0, akseptasiAktifRaw));
-  const akseptasiPensiunRaw = Math.max(0, pensionSalary * 0.9);
+  const akseptasiPensiunRaw = Math.max(0, pensionSalary * (dsrPensionRate / 100));
   const akseptasiPensiun = Math.floor(akseptasiPensiunRaw);
 
-  const subProduct = d.bsi_sub_product === "PP3" ? "PP3" : "PP10";
   const isAtribusi = d.bsi_skema !== "Non-Atribusi";
   const baseRateAktifAnnual = Number(String(d.bsi_price_aktif || "9.25").replace(",", ".")) || 9.25;
   const baseRatePensiunAnnual = Number(String(d.bsi_price_pensiun || "10.50").replace(",", ".")) || 10.50;
+
+  const maxEndMonths = Number(loanCfg.maxMaturityAgeMonths) || (
+    (Number(loanCfg.maxEndAgeYears) || 74) * 12 +
+    (Number.isFinite(Number(loanCfg.maxEndAgeMonths)) ? Number(loanCfg.maxEndAgeMonths) : (subProduct === "PP3" ? 6 : 4))
+  );
+  const maxEndYears = Math.floor(maxEndMonths / 12);
+  const maxEndMonthsPart = maxEndMonths % 12;
+  const maxTenorCap = Number(loanCfg.maxTenorMonths) || (subProduct === "PP3" ? 240 : 180);
+  const maxPlafondAbs = Number(loanCfg.maxPlafondAbsolute) || 800000000;
+  const minPlafondAbs = Number(loanCfg.minPlafondAbsolute) || 10000000;
+  const maxActiveMonthsAllowed = Number(activeCfg.maxMonthsToRetirement) || (subProduct === "PP3" ? 36 : 120);
 
   if (!dob || !cairDate) {
     return {
@@ -535,10 +554,17 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
       thtRecognized,
       dbrRate,
       dbrLabel,
+      dsrPensionRate,
       akseptasiAktif,
       akseptasiPensiun,
       baseRateAktifAnnual,
-      baseRatePensiunAnnual
+      baseRatePensiunAnnual,
+      maxEndYears,
+      maxEndMonthsPart,
+      maxTenorCap,
+      maxPlafondAbs,
+      minPlafondAbs,
+      policyVersion: prodCfg.policyVersion || null
     };
   }
 
@@ -554,21 +580,29 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
   const rawDaysToBup = (bupDate.getTime() - cairDate.getTime()) / (1000 * 60 * 60 * 24);
   const actualMonthsToBup = rawDaysToBup > 0 ? Math.max(0, Math.round(rawDaysToBup / 30.5)) : 0;
 
-  const maxEndMonths = (Number(cfg.maxEndAgeYears) || 74) * 12 + (Number(cfg.maxEndAgeMonths) || 4);
   const endAgeLimitDate = addMonthsClampedLocal(dob, maxEndMonths);
+  const endAgeLimitIso = `${endAgeLimitDate.getFullYear()}-${String(endAgeLimitDate.getMonth() + 1).padStart(2, "0")}-${String(endAgeLimitDate.getDate()).padStart(2, "0")}`;
   const remainingAgeMonths = Math.max(0, fullMonthsLocal(cairDate, endAgeLimitDate));
-  const maxTenor = Math.max(0, Math.min(Number(cfg.maxTenorMonths) || 180, remainingAgeMonths));
+  let maxTenor = 0;
+  for (let t = 1; t <= maxTenorCap; t++) {
+    if (addMonthsClampedLocal(startAngsuranDate, t - 1) <= endAgeLimitDate) {
+      maxTenor = t;
+    } else {
+      break;
+    }
+  }
 
   const rawReqTenor = Number(d.bsi_req_tenor);
   const requestedTenor = Number.isInteger(rawReqTenor) && rawReqTenor > 0
     ? rawReqTenor
-    : (maxTenor > 0 ? maxTenor : 180);
+    : (maxTenor > 0 ? maxTenor : maxTenorCap);
   const activeMonths = actualMonthsToBup > 0 ? Math.min(requestedTenor, actualMonthsToBup) : 0;
   const pensionMonths = Math.max(0, requestedTenor - activeMonths);
 
-  const selesaiAngsuranDate = addMonthsClampedLocal(startAngsuranDate, Math.max(0, requestedTenor));
+  const selesaiAngsuranDate = addMonthsClampedLocal(startAngsuranDate, Math.max(0, requestedTenor - 1));
   const selesaiAngsuranIso = `${selesaiAngsuranDate.getFullYear()}-${String(selesaiAngsuranDate.getMonth() + 1).padStart(2, "0")}-${String(selesaiAngsuranDate.getDate()).padStart(2, "0")}`;
   const endLoanAgeObj = computeExactAgeLocal(dob, selesaiAngsuranDate);
+  const maturityAgeValid = requestedTenor >= 1 && requestedTenor <= maxTenorCap && selesaiAngsuranDate <= endAgeLimitDate;
 
   // Rekomendasi produk berdasarkan usia & sisa bulan ke BUP
   let recommendedSubProduct = "PP10";
@@ -580,10 +614,14 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
     ageStatusTone = "red";
     ageRecommendationTitle = `Usia Asuransi Simas (${nearestAge} Thn) Di Luar Rentang 45–65 Tahun`;
     ageRecommendationDetail = "Ketentuan Underwriting PT Asuransi Simas Jiwa mensyaratkan usia masuk Nearest Birthday antara 45 s.d. 65 tahun.";
-  } else if (remainingAgeMonths < 12) {
+  } else if (maxTenor < 12) {
     ageStatusTone = "red";
-    ageRecommendationTitle = "Batas Usia Maksimal Kredit (74 Thn 4 Bln) Tercapai";
-    ageRecommendationDetail = "Sisa waktu ke batas usia 74 tahun 4 bulan kurang dari 12 bulan.";
+    ageRecommendationTitle = `Batas Usia Maksimal Kredit (${maxEndYears} Thn ${maxEndMonthsPart} Bln) Tercapai`;
+    ageRecommendationDetail = `Sisa waktu ke batas usia ${maxEndYears} tahun ${maxEndMonthsPart} bulan kurang dari 12 bulan.`;
+  } else if (!maturityAgeValid) {
+    ageStatusTone = "red";
+    ageRecommendationTitle = `Tenor ${requestedTenor} Bln Melebihi Batas Usia Lunas (${maxEndYears} Thn ${maxEndMonthsPart} Bln)`;
+    ageRecommendationDetail = `Angsuran terakhir (${fmtDate(selesaiAngsuranIso)}) melewati tanggal batas usia lunas (${fmtDate(endAgeLimitIso)}). Maksimal tenor yang memenuhi batas usia adalah ${maxTenor} bulan.`;
   } else if (actualMonthsToBup <= 0) {
     recommendedSubProduct = "SUDAH_PENSIUN";
     ageStatusTone = "red";
@@ -607,10 +645,10 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
   }
 
   // Simas Jiwa Tarif & Premi Live
-  const simasCfg = cfg.simasInsurance || {};
+  const defaultBuf = Number.isInteger(Number(simasCfg.bufferDefaultMonths)) ? Number(simasCfg.bufferDefaultMonths) : 0;
   const insBufferMonths = d.bsi_insurance_buffer_months !== undefined && d.bsi_insurance_buffer_months !== ""
     ? Math.max(0, Number(d.bsi_insurance_buffer_months))
-    : 0;
+    : defaultBuf;
   const insTotalMonths = requestedTenor + insBufferMonths;
   const insYears = Math.floor(Math.max(0, insTotalMonths) / 12);
   const insRemMonths = Math.max(0, insTotalMonths) % 12;
@@ -645,12 +683,26 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
     };
   };
 
-  // Hitung Rekomendasi Plafond Maksimal (Iterasi Konvergen sama persis dengan Backend)
+  // Hitung Rekomendasi Plafond Maksimal (Iterasi Konvergen sama persis dengan Backend, independen dari bsi_req_loan)
   const manualIns = Math.max(0, Number(d.bsi_manual_insurance || 0));
+  const simasMaxPrincipal = isAtribusi && tarifPerMil > 0 && tarifPerMil < 1000
+    ? Math.floor((maxUpAllowed * (1 - tarifPerMil / 1000)) / 1000000) * 1000000
+    : maxUpAllowed;
+  const effectivePlafondCap = Math.max(0, Math.min(maxPlafondAbs, simasMaxPrincipal));
+
   let maxPlafond = 0;
-  if (activeMonths > 0 && akseptasiAktifRaw > 0 && pensionMonths > 0 && akseptasiPensiunRaw > 0) {
-    let candP = Number(d.bsi_req_loan) > 0 ? Number(d.bsi_req_loan) : 400000000;
-    for (let iter = 0; iter < 5; iter++) {
+  if (
+    maturityAgeValid &&
+    activeMonths > 0 &&
+    activeMonths <= maxActiveMonthsAllowed &&
+    akseptasiAktifRaw > 0 &&
+    pensionMonths > 0 &&
+    akseptasiPensiunRaw > 0 &&
+    effectivePlafondCap >= minPlafondAbs &&
+    (manualIns > 0 || (insTotalMonths >= 1 && insTotalMonths <= 240 && tarifPerMil > 0))
+  ) {
+    let candP = Math.min(400000000, effectivePlafondCap);
+    for (let iter = 0; iter < 8; iter++) {
       const simCand = calcSimasForPlafond(candP);
       const atribNominal = !isAtribusi ? 0 : (manualIns > 0 ? manualIns : simCand.premi);
       const atribPerBln = requestedTenor > 0 ? atribNominal / requestedTenor : 0;
@@ -662,7 +714,7 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
         const ratePenCap = (baseRatePensiunAnnual / 100) + (hasAtrib ? 0.01 : 0);
         const availPen = akseptasiPensiunRaw - atribPerBln;
         const capPen = availPen > 0 ? Math.floor(pvWithFvLocal(ratePenCap / 12, pensionMonths, availPen, 0) / 1000000) * 1000000 : 0;
-        maxPlafond = Math.max(0, Math.min(800000000, capAktif, capPen));
+        maxPlafond = Math.max(0, Math.min(effectivePlafondCap, capAktif, capPen));
       } else {
         const rateAktCap = (baseRateAktifAnnual / 100) + (hasAtrib ? 0.001 : 0);
         const ratePenCap = (baseRatePensiunAnnual / 100) + (hasAtrib ? 0.01 : 0);
@@ -671,14 +723,15 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
         if (availAkt > 0 && availPen > 0) {
           const pvPen = pvWithFvLocal(ratePenCap / 12, pensionMonths, availPen, 0);
           const rawPvAkt = pvWithFvLocal(rateAktCap / 12, activeMonths, availAkt, pvPen);
-          maxPlafond = Math.max(0, Math.min(800000000, Math.floor(rawPvAkt / 1000000) * 1000000));
+          maxPlafond = Math.max(0, Math.min(effectivePlafondCap, Math.floor(rawPvAkt / 1000000) * 1000000));
         } else {
           maxPlafond = 0;
         }
       }
-      if (Number(d.bsi_req_loan) > 0 || maxPlafond <= 0 || Math.abs(maxPlafond - candP) < 1000000) break;
+      if (maxPlafond <= 0 || Math.abs(maxPlafond - candP) < 1000000) break;
       candP = maxPlafond;
     }
+    if (maxPlafond < minPlafondAbs) maxPlafond = 0;
   }
 
   const evalPlafond = Number(d.bsi_req_loan) > 0 ? Number(d.bsi_req_loan) : maxPlafond;
@@ -708,6 +761,13 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
     actualMonthsToBup,
     remainingAgeMonths,
     maxTenor,
+    maxTenorCap,
+    maxEndYears,
+    maxEndMonthsPart,
+    maxPlafondAbs,
+    minPlafondAbs,
+    endAgeLimitIso,
+    maturityAgeValid,
     requestedTenor,
     activeMonths,
     pensionMonths,
@@ -721,6 +781,7 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
     thtRecognized,
     dbrRate,
     dbrLabel,
+    dsrPensionRate,
     akseptasiAktif,
     akseptasiPensiun,
     baseRateAktifAnnual,
@@ -738,7 +799,8 @@ function computeBsiLiveRecommendation(d, cfg = {}) {
     premiSimas: effectivePremi,
     maxPlafond,
     evalPlafond,
-    taksasiMmq
+    taksasiMmq,
+    policyVersion: prodCfg.policyVersion || null
   };
 }
 
@@ -977,6 +1039,7 @@ export default function CalculatorPage() {
   const [bsiError, setBsiError] = useState("");
   const [showExistingOblig, setShowExistingOblig] = useState(false);
   const [bsiChoiceOpen, setBsiChoiceOpen] = useState(false);
+  const bsiReqSeqRef = useRef(0);
 
   const handleSelectBank = (targetKey, bsiInitialSubProduct = null) => {
     setTransitionBankKey(targetKey);
@@ -1011,9 +1074,25 @@ export default function CalculatorPage() {
     const tr3 = Number(field === "tunjangan_rutin_3" ? val : updated.tunjangan_rutin_3 || 0);
     const tl1 = Number(field === "tunjangan_lain_1" ? val : updated.tunjangan_lain_1 || 0);
 
-    // Hitung total recognized jika ada komponen yang diisi sesuai bobot resmi BSI Sheet Akseptasi
+    // Hitung total recognized jika ada komponen yang diisi sesuai bobot produk aktif
     if (gp > 0 || um > 0 || tr1 > 0 || tr3 > 0 || tl1 > 0) {
-      const calcTotal = Math.round((gp * 1.0) + (um * 0.9) + (tr1 * 0.9) + (tr3 * 0.5) + (tl1 * 0.8));
+      const subProd = updated.bsi_sub_product === "PP3" ? "PP3" : "PP10";
+      const prodW =
+        partnerParams?.bsi_prapen?.products?.[subProd]?.activePhase?.incomeWeights ||
+        partnerParams?.bsi_prapen?.incomeWeights || {
+          gajiPokok: 100,
+          uangMakan: 90,
+          tunjanganRutin1Bln: 90,
+          tunjanganRutin3Bln: 50,
+          tunjanganLain1Bln: 80
+        };
+      const calcTotal = Math.round(
+        gp * (Number(prodW.gajiPokok ?? 100) / 100) +
+        um * (Number(prodW.uangMakan ?? 90) / 100) +
+        tr1 * (Number(prodW.tunjanganRutin1Bln ?? 90) / 100) +
+        tr3 * (Number(prodW.tunjanganRutin3Bln ?? 50) / 100) +
+        tl1 * (Number(prodW.tunjanganLain1Bln ?? 80) / 100)
+      );
       updated.salary = calcTotal;
     }
     setD(updated);
@@ -1136,6 +1215,7 @@ export default function CalculatorPage() {
   });
 
   const reset = () => {
+    bsiReqSeqRef.current += 1;
     setMx(null);
     setRes(null);
     setSim(null);
@@ -1179,14 +1259,17 @@ export default function CalculatorPage() {
   const isBsiPensiun = isBsi && d.bsi_sub_product === "PENSIUN";
   const bsiRec = isBsi && !isBsiPensiun ? computeBsiLiveRecommendation(d, partnerParams?.bsi_prapen) : null;
   const bsiPenRec = isBsiPensiun
-    ? computeBsiPensiunLiveRecommendation({
-        ...d,
-        birth_date: d.bsi_birth_iso,
-        process_date: d.bsi_process_iso || d.bsi_proyeksi_cair || todayIsoLocal(),
-        plafond: d.bsi_req_loan,
-        tenor: d.bsi_req_tenor,
-        bsi_price_pensiun: Number(String(d.bsi_price_pensiun || "10.50").replace(",", ".")) || 10.5
-      })
+    ? computeBsiPensiunLiveRecommendation(
+        {
+          ...d,
+          birth_date: d.bsi_birth_iso,
+          process_date: d.bsi_process_iso || d.bsi_proyeksi_cair || todayIsoLocal(),
+          plafond: d.bsi_req_loan,
+          tenor: d.bsi_req_tenor,
+          bsi_price_pensiun: Number(String(d.bsi_price_pensiun || "10.50").replace(",", ".")) || 10.5
+        },
+        partnerParams?.bsi_prapen?.products?.PENSIUN
+      )
     : null;
   const ams2Rec = isAms2 ? computeAms2LiveRecommendation(d, partnerParams?.ams2) : null;
 
@@ -1353,6 +1436,8 @@ export default function CalculatorPage() {
     if (!parseIsoDateLocal(d.bsi_birth_iso)) errs.push("Tanggal Lahir wajib diisi.");
 
     if (d.bsi_sub_product === "PENSIUN") {
+      const maxPenPlafond = bsiPenRec?.maxPlafondCap || 350000000;
+      const maxPenTenor = bsiPenRec?.maxTenorCap || 180;
       if (Number(d.pension_salary || 0) <= 0) {
         errs.push("Manfaat Pensiun Bulanan wajib diisi dan harus lebih dari Rp0.");
       }
@@ -1362,14 +1447,15 @@ export default function CalculatorPage() {
       if (String(d.bsi_req_loan || "").trim() !== "" && Number(d.bsi_req_loan) <= 0) {
         errs.push("Plafond Pensiun yang diajukan harus lebih dari Rp0 (atau kosongkan untuk otomatis Plafond Maksimal).");
       }
-      if (String(d.bsi_req_loan || "").trim() !== "" && Number(d.bsi_req_loan) > 350000000) {
-        errs.push("Plafond Pensiun Berkah maksimal Rp350.000.000 sesuai ketentuan BSI & Simas Pensiun.");
+      if (String(d.bsi_req_loan || "").trim() !== "" && Number(d.bsi_req_loan) > maxPenPlafond) {
+        errs.push(`Plafond Pensiun Berkah maksimal ${rp(maxPenPlafond)} sesuai ketentuan BSI & Simas Pensiun.`);
       }
       const effTenor = Number(d.bsi_req_tenor) > 0 ? Number(d.bsi_req_tenor) : (bsiPenRec?.maxTenor || 0);
-      if (effTenor <= 0 || effTenor > 180) {
-        errs.push("Tenor Pensiun Berkah harus antara 1 s.d. 180 bulan (pastikan usia nasabah memenuhi ketentuan).");
+      if (effTenor <= 0 || effTenor > maxPenTenor) {
+        errs.push(`Tenor Pensiun Berkah harus antara 1 s.d. ${maxPenTenor} bulan (pastikan usia nasabah memenuhi ketentuan).`);
       }
     } else {
+      const maxProdTenor = bsiRec?.maxTenorCap || (d.bsi_sub_product === "PP3" ? 240 : 180);
       if ((bsiRec?.recognizedSalary || 0) <= 0) errs.push("Komponen Penghasilan Aktif (minimal Gaji Pokok) wajib diisi.");
       if (bsiRec?.ready && bsiRec.actualMonthsToBup > 0 && bsiRec.pensionMonths <= 0) {
         errs.push(
@@ -1382,8 +1468,8 @@ export default function CalculatorPage() {
       if (String(d.bsi_req_loan || "").trim() !== "" && Number(d.bsi_req_loan) <= 0) {
         errs.push("Plafond Pra Pensiun yang diajukan harus lebih dari Rp0 (atau kosongkan untuk otomatis Plafond Maksimal).");
       }
-      if (String(d.bsi_req_tenor || "").trim() !== "" && Number(d.bsi_req_tenor) <= 0) {
-        errs.push("Tenor Pembiayaan harus lebih dari 0 bulan.");
+      if (String(d.bsi_req_tenor || "").trim() !== "" && (Number(d.bsi_req_tenor) <= 0 || Number(d.bsi_req_tenor) > maxProdTenor)) {
+        errs.push(`Tenor Pembiayaan harus antara 1 s.d. ${maxProdTenor} bulan.`);
       }
       if (!d.bsi_price_aktif || Number(String(d.bsi_price_aktif).replace(",", ".")) <= 0) {
         errs.push("Price Saat Aktif (% p.a.) wajib diisi.");
@@ -1399,6 +1485,7 @@ export default function CalculatorPage() {
       return;
     }
 
+    const reqSeq = ++bsiReqSeqRef.current;
     setBusy("final");
     setSim(null);
     try {
@@ -1407,6 +1494,7 @@ export default function CalculatorPage() {
         api.post("/calc/max", pld),
         api.post("/calc/preview", pld)
       ]);
+      if (reqSeq !== bsiReqSeqRef.current) return;
       setMx(maxResp.data);
       setRes(prevResp.data);
       setViewStage("result");
@@ -1417,9 +1505,13 @@ export default function CalculatorPage() {
           : "Simulasi BSI Mitraguna Prapensiun berhasil dihitung."
       );
     } catch (err) {
-      toast.error(errMsg(err));
+      if (reqSeq === bsiReqSeqRef.current) {
+        toast.error(errMsg(err));
+      }
     } finally {
-      setBusy("");
+      if (reqSeq === bsiReqSeqRef.current) {
+        setBusy("");
+      }
     }
   };
 
@@ -3174,7 +3266,7 @@ export default function CalculatorPage() {
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between">
                         <Label htmlFor="bsi-pen-tenor" className="text-xs font-bold text-[#17223B]">
-                          11. Jangka Waktu / Tenor (1 s.d. 180 Bulan)
+                          11. Jangka Waktu / Tenor (1 s.d. {bsiPenRec?.maxTenorCap || 180} Bulan)
                         </Label>
                         {bsiPenRec?.maxTenor > 0 && (
                           <button
@@ -3193,7 +3285,7 @@ export default function CalculatorPage() {
                         id="bsi-pen-tenor"
                         type="number"
                         min="1"
-                        max="180"
+                        max={bsiPenRec?.maxTenorCap || 180}
                         step="1"
                         placeholder={bsiPenRec?.maxTenor > 0 ? `Otomatis Maks Tenor (${bsiPenRec.maxTenor} bln)` : "Contoh: 169"}
                         className="h-10 border-slate-200 lp-num text-xs font-bold"
@@ -3567,7 +3659,9 @@ export default function CalculatorPage() {
                           </strong>
                         </div>
                         <div className="col-span-2 sm:col-span-1 rounded-lg bg-white/75 p-2 border border-black/5">
-                          <span className="block text-[10px] text-slate-500">Maks Tenor Usia (74th 4bln)</span>
+                          <span className="block text-[10px] text-slate-500">
+                            Maks Tenor Usia ({bsiRec.maxEndYears}th {bsiRec.maxEndMonthsPart}bln)
+                          </span>
                           <strong className="mt-0.5 block text-[11px] font-bold text-[#351080] lp-num" data-testid="bsi-max-age-tenor">
                             {bsiRec.maxTenor} Bulan (Maks UP Rp{(bsiRec.maxUpAllowed / 1e6).toFixed(0)} Jt)
                           </strong>
@@ -3920,7 +4014,7 @@ export default function CalculatorPage() {
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between">
                         <Label className="text-xs font-bold text-[#17223B]">
-                          10. Manfaat Pensiun (DSR 90%)
+                          10. Manfaat Pensiun (DSR {bsiRec?.dsrPensionRate ?? 90}%)
                         </Label>
                         {Number(d.gaji_pokok) > 0 && (
                           <button
@@ -3943,7 +4037,7 @@ export default function CalculatorPage() {
                         data-testid="bsi-pension-salary-input"
                       />
                       <small className="block text-[11px] font-semibold text-[#078D67] lp-num">
-                        Akseptasi Pensiun (90%): {rp(bsiRec?.akseptasiPensiun || 0)} / bln
+                        Akseptasi Pensiun ({bsiRec?.dsrPensionRate ?? 90}%): {rp(bsiRec?.akseptasiPensiun || 0)} / bln
                       </small>
                     </div>
                   </div>
@@ -3952,7 +4046,7 @@ export default function CalculatorPage() {
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between">
                       <Label htmlFor="bsi-tenor" className="text-xs font-bold text-[#17223B]">
-                        11. Tenor Pembiayaan (Bulan • Maks 180 Bulan)
+                        11. Tenor Pembiayaan (Bulan • Maks {bsiRec?.maxTenorCap ?? (d.bsi_sub_product === "PP3" ? 240 : 180)} Bulan)
                       </Label>
                       {bsiRec?.maxTenor > 0 && (
                         <button
@@ -3971,7 +4065,7 @@ export default function CalculatorPage() {
                       id="bsi-tenor"
                       type="number"
                       min="12"
-                      max="180"
+                      max={bsiRec?.maxTenorCap ?? (d.bsi_sub_product === "PP3" ? 240 : 180)}
                       step="1"
                       className="h-10 border-slate-200 lp-num text-xs font-bold"
                       value={d.bsi_req_tenor}
@@ -4452,7 +4546,7 @@ export default function CalculatorPage() {
 
                   <div className="rounded-xl border border-white/15 bg-white/10 p-3.5">
                     <span className="block text-xs text-emerald-100/85">
-                      Akseptasi Masa Pensiun (DSR 90%)
+                      Akseptasi Masa Pensiun (DSR {bsiRec?.dsrPensionRate ?? 90}%)
                     </span>
                     <strong className="mt-1 block font-display text-lg font-bold lp-num">
                       {bsiRec?.akseptasiPensiun > 0 ? rp(bsiRec.akseptasiPensiun) : "—"}

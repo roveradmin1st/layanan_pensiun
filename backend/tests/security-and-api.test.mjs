@@ -97,6 +97,7 @@ try {
     tenor: 180,
     bsi_price_aktif: 9.25,
     bsi_price_pensiun: 10.5,
+    bsi_insurance_buffer_months: 6,
     take_over: 0,
     buka_blokir_lama: 0
   };

@@ -366,7 +366,7 @@ export function BsiResultView({ r }) {
               {rp(bsi.pension_installment || r.coop_installment)}
             </p>
             <p className="mt-0.5 text-[10px] text-slate-500">
-              DSR: <b>{pct(r.ratio_pension_pct || 0)}</b> (Maks 90%)
+              DSR: <b>{pct(r.ratio_pension_pct || 0)}</b> (Maks {bsi.dsr_pension_rate ?? 90}%)
             </p>
           </div>
 

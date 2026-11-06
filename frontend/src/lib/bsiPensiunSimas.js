@@ -206,7 +206,10 @@ function evaluateScenarioAtPrincipal({
   baseRatePct,
   entryAgeNearest,
   tariffPermil,
-  isAtribusi
+  isAtribusi,
+  adminRatePct = 1,
+  stampFixed = 100000,
+  blokirAtribusiCount = 2
 }) {
   if (principal <= 0 || tenor <= 0 || !tariffPermil) return null;
   const rateFrac = tariffPermil / 1000;
@@ -218,10 +221,10 @@ function evaluateScenarioAtPrincipal({
     ? roundExcel(solveAnnualRateFromPmt(tenor, candidateInstallment, principal), 2)
     : baseRatePct;
   const installmentExact = pmt(annualPricePct / 100 / 12, tenor, principal);
-  const adminExact = principal * 0.01;
-  const stampExact = 100000;
+  const adminExact = principal * (adminRatePct / 100);
+  const stampExact = stampFixed;
   const upfrontPremiumExact = isAtribusi ? 0 : premiumExact;
-  const blokirExact = isAtribusi ? installmentExact * 2 : 0;
+  const blokirExact = isAtribusi ? installmentExact * blokirAtribusiCount : 0;
   return {
     principal,
     sumAssured,
@@ -242,21 +245,29 @@ function computeMaxPrincipalMillion({
   entryAgeNearest,
   tariffPermil,
   capacityExact,
-  isAtribusi
+  isAtribusi,
+  maxPlafondCap = 350000000,
+  maxSumAssured = SIMAS_PENSIUN_PROFILE.max_sum_assured,
+  adminRatePct = 1,
+  stampFixed = 100000,
+  blokirAtribusiCount = 2
 }) {
   if (tenor <= 0 || !tariffPermil || capacityExact <= 0) return 0;
   let best = 0;
-  for (let p = 1000000; p <= 350000000; p += 1000000) {
+  for (let p = 1000000; p <= maxPlafondCap; p += 1000000) {
     const ev = evaluateScenarioAtPrincipal({
       principal: p,
       tenor,
       baseRatePct,
       entryAgeNearest,
       tariffPermil,
-      isAtribusi
+      isAtribusi,
+      adminRatePct,
+      stampFixed,
+      blokirAtribusiCount
     });
     if (!ev) break;
-    if (ev.sumAssured > SIMAS_PENSIUN_PROFILE.max_sum_assured + 1e-6) break;
+    if (ev.sumAssured > maxSumAssured + 1e-6) break;
     if (ev.installmentExact <= capacityExact + 1e-9) {
       best = p;
     } else {
@@ -266,9 +277,24 @@ function computeMaxPrincipalMillion({
   return best;
 }
 
-export function computeBsiPensiunLiveRecommendation(d) {
+export function computeBsiPensiunLiveRecommendation(d, productCfg = {}) {
   const birth = parseIsoUtc(d.birth_date);
   if (!birth) return null;
+
+  const loanCfg = productCfg?.loan || {};
+  const retCfg = productCfg?.retiredPhase || {};
+  const priceCfg = productCfg?.pricing || {};
+  const feeCfg = productCfg?.fees || {};
+  const insCfg = productCfg?.insurance || {};
+
+  const maxPlafondCap = Number(loanCfg.maxPlafondAbsolute) || 350000000;
+  const maxTenorCap = Number(loanCfg.maxTenorMonths) || 180;
+  const maxMaturityAgeMonths = Number(loanCfg.maxMaturityAgeMonths) || 894;
+  const maxBankEndAgeYears = maxMaturityAgeMonths / 12;
+  const maxSumAssured = Number(insCfg.maxSumAssured) || SIMAS_PENSIUN_PROFILE.max_sum_assured;
+  const adminRatePct = Number.isFinite(Number(feeCfg.adminRatePercent)) ? Number(feeCfg.adminRatePercent) : 1;
+  const stampFixed = Number.isFinite(Number(feeCfg.stampDutyFixed)) ? Number(feeCfg.stampDutyFixed) : 100000;
+  const blokirAtribusiCount = Number.isFinite(Number(feeCfg.blokirAtribusiCount)) ? Number(feeCfg.blokirAtribusiCount) : 2;
 
   const processDt = parseIsoUtc(d.process_date) || parseIsoUtc(new Date().toISOString().slice(0, 10));
   const policyStartDt = parseIsoUtc(d.bsi_proyeksi_cair) || processDt;
@@ -281,16 +307,20 @@ export function computeBsiPensiunLiveRecommendation(d) {
   const entryAgeNearest = nearestAgeUtc(birth, policyStartDt);
 
   const retiredType = String(d.bsi_retired_type || "pensiunan").toLowerCase() === "janda" ? "janda" : "pensiunan";
-  const minBankAge = retiredType === "janda" ? 48 : 50;
+  const minBankAge = retiredType === "janda"
+    ? (Number(loanCfg.minBankAgeJanda) || 48)
+    : (Number(loanCfg.minBankAgePensiunan) || 50);
   const spouseStatus = String(d.bsi_spouse_status || "single").toLowerCase() === "with_spouse" ? "with_spouse" : "single";
-  const spouseFactor = spouseStatus === "with_spouse" ? 0.98 : 1.0;
+  const spouseFactorWithSpouse = Number(retCfg.spouseFactorWithSpouse) || 0.98;
+  const spouseFactor = spouseStatus === "with_spouse" ? spouseFactorWithSpouse : (Number(retCfg.spouseFactorSingle) || 1.0);
 
   const ratioBasis = String(d.bsi_ratio_basis || "DBR").toUpperCase() === "DSR" ? "DSR" : "DBR";
-  const ratioPct = Number(d.bsi_ratio_pct) === 70 ? 70 : 90;
+  const ratioPct = Number(d.bsi_ratio_pct) === 70 ? 70 : (Number(retCfg.maxInstallmentRatioPercent ?? retCfg.dsrMaxPercent) || 90);
   const pensionSalary = Math.max(0, Number(d.pension_salary || 0));
   const ongoingInstallments = Math.max(0, Number(d.bsi_ongoing_installments || 0));
   const settlementAmount = Math.max(0, Number(d.pelunasan_lama || 0));
-  const baseRatePct = Number(d.bsi_price_pensiun) > 0 ? Number(d.bsi_price_pensiun) : 10.5;
+  const defaultBaseRate = Number(priceCfg.defaultBaseRateAnnual) || 10.5;
+  const baseRatePct = Number(d.bsi_price_pensiun) > 0 ? Number(d.bsi_price_pensiun) : defaultBaseRate;
   const isAtribusi = String(d.bsi_skema || "Atribusi") !== "Non-Atribusi" && String(d.bsi_skema || "Atribusi") !== "Reguler";
 
   const capacityExact =
@@ -298,13 +328,13 @@ export function computeBsiPensiunLiveRecommendation(d) {
       ? pensionSalary * spouseFactor * (ratioPct / 100)
       : pensionSalary * spouseFactor * (ratioPct / 100) - ongoingInstallments;
 
-  // Determine maximum valid tenor (1..180) satisfying bank end-age <= 74.5 & Simas policy end-age <= 75
+  // Determine maximum valid tenor (1..maxTenorCap) satisfying bank end-age & Simas policy end-age <= 75
   let maxTenor = 0;
   const bankAgeOk = bankAgeDays360 >= minBankAge;
   const simasAgeOk = entryAgeNearest >= 45 && entryAgeNearest <= 74;
 
   if (simasAgeOk) {
-    for (let t = 1; t <= 180; t++) {
+    for (let t = 1; t <= maxTenorCap; t++) {
       const tariff = lookupSimasPensiunTariffPermil(entryAgeNearest, t);
       if (tariff == null) continue;
       const lastInst = addMonthsClampedUtc(firstInstDt, t - 1);
@@ -313,7 +343,7 @@ export function computeBsiPensiunLiveRecommendation(d) {
       const bankMatSource = addMonthsOverflowUtc(processDt, t + 1);
       const bankMatMonthStart = new Date(Date.UTC(bankMatSource.getUTCFullYear(), bankMatSource.getUTCMonth() - 1, 1));
       const endAgeDays360 = days360Us(birth, bankMatMonthStart) / 360;
-      if (endAgeDays360 > 74.5 + 1e-9) break;
+      if (endAgeDays360 > maxBankEndAgeYears + 1e-9) break;
       maxTenor = t;
     }
   }
@@ -330,7 +360,12 @@ export function computeBsiPensiunLiveRecommendation(d) {
           entryAgeNearest,
           tariffPermil,
           capacityExact,
-          isAtribusi: true
+          isAtribusi: true,
+          maxPlafondCap,
+          maxSumAssured,
+          adminRatePct,
+          stampFixed,
+          blokirAtribusiCount
         })
       : 0;
 
@@ -342,7 +377,12 @@ export function computeBsiPensiunLiveRecommendation(d) {
           entryAgeNearest,
           tariffPermil,
           capacityExact,
-          isAtribusi: false
+          isAtribusi: false,
+          maxPlafondCap,
+          maxSumAssured,
+          adminRatePct,
+          stampFixed,
+          blokirAtribusiCount
         })
       : 0;
 
@@ -358,7 +398,10 @@ export function computeBsiPensiunLiveRecommendation(d) {
           baseRatePct,
           entryAgeNearest,
           tariffPermil,
-          isAtribusi
+          isAtribusi,
+          adminRatePct,
+          stampFixed,
+          blokirAtribusiCount
         })
       : null;
 
@@ -388,7 +431,7 @@ export function computeBsiPensiunLiveRecommendation(d) {
     ageReason = `Usia nearest Simas Pensiun ${entryAgeNearest} thn di luar rentang pertanggungan 45–74 tahun.`;
   } else if (maxTenor <= 0) {
     ageStatus = "NO_TENOR_AVAILABLE";
-    ageReason = "Tidak ada tenor valid yang memenuhi batas usia lunas bank ≤ 74,5 tahun & polis ≤ 75 tahun.";
+    ageReason = `Tidak ada tenor valid yang memenuhi batas usia lunas bank ≤ ${maxBankEndAgeYears.toFixed(1).replace(".", ",")} tahun & polis ≤ 75 tahun.`;
   }
 
   return {
@@ -409,6 +452,8 @@ export function computeBsiPensiunLiveRecommendation(d) {
     isAtribusi,
     capacityExact: roundExcel(Math.max(0, capacityExact), 2),
     maxTenor,
+    maxTenorCap,
+    maxPlafondCap,
     evalTenor,
     tariffPermil,
     maxPlafondAtribusi,
@@ -419,6 +464,7 @@ export function computeBsiPensiunLiveRecommendation(d) {
     netDisbursementExact: roundExcel(netDisbursementExact, 2),
     remainingSalaryExact: roundExcel(remainingSalaryExact, 2),
     lastInstallmentIso: formatIsoUtc(lastInstDt),
-    policyEndIso: formatIsoUtc(policyEndDt)
+    policyEndIso: formatIsoUtc(policyEndDt),
+    policyVersion: productCfg?.policyVersion || null
   };
 }

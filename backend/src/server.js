@@ -12,6 +12,12 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { DEFAULT_PARTNER_PARAMETERS } from "./config/default-parameters.js";
+import {
+  BSI_PRODUCT_CODES,
+  createDefaultBsiProducts,
+  splitMaturityAgeMonths,
+  validateAndApplyBsiProductUpdate
+} from "./config/bsi-product-config.js";
 import { MASTER_BRANCHES, KANWIL_BRANCHES, normalizeBranch, resolveBranchFromCityOrText } from "./config/branches.js";
 import { createPensionPreviewRouter } from "./routes/bsi-pensiun-preview.js";
 import {
@@ -670,30 +676,214 @@ app.get("/api/banks", requireAuth, (req, res) => {
   res.json({ banks });
 });
 
+function summarizeBsiProductLimits(prod) {
+  if (!prod || typeof prod !== "object") return null;
+  const matSplit = splitMaturityAgeMonths(prod.loan?.maxMaturityAgeMonths ?? 892);
+  const code = prod.productCode || prod.code;
+  const label = prod.label || prod.productName || prod.shortName || code;
+  return {
+    productCode: code,
+    code,
+    productName: prod.productName || label,
+    label,
+    shortName: prod.shortName || label,
+    policyVersion: prod.policyVersion || "v1",
+    revision: prod.revision || 1,
+    updatedAt: prod.updatedAt || null,
+    updatedBy: prod.updatedBy || null,
+    maxTenorMonths: prod.loan?.maxTenorMonths,
+    maxMaturityAgeMonths: prod.loan?.maxMaturityAgeMonths,
+    maxEndAgeYears: matSplit.years,
+    maxEndAgeMonths: matSplit.months,
+    minPlafondAbsolute: prod.loan?.minPlafondAbsolute,
+    maxPlafondAbsolute: prod.loan?.maxPlafondAbsolute,
+    bupAgeDefault: prod.activePhase?.bupAgeDefault ?? prod.loan?.bupAgeDefault,
+    minEntryAgeNearest: prod.insurance?.minEntryAge ?? prod.loan?.minEntryAgeNearest,
+    maxEntryAgeNearest: prod.insurance?.maxEntryAge ?? prod.loan?.maxEntryAgeNearest,
+    minBankAgePensiunan: prod.loan?.minBankAgePensiunan,
+    minBankAgeJanda: prod.loan?.minBankAgeJanda,
+    loan: prod.loan,
+    activePhase: prod.activePhase,
+    retiredPhase: prod.retiredPhase,
+    pricingTiers: prod.pricingTiers || prod.pricing?.tiers,
+    atribusiAdjustments: prod.atribusiAdjustments || prod.pricing?.atribusiAdjustments,
+    pricing: prod.pricing || {
+      tiers: prod.pricingTiers,
+      atribusiAdjustments: prod.atribusiAdjustments
+    },
+    insurance: {
+      profileId: prod.insurance?.profileId,
+      companyName: prod.insurance?.companyName,
+      profileVersion: prod.insurance?.profileVersion,
+      minEntryAge: prod.insurance?.minEntryAge,
+      maxEntryAge: prod.insurance?.maxEntryAge,
+      maxCoverageAge: prod.insurance?.maxCoverageAge,
+      maxInsuranceYears: prod.insurance?.maxInsuranceYears,
+      maxPolicyMonths: prod.insurance?.maxPolicyMonths,
+      bufferDefaultMonths: prod.insurance?.bufferDefaultMonths ?? 0,
+      maxUpAge70: prod.insurance?.maxUpAge70,
+      maxUpAge75: prod.insurance?.maxUpAge75,
+      maxSumAssured: prod.insurance?.maxSumAssured
+    },
+    fees: prod.fees
+  };
+}
+
+function normalizeStrictBsiProductParam(rawCode) {
+  const c = String(rawCode || "").trim().toUpperCase();
+  return BSI_PRODUCT_CODES.includes(c) ? c : null;
+}
+
+function handleBsiProductParamMutation(req, res, store, targetPartner, rawProductCode, rawUpdates, reason, topLevelExpectedVersion) {
+  const productCode = normalizeStrictBsiProductParam(rawProductCode);
+  if (!productCode) {
+    return res.status(400).json({
+      error_code: "UNKNOWN_BSI_PRODUCT",
+      detail: "Sub-produk BSI tidak valid. Gunakan PP3, PP10, atau PENSIUN."
+    });
+  }
+  const currentProd = targetPartner?.products?.[productCode];
+  if (!currentProd) {
+    return res.status(404).json({
+      error_code: "MISSING_BSI_PRODUCT_CONFIG",
+      detail: `Konfigurasi produk BSI '${productCode}' tidak ditemukan.`
+    });
+  }
+
+  const expectedPolicyVersion =
+    topLevelExpectedVersion !== undefined
+      ? topLevelExpectedVersion
+      : rawUpdates?.expectedPolicyVersion;
+  const actorLabel = `${req.user.name} (${req.user.role === "super_admin" ? "Super Admin" : "Admin Operasional"})`;
+  const validation = validateAndApplyBsiProductUpdate(
+    currentProd,
+    productCode,
+    { ...(rawUpdates || {}), expectedPolicyVersion },
+    actorLabel
+  );
+  if (!validation.ok) {
+    return res.status(validation.status || 400).json({
+      error_code: validation.errorCode,
+      detail: validation.detail
+    });
+  }
+
+  if (req.user.role === "admin_ops") {
+    const prop = withTransaction(() => {
+      const createdProp = {
+        id: `prop-${Date.now()}`,
+        partner_key: "bsi_prapen",
+        product_key: productCode,
+        partner_name: `${targetPartner.name} — ${currentProd.label || productCode}`,
+        proposed_by_id: req.user.id,
+        proposed_by_name: `${req.user.name} (Admin Operasional)`,
+        created_at: new Date().toISOString(),
+        status: "PENDING",
+        reason: reason || `Usulan penyesuaian parameter BSI ${productCode}`,
+        base_policy_version: currentProd.policyVersion,
+        target_policy_version: validation.nextProduct.policyVersion,
+        before_snapshot: validation.beforeSnapshot,
+        after_snapshot: validation.afterSnapshot,
+        changes: rawUpdates
+      };
+      store.parameter_proposals.unshift(createdProp);
+      addAuditLog(
+        req.user,
+        "propose_param_change",
+        `bsi_prapen:${productCode}`,
+        `Mengusulkan perubahan parameter BSI ${productCode} (v${currentProd.policyVersion} -> v${validation.nextProduct.policyVersion})`,
+        req.ip
+      );
+      if (store.audit_logs[0]) {
+        store.audit_logs[0].partner_key = "bsi_prapen";
+        store.audit_logs[0].product_key = productCode;
+        store.audit_logs[0].policy_version = currentProd.policyVersion;
+        store.audit_logs[0].before = validation.beforeSnapshot;
+        store.audit_logs[0].after = validation.afterSnapshot;
+      }
+      return createdProp;
+    });
+    return res.status(202).json({
+      mode: "proposed",
+      product_code: productCode,
+      message: `Usulan perubahan parameter BSI ${productCode} dikirim ke Super Admin untuk persetujuan (Dual Control).`,
+      proposal: prop
+    });
+  }
+
+  withTransaction(() => {
+    targetPartner.products[productCode] = validation.nextProduct;
+    store.partner_parameters.lastUpdated = new Date().toISOString();
+    store.partner_parameters.updatedBy = `${req.user.name} (Super Admin)`;
+    addAuditLog(
+      req.user,
+      "update_partner_params",
+      `bsi_prapen:${productCode}`,
+      `Memperbarui parameter BSI ${productCode} ke policyVersion ${validation.nextProduct.policyVersion}`,
+      req.ip
+    );
+    if (store.audit_logs[0]) {
+      store.audit_logs[0].partner_key = "bsi_prapen";
+      store.audit_logs[0].product_key = productCode;
+      store.audit_logs[0].policy_version = validation.nextProduct.policyVersion;
+      store.audit_logs[0].before = validation.beforeSnapshot;
+      store.audit_logs[0].after = validation.afterSnapshot;
+    }
+  });
+
+  return res.json({
+    mode: "applied",
+    product_code: productCode,
+    policy_version: validation.nextProduct.policyVersion,
+    message: `Parameter BSI ${currentProd.label || productCode} berhasil diperbarui ke versi v${validation.nextProduct.policyVersion}.`,
+    product: validation.nextProduct,
+    partner: targetPartner
+  });
+}
+
 app.get("/api/calc/limits", requireAuth, (req, res) => {
   const store = getStore();
   const p = store.partner_parameters || {};
   const limits = {};
   for (const [key, partner] of Object.entries(p)) {
     if (typeof partner === "object" && partner !== null && canAccessBank(req.user, key)) {
-      limits[key] = {
-        name: partner.name || key,
-        maxTenorMonths: partner.maxTenorMonths,
-        maxEndAgeYears: partner.maxEndAgeYears,
-        maxEndAgeMonths: partner.maxEndAgeMonths,
-        maxPlafondAbsolute: partner.maxPlafondAbsolute,
-        maxEntryAgeYears: partner.maxEntryAgeYears,
-        maxInstallmentRatio: partner.maxInstallmentRatio,
-        plafondRoundingStep: partner.plafondRoundingStep,
-        tiers: (partner.tiers || []).map((t) => ({
-          id: t.id,
-          name: t.name,
-          minAge: t.minAge,
-          maxAge: t.maxAge,
-          coopRateAnnual: t.coopRateAnnual,
-          riskReserveRate: t.riskReserveRate
-        }))
-      };
+      if (key === "bsi_prapen" && partner.products) {
+        const pp10Summary = summarizeBsiProductLimits(partner.products.PP10);
+        const pp3Summary = summarizeBsiProductLimits(partner.products.PP3);
+        const pensiunSummary = summarizeBsiProductLimits(partner.products.PENSIUN);
+        limits[key] = {
+          name: partner.name || key,
+          schemaVersion: partner.schemaVersion || 2,
+          maxTenorMonths: pp10Summary?.maxTenorMonths ?? 180,
+          maxEndAgeYears: pp10Summary?.maxEndAgeYears ?? 74,
+          maxEndAgeMonths: pp10Summary?.maxEndAgeMonths ?? 4,
+          maxPlafondAbsolute: pp10Summary?.maxPlafondAbsolute ?? 800000000,
+          products: {
+            PP3: pp3Summary,
+            PP10: pp10Summary,
+            PENSIUN: pensiunSummary
+          }
+        };
+      } else {
+        limits[key] = {
+          name: partner.name || key,
+          maxTenorMonths: partner.maxTenorMonths,
+          maxEndAgeYears: partner.maxEndAgeYears,
+          maxEndAgeMonths: partner.maxEndAgeMonths,
+          maxPlafondAbsolute: partner.maxPlafondAbsolute,
+          maxEntryAgeYears: partner.maxEntryAgeYears,
+          maxInstallmentRatio: partner.maxInstallmentRatio,
+          plafondRoundingStep: partner.plafondRoundingStep,
+          tiers: (partner.tiers || []).map((t) => ({
+            id: t.id,
+            name: t.name,
+            minAge: t.minAge,
+            maxAge: t.maxAge,
+            coopRateAnnual: t.coopRateAnnual,
+            riskReserveRate: t.riskReserveRate
+          }))
+        };
+      }
     }
   }
   res.json({ limits });
@@ -728,9 +918,121 @@ app.get("/api/calc/params", requireAuth, requireRoles("super_admin", "admin_ops"
   });
 });
 
+app.get("/api/calc/params/bsi_prapen/products/:productCode", requireAuth, requireRoles("super_admin", "admin_ops"), (req, res) => {
+  if (!canAccessBank(req.user, "bsi_prapen")) {
+    return res.status(403).json({ detail: "Anda tidak memiliki kewenangan pada mitra bank BSI." });
+  }
+  const productCode = normalizeStrictBsiProductParam(req.params.productCode);
+  if (!productCode) {
+    return res.status(400).json({
+      error_code: "UNKNOWN_BSI_PRODUCT",
+      detail: "Sub-produk BSI tidak valid. Gunakan PP3, PP10, atau PENSIUN."
+    });
+  }
+  const store = getStore();
+  const prod = store.partner_parameters?.bsi_prapen?.products?.[productCode];
+  if (!prod) {
+    return res.status(404).json({
+      error_code: "MISSING_BSI_PRODUCT_CONFIG",
+      detail: `Konfigurasi produk BSI '${productCode}' tidak ditemukan.`
+    });
+  }
+  res.json({
+    bank_key: "bsi_prapen",
+    product_code: productCode,
+    policy_version: prod.policyVersion || 1,
+    product: prod
+  });
+});
+
+app.put("/api/calc/params/bsi_prapen/products/:productCode", requireAuth, requireRoles("super_admin", "admin_ops"), (req, res) => {
+  if (!canAccessBank(req.user, "bsi_prapen")) {
+    return res.status(403).json({ detail: "Anda tidak memiliki kewenangan pada mitra bank BSI." });
+  }
+  const body = req.body || {};
+  const updates = body.updates && typeof body.updates === "object" && !Array.isArray(body.updates)
+    ? body.updates
+    : body;
+  const store = getStore();
+  const target = store.partner_parameters?.bsi_prapen;
+  return handleBsiProductParamMutation(
+    req,
+    res,
+    store,
+    target,
+    req.params.productCode,
+    updates,
+    body.reason,
+    body.expectedPolicyVersion
+  );
+});
+
+app.post("/api/calc/params/bsi_prapen/products/:productCode/reset", requireAuth, requireRoles("super_admin"), (req, res) => {
+  if (!canAccessBank(req.user, "bsi_prapen")) {
+    return res.status(403).json({ detail: "Anda tidak memiliki kewenangan pada mitra bank BSI." });
+  }
+  const productCode = normalizeStrictBsiProductParam(req.params.productCode);
+  if (!productCode) {
+    return res.status(400).json({
+      error_code: "UNKNOWN_BSI_PRODUCT",
+      detail: "Sub-produk BSI tidak valid. Gunakan PP3, PP10, atau PENSIUN."
+    });
+  }
+  const store = getStore();
+  const bsi = store.partner_parameters?.bsi_prapen;
+  const currentProd = bsi?.products?.[productCode];
+  if (!currentProd) {
+    return res.status(404).json({
+      error_code: "MISSING_BSI_PRODUCT_CONFIG",
+      detail: `Konfigurasi produk BSI '${productCode}' tidak ditemukan.`
+    });
+  }
+  const defaultProd = createDefaultBsiProducts()[productCode];
+  const beforeSnapshot = structuredClone(currentProd);
+  const nextRevision = (Number(currentProd.revision) || 1) + 1;
+  const ageSplit = splitMaturityAgeMonths(defaultProd.loan.maxMaturityAgeMonths);
+  const nextVersion = `bsi-${productCode.toLowerCase()}-${defaultProd.loan.maxTenorMonths}m-${ageSplit.years}y${ageSplit.months}m-v${nextRevision}`;
+  const resetProd = {
+    ...defaultProd,
+    revision: nextRevision,
+    policyVersion: nextVersion,
+    updatedAt: new Date().toISOString(),
+    updatedBy: `${req.user.name} (Reset Default)`
+  };
+
+  withTransaction(() => {
+    bsi.products[productCode] = resetProd;
+    store.partner_parameters.lastUpdated = new Date().toISOString();
+    store.partner_parameters.updatedBy = `${req.user.name} (Reset Default ${productCode})`;
+    addAuditLog(
+      req.user,
+      "reset_bsi_product_params",
+      `bsi_prapen:${productCode}`,
+      `Reset parameter BSI ${productCode} ke standar awal (v${nextVersion})`,
+      req.ip
+    );
+    if (store.audit_logs[0]) {
+      store.audit_logs[0].partner_key = "bsi_prapen";
+      store.audit_logs[0].product_key = productCode;
+      store.audit_logs[0].policy_version = nextVersion;
+      store.audit_logs[0].before = beforeSnapshot;
+      store.audit_logs[0].after = structuredClone(resetProd);
+    }
+  });
+
+  res.json({
+    ok: true,
+    bank_key: "bsi_prapen",
+    product_code: productCode,
+    policy_version: nextVersion,
+    product: resetProd,
+    partners: store.partner_parameters
+  });
+});
+
 app.put("/api/calc/params/:partnerKey", requireAuth, requireRoles("super_admin", "admin_ops"), (req, res) => {
   const { partnerKey } = req.params;
-  const { updates, reason } = req.body || {};
+  const { updates, reason, product_key, productCode, expectedPolicyVersion } = req.body || {};
   if (!updates || typeof updates !== "object" || Array.isArray(updates)) {
     return res.status(400).json({ detail: "Payload perubahan parameter tidak valid." });
   }
@@ -741,6 +1043,27 @@ app.put("/api/calc/params/:partnerKey", requireAuth, requireRoles("super_admin",
   const target = store.partner_parameters[partnerKey];
   if (!target) {
     return res.status(404).json({ detail: `Mitra bank '${partnerKey}' tidak ditemukan.` });
+  }
+
+  // Untuk BSI, wajib menyertakan product_key (PP3 | PP10 | PENSIUN) dan melalui validator skema per produk
+  if (partnerKey === "bsi_prapen") {
+    const rawProdCode = product_key || productCode || updates.product_key || updates.productCode || updates.code;
+    if (!rawProdCode) {
+      return res.status(400).json({
+        error_code: "MISSING_BSI_PRODUCT_CODE",
+        detail: "Perubahan parameter BSI wajib menyertakan product_key (PP3, PP10, atau PENSIUN)."
+      });
+    }
+    return handleBsiProductParamMutation(
+      req,
+      res,
+      store,
+      target,
+      rawProdCode,
+      updates,
+      reason,
+      expectedPolicyVersion
+    );
   }
 
   // Dual Control: Admin Operasional creates proposal; Super Admin applies directly
@@ -768,7 +1091,7 @@ app.put("/api/calc/params/:partnerKey", requireAuth, requireRoles("super_admin",
     });
   }
 
-  // Super Admin direct update
+  // Super Admin direct update (Non-BSI)
   withTransaction(() => {
     Object.assign(target, updates);
     store.partner_parameters.lastUpdated = new Date().toISOString();
@@ -795,17 +1118,81 @@ app.post("/api/calc/params/proposals/:id/decide", requireAuth, requireRoles("sup
     return res.status(409).json({ detail: "Usulan perubahan parameter ini sudah diputuskan sebelumnya." });
   }
 
+  if (decision === "APPROVE" && prop.partner_key === "bsi_prapen") {
+    const productCode = normalizeStrictBsiProductParam(prop.product_key);
+    if (!productCode) {
+      return res.status(400).json({
+        error_code: "UNKNOWN_BSI_PRODUCT",
+        detail: "Usulan parameter BSI tidak memiliki product_key yang sah (PP3, PP10, atau PENSIUN)."
+      });
+    }
+    const bsi = store.partner_parameters?.bsi_prapen;
+    const currentProd = bsi?.products?.[productCode];
+    if (!currentProd) {
+      return res.status(404).json({
+        error_code: "MISSING_BSI_PRODUCT_CONFIG",
+        detail: `Konfigurasi produk BSI '${productCode}' tidak ditemukan.`
+      });
+    }
+    const validation = validateAndApplyBsiProductUpdate(
+      currentProd,
+      productCode,
+      {
+        ...(prop.changes || {}),
+        expectedPolicyVersion: prop.base_policy_version ?? prop.changes?.expectedPolicyVersion
+      },
+      `${req.user.name} (Super Admin - Dual Control)`
+    );
+    if (!validation.ok) {
+      return res.status(validation.status || 409).json({
+        error_code: validation.errorCode,
+        detail: validation.detail
+      });
+    }
+
+    withTransaction(() => {
+      prop.status = "APPROVED";
+      prop.decided_by = req.user.name;
+      prop.decided_at = new Date().toISOString();
+      prop.applied_policy_version = validation.nextProduct.policyVersion;
+      bsi.products[productCode] = validation.nextProduct;
+      store.partner_parameters.lastUpdated = new Date().toISOString();
+      store.partner_parameters.updatedBy = `${req.user.name} (Super Admin)`;
+      addAuditLog(
+        req.user,
+        "proposal_approved",
+        `bsi_prapen:${productCode}`,
+        `APPROVED usulan parameter BSI ${productCode} (v${validation.nextProduct.policyVersion})`,
+        req.ip
+      );
+      if (store.audit_logs[0]) {
+        store.audit_logs[0].partner_key = "bsi_prapen";
+        store.audit_logs[0].product_key = productCode;
+        store.audit_logs[0].policy_version = validation.nextProduct.policyVersion;
+        store.audit_logs[0].before = validation.beforeSnapshot;
+        store.audit_logs[0].after = validation.afterSnapshot;
+      }
+    });
+    return res.json({
+      ok: true,
+      proposal: prop,
+      product: validation.nextProduct,
+      partners: store.partner_parameters
+    });
+  }
+
   withTransaction(() => {
     prop.status = decision === "APPROVE" ? "APPROVED" : "REJECTED";
     prop.decided_by = req.user.name;
     prop.decided_at = new Date().toISOString();
 
-    if (decision === "APPROVE" && store.partner_parameters[prop.partner_key]) {
+    if (decision === "APPROVE" && store.partner_parameters[prop.partner_key] && prop.partner_key !== "bsi_prapen") {
       Object.assign(store.partner_parameters[prop.partner_key], prop.changes);
       store.partner_parameters.lastUpdated = new Date().toISOString();
       store.partner_parameters.updatedBy = `${req.user.name} (Super Admin)`;
     }
-    addAuditLog(req.user, `proposal_${prop.status.toLowerCase()}`, prop.partner_key, `${prop.status} usulan parameter ${prop.partner_name}`, req.ip);
+    const targetKey = prop.product_key ? `${prop.partner_key}:${prop.product_key}` : prop.partner_key;
+    addAuditLog(req.user, `proposal_${prop.status.toLowerCase()}`, targetKey, `${prop.status} usulan parameter ${prop.partner_name}`, req.ip);
   });
   res.json({ ok: true, proposal: prop, partners: store.partner_parameters });
 });
@@ -841,6 +1228,15 @@ const CALC_NON_NEGATIVE_FIELDS = [
   "blokir_3_override"
 ];
 
+function isInvalidProductErrorCode(code) {
+  return (
+    code === "UNKNOWN_PRODUCT" ||
+    code === "UNKNOWN_BSI_PRODUCT" ||
+    code === "MISSING_BSI_PRODUCT_CONFIG" ||
+    code === "MISSING_BSI_PARTNER_CONFIG"
+  );
+}
+
 app.post("/api/calc/max", requireAuth, (req, res) => {
   const body = req.body || {};
   if (!canAccessBank(req.user, body.bank_key || "ams2")) {
@@ -850,7 +1246,9 @@ app.post("/api/calc/max", requireAuth, (req, res) => {
   if (err) return res.status(400).json({ detail: err });
   const store = getStore();
   const result = calculateMax(body, store.partner_parameters);
-  if (result.error_code === "UNKNOWN_PRODUCT") return res.status(400).json({ detail: result.stop_reason });
+  if (isInvalidProductErrorCode(result.error_code)) {
+    return res.status(400).json({ error_code: result.error_code, detail: result.stop_reason });
+  }
   res.json(result);
 });
 
@@ -863,7 +1261,9 @@ app.post("/api/calc/preview", requireAuth, (req, res) => {
   if (err) return res.status(400).json({ detail: err });
   const store = getStore();
   const result = calculatePreview(body, store.partner_parameters);
-  if (result.error_code === "UNKNOWN_PRODUCT") return res.status(400).json({ detail: result.stop_reason });
+  if (isInvalidProductErrorCode(result.error_code)) {
+    return res.status(400).json({ error_code: result.error_code, detail: result.stop_reason });
+  }
   res.json(result);
 });
 
@@ -925,6 +1325,8 @@ app.post("/api/simulations", requireAuth, (req, res) => {
       sim_no: `SIM-${ym}-${seq}`,
       lead_id: body.lead_id || null,
       bank_key: bankKey,
+      bsi_product_code: result.bsi_product_code || null,
+      policy_version: result.policy_version || null,
       dapem: body.dapem || "TASPEN",
       input: body,
       result,

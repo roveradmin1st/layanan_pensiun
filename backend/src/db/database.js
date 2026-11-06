@@ -9,6 +9,11 @@ import crypto from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_PARTNER_PARAMETERS, INDONESIA_PROVINCES } from "../config/default-parameters.js";
+import {
+  BSI_MIGRATION_ID,
+  BSI_SCHEMA_VERSION,
+  buildMigratedBsiPartner
+} from "../config/bsi-product-config.js";
 import { calculatePreview } from "../engines/calc-engine.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -798,7 +803,7 @@ function createInitialState() {
 
 let stateCache = null;
 
-function ensureStoreUpgrades(state) {
+export function ensureStoreUpgrades(state) {
   let changed = false;
   const defaultPwdHash = hashPassword("Password123!");
   const legacySeedHashes = new Set([
@@ -973,10 +978,46 @@ function ensureStoreUpgrades(state) {
   }
 
   for (const inactiveKey of ["bank_mantap", "bank_mnc", "bank_bni"]) {
-    if (state.partner_parameters?.[inactiveKey]?.active !== false) {
+    if (state.partner_parameters?.[inactiveKey] && state.partner_parameters[inactiveKey].active !== false) {
       state.partner_parameters[inactiveKey].active = false;
       changed = true;
     }
+  }
+
+  // Migrasi terarah & idempoten parameter BSI (PP3, PP10, PENSIUN) sesuai Bagian 5 command.md
+  state.partner_parameters = state.partner_parameters || {};
+  if (state.partner_parameters.schemaVersion !== BSI_SCHEMA_VERSION) {
+    state.partner_parameters.schemaVersion = BSI_SCHEMA_VERSION;
+    changed = true;
+  }
+  if (!Array.isArray(state.parameter_migration_snapshots)) {
+    state.parameter_migration_snapshots = [];
+    changed = true;
+  }
+  const currentBsi = state.partner_parameters.bsi_prapen;
+  const needsBsiMigration =
+    !currentBsi ||
+    currentBsi.migrationId !== BSI_MIGRATION_ID ||
+    currentBsi.schemaVersion !== BSI_SCHEMA_VERSION ||
+    !currentBsi.products?.PP3 ||
+    !currentBsi.products?.PP10 ||
+    !currentBsi.products?.PENSIUN;
+
+  if (needsBsiMigration) {
+    if (
+      currentBsi &&
+      !state.parameter_migration_snapshots.some((s) => s.migration_id === BSI_MIGRATION_ID)
+    ) {
+      state.parameter_migration_snapshots.push({
+        migration_id: BSI_MIGRATION_ID,
+        partner_key: "bsi_prapen",
+        migrated_at: new Date().toISOString(),
+        before_snapshot: structuredClone(currentBsi)
+      });
+    }
+    const { partner: migratedBsi } = buildMigratedBsiPartner(currentBsi || {});
+    state.partner_parameters.bsi_prapen = migratedBsi;
+    changed = true;
   }
 
   if (!Array.isArray(state.lead_requests)) {
