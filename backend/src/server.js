@@ -100,7 +100,9 @@ function sanitizeUser(u) {
     branch: u.branch || "PUSAT JAKARTA",
     bank_scope: u.bank_scope || "all_bank",
     phone: u.phone || "",
-    active: u.active !== false
+    active: u.active !== false,
+    manager_id: u.manager_id || null,
+    manager_name: u.manager_name || null
   };
 }
 
@@ -1135,6 +1137,9 @@ app.post("/api/simulations/:id/approve", requireAuth, (req, res) => {
     const ym = new Date().toISOString().slice(0, 7).replace("-", "");
     const partnerCfg = store.partner_parameters[sim.bank_key] || store.partner_parameters.ams2;
 
+    const creatorUser = store.users.find((u) => u.id === (sim.created_by || req.user.id));
+    const smUser = creatorUser?.manager_id ? store.users.find((u) => u.id === creatorUser.manager_id) : null;
+
     const createdApp = {
       id: `app-${Date.now()}`,
       app_no: `APP-${ym}-${seq}`,
@@ -1143,6 +1148,8 @@ app.post("/api/simulations/:id/approve", requireAuth, (req, res) => {
       lead_name: lead.name,
       marketing_id: sim.created_by || req.user.id,
       marketing_name: sim.created_by_name || req.user.name,
+      sales_manager_id: smUser ? smUser.id : (creatorUser?.manager_id || null),
+      sales_manager_name: smUser ? smUser.name : (creatorUser?.manager_name || null),
       branch: sim.branch || req.user.branch || lead.branch || "BANDUNG",
       bank_key: sim.bank_key || "ams2",
       bank_name: partnerCfg.name,
@@ -2101,7 +2108,7 @@ app.get("/api/applications", requireAuth, (req, res) => {
   const store = getStore();
   let list = store.applications.filter((a) => canAccessApplication(req.user, a));
 
-  const { q, stage, branch, date_from, date_to } = req.query;
+  const { q, stage, branch, date_from, date_to, manager_id } = req.query;
   const page = Math.max(1, Number(req.query.page || 1));
   const pageSize = Math.max(1, Number(req.query.page_size || 10));
 
@@ -2110,9 +2117,11 @@ app.get("/api/applications", requireAuth, (req, res) => {
     list = list.filter((a) =>
       a.app_no.toLowerCase().includes(sq) ||
       a.lead_name.toLowerCase().includes(sq) ||
-      a.marketing_name.toLowerCase().includes(sq)
+      a.marketing_name.toLowerCase().includes(sq) ||
+      (a.sales_manager_name && a.sales_manager_name.toLowerCase().includes(sq))
     );
   }
+  if (manager_id) list = list.filter((a) => a.sales_manager_id === manager_id);
   if (stage === "ditolak") list = list.filter((a) => a.rejected);
   else if (stage) list = list.filter((a) => a.stage === stage && !a.rejected);
   if (branch) list = list.filter((a) => a.branch === branch);
@@ -2778,7 +2787,8 @@ app.get("/api/users", requireAuth, requireRoles("super_admin", "admin_ops", "adm
   }
   const list = users.map((u) => ({
     ...sanitizeUser(u),
-    lead_count: store.leads.filter((l) => l.assigned_to === u.id).length
+    lead_count: store.leads.filter((l) => l.assigned_to === u.id).length,
+    team_count: u.role === "sales_manager" ? store.users.filter((m) => m.manager_id === u.id).length : undefined
   }));
   res.json(list);
 });
@@ -2830,6 +2840,23 @@ app.post("/api/users", requireAuth, requireRoles("super_admin", "admin_ops"), (r
       ? "bsi_only"
       : (req.user.bank_scope === "bsi_only" ? "bsi_only" : "all_bank");
 
+  let assignedManagerId = null;
+  let assignedManagerName = null;
+  if (targetRole === "marketing" && body.manager_id) {
+    const mgr = store.users.find((u) => u.id === body.manager_id);
+    if (!mgr || mgr.role !== "sales_manager") {
+      return res.status(400).json({ detail: "Sales Manager pembina yang dipilih tidak valid." });
+    }
+    if (normalizeBranch(mgr.branch) !== targetBranch) {
+      return res.status(400).json({ detail: "Sales Manager pembina harus berada di cabang yang sama." });
+    }
+    if (bankScope === "all_bank" && isBsiScopedUser(mgr)) {
+      return res.status(400).json({ detail: "Marketing All Bank tidak dapat dibawahi oleh Sales Manager khusus BSI." });
+    }
+    assignedManagerId = mgr.id;
+    assignedManagerName = mgr.name;
+  }
+
   const newUser = withTransaction(() => {
     const createdUser = {
       id: `u-${Date.now()}`,
@@ -2841,6 +2868,8 @@ app.post("/api/users", requireAuth, requireRoles("super_admin", "admin_ops"), (r
       bank_scope: bankScope,
       phone: String(body.phone || "").trim(),
       active: true,
+      manager_id: assignedManagerId,
+      manager_name: assignedManagerName,
       created_at: new Date().toISOString()
     };
     store.users.push(createdUser);
@@ -2867,7 +2896,7 @@ app.patch("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops"
     return res.status(403).json({ detail: `${ROLE_LABEL[req.user.role]} hanya dapat mengubah akun Marketing.` });
   }
 
-  const { name, role, branch, bank_scope, phone, active, password } = req.body || {};
+  const { name, role, branch, bank_scope, phone, active, password, manager_id } = req.body || {};
   if (password !== undefined && password !== "" && String(password).length < 8) {
     return res.status(400).json({ detail: "Kata sandi baru minimal 8 karakter." });
   }
@@ -2887,6 +2916,30 @@ app.patch("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops"
     }
   }
 
+  let newManagerId = undefined;
+  let newManagerName = undefined;
+  if (manager_id !== undefined) {
+    if (manager_id && (target.role === "marketing" || role === "marketing")) {
+      const mgr = store.users.find((u) => u.id === manager_id);
+      if (!mgr || mgr.role !== "sales_manager") {
+        return res.status(400).json({ detail: "Sales Manager pembina yang dipilih tidak valid." });
+      }
+      const effectiveBranch = branch !== undefined ? normalizeBranch(branch) : normalizeBranch(target.branch);
+      if (normalizeBranch(mgr.branch) !== effectiveBranch) {
+        return res.status(400).json({ detail: "Sales Manager pembina harus berada di cabang yang sama." });
+      }
+      const effectiveScope = bank_scope !== undefined ? bank_scope : target.bank_scope;
+      if (effectiveScope === "all_bank" && isBsiScopedUser(mgr)) {
+        return res.status(400).json({ detail: "Marketing All Bank tidak dapat dibawahi oleh Sales Manager khusus BSI." });
+      }
+      newManagerId = mgr.id;
+      newManagerName = mgr.name;
+    } else {
+      newManagerId = null;
+      newManagerName = null;
+    }
+  }
+
   withTransaction(() => {
     if (name !== undefined) target.name = String(name).trim();
     if (role !== undefined) target.role = role;
@@ -2897,6 +2950,17 @@ app.patch("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops"
     if (phone !== undefined) target.phone = String(phone).trim();
     if (active !== undefined) target.active = Boolean(active);
     if (password) target.password_hash = hashPassword(password);
+    if (newManagerId !== undefined) {
+      target.manager_id = newManagerId;
+      target.manager_name = newManagerName;
+    }
+    if (target.role === "sales_manager" && name !== undefined) {
+      for (const u of store.users) {
+        if (u.manager_id === target.id) {
+          u.manager_name = target.name;
+        }
+      }
+    }
     addAuditLog(req.user, "update_user", target.email, `Memperbarui profil pengguna ${target.name}`, req.ip);
   });
   res.json(sanitizeUser(target));

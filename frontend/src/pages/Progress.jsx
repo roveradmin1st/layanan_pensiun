@@ -324,7 +324,7 @@ function AppDetail({ appId, onClose, onChanged }) {
                 <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-2.5">
                   <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Marketing / Cabang</p>
                   <p className="mt-0.5 truncate text-xs font-bold text-slate-800" title={`${app.marketing_name} (${app.branch})`}>
-                    {app.marketing_name} • {app.branch}
+                    {app.marketing_name} {app.sales_manager_name ? `(SM: ${app.sales_manager_name})` : ""} • {app.branch}
                   </p>
                 </div>
               </div>
@@ -559,9 +559,14 @@ export default function Progress() {
                   </TableCell>
                   {user.role !== "marketing" && (
                     <TableCell className="max-w-[140px]">
-                      <span className="block truncate text-xs font-medium text-slate-700" title={a.marketing_name}>
+                      <span className="block truncate text-xs font-semibold text-slate-800" title={a.marketing_name}>
                         {a.marketing_name}
                       </span>
+                      {a.sales_manager_name && (
+                        <span className="block truncate text-[10px] font-medium text-slate-500" title={`SM: ${a.sales_manager_name}`}>
+                          SM: {a.sales_manager_name}
+                        </span>
+                      )}
                     </TableCell>
                   )}
                   <TableCell className="whitespace-nowrap text-xs text-slate-600">
@@ -590,7 +595,11 @@ export default function Progress() {
               subtitle={`${a.app_no} • ${a.bank_name}`}
               badge={<PendingBadge app={a} />}
               meta={[
-                user.role !== "marketing" ? `${a.marketing_name} (${a.branch})` : a.branch,
+                user.role !== "marketing"
+                  ? a.sales_manager_name
+                    ? `${a.marketing_name} (SM: ${a.sales_manager_name}) • ${a.branch}`
+                    : `${a.marketing_name} (${a.branch})`
+                  : a.branch,
                 `${rp(a.plafond)} / ${a.tenor} bln`,
                 fmtDate(a.created_at)
               ]}

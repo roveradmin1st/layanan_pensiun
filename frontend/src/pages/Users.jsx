@@ -13,18 +13,24 @@ import { Label } from "../components/ui/label";
 import { Switch } from "../components/ui/switch";
 import { Button } from "../components/ui/button";
 
-function UserDialog({ open, onOpenChange, editing, onSaved, me }) {
+function UserDialog({ open, onOpenChange, editing, onSaved, me, allUsers = [] }) {
   const [v, setV] = useState({});
   useEffect(() => {
     setV(
       editing
-        ? { ...editing, password: "", bank_scope: editing.bank_scope || "all_bank" }
+        ? {
+            ...editing,
+            password: "",
+            bank_scope: editing.bank_scope || "all_bank",
+            manager_id: editing.manager_id || null
+          }
         : {
             name: "",
             email: "",
             role: "marketing",
             branch: me?.branch || "",
             bank_scope: me?.bank_scope === "bsi_only" ? "bsi_only" : "all_bank",
+            manager_id: null,
             phone: "",
             password: ""
           }
@@ -36,6 +42,15 @@ function UserDialog({ open, onOpenChange, editing, onSaved, me }) {
       : me.role === "admin_ops"
       ? ["admin_branch", "sales_manager", "marketing"]
       : ["marketing"];
+
+  const eligibleManagers = (allUsers || []).filter(
+    (u) =>
+      u.role === "sales_manager" &&
+      u.active !== false &&
+      normalizeBranch(u.branch) === normalizeBranch(v.branch) &&
+      (v.bank_scope !== "all_bank" || u.bank_scope !== "bsi_only")
+  );
+
   const submit = async (e) => {
     e.preventDefault();
     try {
@@ -45,6 +60,7 @@ function UserDialog({ open, onOpenChange, editing, onSaved, me }) {
           role: v.role,
           branch: v.branch,
           bank_scope: v.bank_scope || "all_bank",
+          manager_id: v.role === "marketing" ? (v.manager_id || null) : null,
           phone: v.phone,
           active: v.active
         };
@@ -53,7 +69,8 @@ function UserDialog({ open, onOpenChange, editing, onSaved, me }) {
       } else {
         await api.post("/users", {
           ...v,
-          bank_scope: v.bank_scope || "all_bank"
+          bank_scope: v.bank_scope || "all_bank",
+          manager_id: v.role === "marketing" ? (v.manager_id || null) : null
         });
       }
       toast.success("Pengguna disimpan");
@@ -125,6 +142,31 @@ function UserDialog({ open, onOpenChange, editing, onSaved, me }) {
             </p>
           </div>
 
+          {v.role === "marketing" && (
+            <div className="space-y-1.5">
+              <Label htmlFor="u-manager">Sales Manager Pembina (Opsional)</Label>
+              <Select
+                value={v.manager_id || "none"}
+                onValueChange={(val) => setV({ ...v, manager_id: val === "none" ? null : val })}
+              >
+                <SelectTrigger id="u-manager" data-testid="user-form-manager">
+                  <SelectValue placeholder="Pilih Sales Manager Pembina" />
+                </SelectTrigger>
+                <SelectContent className="max-h-56">
+                  <SelectItem value="none">-- Tanpa Sales Manager Khusus --</SelectItem>
+                  {eligibleManagers.map((m) => (
+                    <SelectItem key={m.id} value={m.id}>
+                      {m.name} ({m.branch}) {m.bank_scope === "bsi_only" ? "• Khusus BSI" : "• All Bank"}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-slate-500">
+                Hubungkan marketing ini ke Sales Manager pembina. Berkas pengajuan yang diproses otomatis mencatat nama manajer.
+              </p>
+            </div>
+          )}
+
           {field("password", editing ? "Kata sandi baru (opsional)" : "Kata sandi awal (min. 8)", { type: "password", required: !editing, minLength: 8 })}
           {editing && <label className="flex items-center gap-3 text-sm"><Switch checked={v.active} onCheckedChange={(c) => setV({ ...v, active: c })} data-testid="user-form-active" />Akun aktif</label>}
           <DialogFooter><Button type="submit" className="bg-[#351080] hover:bg-[#2a0c66]" data-testid="user-form-submit">Simpan</Button></DialogFooter>
@@ -186,6 +228,16 @@ export default function UsersPage() {
                     <span className="rounded-md bg-[#5720B8]/10 px-2 py-0.5 text-xs font-semibold text-[#5720B8]">
                       {u.role_label}
                     </span>
+                    {u.role === "marketing" && u.manager_name && (
+                      <span className="block mt-1 text-[11px] text-slate-500 font-medium">
+                        SM: {u.manager_name}
+                      </span>
+                    )}
+                    {u.role === "sales_manager" && u.team_count !== undefined && (
+                      <span className="block mt-1 text-[11px] text-emerald-700 font-medium">
+                        {u.team_count} Tim Marketing
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell>{u.branch || "-"}</TableCell>
                   <TableCell>
@@ -242,9 +294,11 @@ export default function UsersPage() {
               meta={[
                 u.branch || "PUSAT",
                 u.bank_scope === "bsi_only" ? "Khusus BSI" : "Semua Bank",
+                u.role === "marketing" && u.manager_name ? `SM: ${u.manager_name}` : null,
+                u.role === "sales_manager" && u.team_count !== undefined ? `${u.team_count} Marketing` : null,
                 `${u.lead_count} leads`,
                 u.active ? "Aktif" : "Nonaktif",
-              ]}
+              ].filter(Boolean)}
             >
               {canEdit(u) && (
                 <div className="mt-3 flex justify-end">
@@ -264,7 +318,7 @@ export default function UsersPage() {
           ))}
         </MobileList>
       </div>
-      <UserDialog open={open} onOpenChange={setOpen} editing={editing} onSaved={load} me={user} />
+      <UserDialog open={open} onOpenChange={setOpen} editing={editing} onSaved={load} me={user} allUsers={list} />
     </div>
   );
 }
