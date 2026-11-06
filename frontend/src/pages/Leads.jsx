@@ -595,23 +595,20 @@ export default function Leads() {
             </>
           ) : isMarketing ? (
             <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                onClick={() => setHistoryModalOpen(true)}
-                className="h-10 border-slate-300 bg-white text-xs font-semibold"
-                data-testid="history-request-btn"
-              >
-                <History className="mr-1.5 h-4 w-4 text-slate-500" />
-                Riwayat Permintaan
-              </Button>
-              <CtaButton
-                onClick={() => setReqModalOpen(true)}
-                className="h-10 text-xs font-bold"
-                data-testid="open-request-dialog-btn"
-              >
-                <Send className="mr-1.5 h-4 w-4" />
-                Minta Data Prospek
-              </CtaButton>
+              <span className="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-1.5 text-xs font-semibold text-emerald-800">
+                Distribusi Otomatis Aktif ({user.branch || "Cabang"})
+              </span>
+              {requestMeta?.items?.length > 0 && (
+                <Button
+                  variant="outline"
+                  onClick={() => setHistoryModalOpen(true)}
+                  className="h-9 border-slate-300 bg-white text-xs font-semibold"
+                  data-testid="history-request-btn"
+                >
+                  <History className="mr-1.5 h-3.5 w-3.5 text-slate-500" />
+                  Riwayat
+                </Button>
+              )}
             </div>
           ) : null
         }

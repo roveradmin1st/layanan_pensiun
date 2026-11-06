@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { Plus, Pencil } from "lucide-react";
 import { api, errMsg } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
-import { ROLE_LABEL } from "../lib/format";
+import { ROLE_LABEL, KANWIL_BRANCHES, normalizeBranch } from "../lib/format";
 import { PageHeader, CtaButton, DesktopTable, MobileList, ListCard } from "../components/common";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
@@ -74,7 +74,32 @@ function UserDialog({ open, onOpenChange, editing, onSaved, me }) {
             <Select value={v.role} disabled={me.role !== "super_admin" && me.role !== "admin_ops"} onValueChange={(r) => setV({ ...v, role: r })}><SelectTrigger data-testid="user-form-role"><SelectValue /></SelectTrigger>
               <SelectContent>{roles.map((r) => <SelectItem key={r} value={r}>{ROLE_LABEL[r]}</SelectItem>)}</SelectContent></Select></div>
           <div className="grid grid-cols-2 gap-3">
-            {field("branch", "Cabang", { disabled: me.role !== "super_admin" && me.role !== "admin_ops" })}
+            <div className="space-y-1.5">
+              <Label htmlFor="u-branch">Cabang</Label>
+              <Select
+                value={v.branch ? normalizeBranch(v.branch) : ""}
+                disabled={me.role !== "super_admin" && me.role !== "admin_ops"}
+                onValueChange={(val) => setV({ ...v, branch: val })}
+              >
+                <SelectTrigger id="u-branch" data-testid="user-form-branch">
+                  <SelectValue placeholder="Pilih Cabang" />
+                </SelectTrigger>
+                <SelectContent className="max-h-72">
+                  {KANWIL_BRANCHES.map((k) => (
+                    <div key={k.code} className="py-1">
+                      <div className="px-2 py-0.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-slate-50">
+                        {k.code} - {k.name}
+                      </div>
+                      {k.branches.map((b) => (
+                        <SelectItem key={b} value={b}>
+                          {b}
+                        </SelectItem>
+                      ))}
+                    </div>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             {field("phone", "Telepon")}
           </div>
 

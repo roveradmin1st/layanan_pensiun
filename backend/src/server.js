@@ -12,6 +12,7 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { DEFAULT_PARTNER_PARAMETERS } from "./config/default-parameters.js";
+import { MASTER_BRANCHES, KANWIL_BRANCHES, normalizeBranch, resolveBranchFromCityOrText } from "./config/branches.js";
 import { createPensionPreviewRouter } from "./routes/bsi-pensiun-preview.js";
 import {
   calculateMax,
@@ -153,7 +154,7 @@ function requireRoles(...roles) {
 function isGlobalBranchScope(user) {
   if (!user) return false;
   if (user.role === "super_admin" || user.role === "admin_ops") return true;
-  const b = String(user.branch || "").trim().toUpperCase();
+  const b = normalizeBranch(user.branch);
   return !b || b === "PUSAT" || b === "PUSAT JAKARTA" || b === "ALL" || b === "ALL BANK";
 }
 
@@ -161,7 +162,7 @@ function canAccessBranch(user, entityBranch) {
   if (!user) return false;
   if (isGlobalBranchScope(user)) return true;
   if (!entityBranch) return true;
-  return String(entityBranch).trim().toUpperCase() === String(user.branch || "").trim().toUpperCase();
+  return normalizeBranch(entityBranch) === normalizeBranch(user.branch);
 }
 
 export function isBsiBankKey(bankKey) {
@@ -1239,7 +1240,7 @@ app.get("/api/leads/meta", requireAuth, (req, res) => {
   const marketers = store.users
     .filter((u) => u.role === "marketing" && u.active !== false && canAccessBranch(req.user, u.branch))
     .map((u) => ({ id: u.id, name: u.name, branch: u.branch }));
-  res.json({ branches, marketers });
+  res.json({ branches, marketers, master_branches: MASTER_BRANCHES, kanwil_branches: KANWIL_BRANCHES });
 });
 
 app.get("/api/leads", requireAuth, (req, res) => {
@@ -1277,7 +1278,7 @@ app.post("/api/leads", requireAuth, requireRoles("super_admin", "admin_ops", "ad
   const err = validateNonNegativeFields(body, ["pension_salary"]);
   if (err) return res.status(400).json({ detail: err });
 
-  const targetBranch = body.branch || req.user.branch || "BANDUNG";
+  const targetBranch = normalizeBranch(body.branch || req.user.branch || "BANDUNG");
   if (!canAccessBranch(req.user, targetBranch)) {
     return res.status(403).json({ detail: "Anda tidak dapat membuat lead untuk cabang lain." });
   }
@@ -1285,6 +1286,9 @@ app.post("/api/leads", requireAuth, requireRoles("super_admin", "admin_ops", "ad
   const marketer = body.assigned_to ? store.users.find((u) => u.id === body.assigned_to) : null;
   if (marketer && !canAccessBranch(req.user, marketer.branch)) {
     return res.status(403).json({ detail: "Marketing yang dipilih berada di luar cakupan cabang Anda." });
+  }
+  if (marketer && !isGlobalBranchScope(req.user) && normalizeBranch(marketer.branch) !== targetBranch) {
+    return res.status(400).json({ detail: "Marketing yang dipilih harus berasal dari cabang yang sama dengan lead." });
   }
 
   const ageObj = body.birth_date ? computeAgeDetail(body.birth_date) : { years: 65 };
@@ -1337,6 +1341,9 @@ app.post("/api/leads/assign", requireAuth, requireRoles("super_admin", "admin_op
     if (lead && !canAccessLead(req.user, lead)) {
       return res.status(403).json({ detail: `Anda tidak memiliki akses pada lead '${lead.name}'.` });
     }
+    if (lead && marketer && !isGlobalBranchScope(req.user) && normalizeBranch(lead.branch) !== normalizeBranch(marketer.branch)) {
+      return res.status(400).json({ detail: `Lead '${lead.name}' (${lead.branch}) tidak dapat dialokasikan ke marketing cabang lain (${marketer.branch}).` });
+    }
   }
 
   const count = withTransaction(() => {
@@ -1347,6 +1354,15 @@ app.post("/api/leads/assign", requireAuth, requireRoles("super_admin", "admin_op
         lead.assigned_to = marketer ? marketer.id : null;
         lead.assigned_name = marketer ? marketer.name : null;
         lead.updated_at = new Date().toISOString();
+        if (!lead.activities) lead.activities = [];
+        lead.activities.unshift({
+          id: `act-${Date.now()}-${updatedCount}`,
+          type: "system",
+          notes: marketer 
+            ? `Ditugaskan ke Marketing ${marketer.name} oleh ${req.user.name}`
+            : `Dialihkan ke Pool Cadangan Cabang oleh ${req.user.name}`,
+          created_at: new Date().toISOString()
+        });
         updatedCount++;
       }
     }
@@ -1773,8 +1789,11 @@ app.patch("/api/leads/:id", requireAuth, (req, res) => {
   ) {
     return res.status(403).json({ detail: "Marketing tidak diizinkan mengubah kepemilikan atau cabang lead." });
   }
-  if (body.branch !== undefined && !canAccessBranch(req.user, body.branch)) {
-    return res.status(403).json({ detail: "Anda tidak dapat memindahkan lead ke cabang lain." });
+  if (body.branch !== undefined) {
+    const normBranch = normalizeBranch(body.branch);
+    if (!canAccessBranch(req.user, normBranch)) {
+      return res.status(403).json({ detail: "Anda tidak dapat memindahkan lead ke cabang lain." });
+    }
   }
 
   withTransaction(() => {
@@ -1782,6 +1801,8 @@ app.patch("/api/leads/:id", requireAuth, (req, res) => {
       if (body[key] !== undefined) {
         if (key === "pension_salary") {
           lead.pension_salary = Number(body.pension_salary);
+        } else if (key === "branch") {
+          lead.branch = normalizeBranch(body.branch);
         } else if (key === "assigned_to") {
           const m = body.assigned_to ? store.users.find((u) => u.id === body.assigned_to) : null;
           lead.assigned_to = m ? m.id : null;
@@ -1918,13 +1939,31 @@ app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "
   const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
   const dataLines = lines.slice(1);
 
+  // Tentukan target cabang eksplisit jika dipilih oleh user
+  const requestedBranch = req.body?.target_branch ? normalizeBranch(req.body.target_branch) : null;
+  const forcedBranch = !isGlobalBranchScope(req.user) ? normalizeBranch(req.user.branch) : null;
+  const explicitBranch = forcedBranch || requestedBranch || null;
+
+  // Deteksi delimiter CSV (koma, titik koma, atau tab)
+  const firstDataLine = dataLines[0] || "";
+  let delimiter = ",";
+  if (firstDataLine.includes(";") && !firstDataLine.includes(",")) delimiter = ";";
+  else if (firstDataLine.includes("\t") && !firstDataLine.includes(",")) delimiter = "\t";
+
   const batch = withTransaction(() => {
     let inserted = 0;
     let skipped_duplicates = 0;
+    let assignedCount = 0;
+    let unassignedCount = 0;
     const errors = [];
+    const branchPointers = {};
+    const branchBreakdown = {};
+    const batchPhones = new Set();
 
     for (let i = 0; i < dataLines.length; i++) {
-      const cols = dataLines[i].split(",").map((c) => c.trim());
+      const cols = dataLines[i]
+        .split(delimiter)
+        .map((c) => c.trim().replace(/^["']|["']$/g, ""));
       const [name, phone, city, branch, source, nopen, nip, salary, birth] = cols;
       if (!name || !phone) {
         errors.push(`Baris ${i + 2}: Nama & Telepon wajib diisi`);
@@ -1935,14 +1974,75 @@ app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "
         errors.push(`Baris ${i + 2}: Gaji Pensiun tidak valid`);
         continue;
       }
-      const targetBranch = isGlobalBranchScope(req.user)
-        ? (branch || req.user.branch || "BANDUNG")
-        : (req.user.branch || "BANDUNG");
 
-      if (store.leads.some((l) => l.phone === phone)) {
+      // Cegah duplikasi data di database maupun antar baris dalam file yang sama
+      if (store.leads.some((l) => l.phone === phone) || batchPhones.has(phone)) {
         skipped_duplicates++;
         continue;
       }
+      batchPhones.add(phone);
+
+      // Resolusi Cabang Kanonikal (Master Cabang Nasional)
+      const targetBranch = explicitBranch || resolveBranchFromCityOrText(city, branch, "") || "BANDUNG";
+
+      // Ambil daftar Marketing Aktif pada cabang tujuan
+      const branchMarketers = store.users.filter(
+        (u) => u.role === "marketing" && u.active !== false && normalizeBranch(u.branch) === targetBranch
+      );
+
+      let assignedTo = null;
+      let assignedName = null;
+
+      // Distribusi Otomatis Adil (Round-Robin) antar Marketing di Cabang Terkait
+      if (branchMarketers.length > 0) {
+        if (branchPointers[targetBranch] === undefined) {
+          branchPointers[targetBranch] = 0;
+        }
+        const marketer = branchMarketers[branchPointers[targetBranch] % branchMarketers.length];
+        branchPointers[targetBranch]++;
+        assignedTo = marketer.id;
+        assignedName = marketer.name;
+        assignedCount++;
+      } else {
+        // Zero-Marketer Fallback Guard:
+        // Jika cabang belum memiliki marketing aktif, data aman tersimpan di Pool Cadangan Cabang
+        unassignedCount++;
+      }
+
+      // Catat statistik distribusi per cabang
+      if (!branchBreakdown[targetBranch]) {
+        branchBreakdown[targetBranch] = {
+          total: 0,
+          assigned: 0,
+          pool: 0,
+          marketers: branchMarketers.map((m) => m.name)
+        };
+      }
+      branchBreakdown[targetBranch].total++;
+      if (assignedTo) {
+        branchBreakdown[targetBranch].assigned++;
+      } else {
+        branchBreakdown[targetBranch].pool++;
+      }
+
+      const initialActivities = assignedTo
+        ? [
+            {
+              id: `act-${Date.now()}-${i}`,
+              type: "system",
+              notes: `Dialokasikan otomatis ke Marketing ${assignedName} via Distribusi Cabang ${targetBranch}`,
+              created_at: new Date().toISOString()
+            }
+          ]
+        : [
+            {
+              id: `act-${Date.now()}-${i}`,
+              type: "system",
+              notes: `Disimpan di Pool Cadangan Cabang ${targetBranch} (menunggu penempatan Marketing)`,
+              created_at: new Date().toISOString()
+            }
+          ];
+
       store.leads.unshift({
         id: `lead-${Date.now()}-${i}`,
         name,
@@ -1956,10 +2056,10 @@ app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "
         birth_date: birth || "1954-05-10",
         status: "baru",
         follow_up_date: new Date().toISOString().slice(0, 10),
-        assigned_to: null,
-        assigned_name: null,
+        assigned_to: assignedTo,
+        assigned_name: assignedName,
         notes: "",
-        activities: [],
+        activities: initialActivities,
         documents: [],
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
@@ -1974,12 +2074,21 @@ app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "
       total_rows: dataLines.length,
       inserted,
       skipped_duplicates,
+      assigned_count: assignedCount,
+      unassigned_count: unassignedCount,
+      branch_breakdown: branchBreakdown,
       error_count: errors.length,
       errors,
       created_at: new Date().toISOString()
     };
     store.imports.unshift(createdBatch);
-    addAuditLog(req.user, "import_leads", createdBatch.filename, `Impor ${inserted} leads baru dari ${createdBatch.filename}`, req.ip);
+    addAuditLog(
+      req.user,
+      "import_leads",
+      createdBatch.filename,
+      `Impor ${inserted} leads baru (${assignedCount} terdistribusi otomatis, ${unassignedCount} pool cadangan) dari ${createdBatch.filename}`,
+      req.ip
+    );
     return createdBatch;
   });
   res.json(batch);
@@ -2707,8 +2816,8 @@ app.post("/api/users", requireAuth, requireRoles("super_admin", "admin_ops"), (r
     return res.status(400).json({ detail: "Kata sandi minimal 8 karakter." });
   }
   const targetBranch = isGlobalBranchScope(req.user)
-    ? (body.branch !== undefined ? String(body.branch).trim().toUpperCase() : (req.user.branch || "BANDUNG"))
-    : (req.user.branch || "BANDUNG");
+    ? (body.branch !== undefined ? normalizeBranch(body.branch) : normalizeBranch(req.user.branch || "BANDUNG"))
+    : normalizeBranch(req.user.branch || "BANDUNG");
   if (!canAccessBranch(req.user, targetBranch)) {
     return res.status(403).json({ detail: "Anda tidak dapat membuat pengguna untuk cabang lain." });
   }
@@ -2771,14 +2880,17 @@ app.patch("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops"
       return res.status(403).json({ detail: "Anda tidak berwenang mengubah peran pengguna ini." });
     }
   }
-  if (branch !== undefined && !canAccessBranch(req.user, branch)) {
-    return res.status(403).json({ detail: "Anda tidak dapat memindahkan pengguna ke cabang lain." });
+  if (branch !== undefined) {
+    const normBranch = normalizeBranch(branch);
+    if (!canAccessBranch(req.user, normBranch)) {
+      return res.status(403).json({ detail: "Anda tidak dapat memindahkan pengguna ke cabang lain." });
+    }
   }
 
   withTransaction(() => {
     if (name !== undefined) target.name = String(name).trim();
     if (role !== undefined) target.role = role;
-    if (branch !== undefined && isGlobalBranchScope(req.user)) target.branch = String(branch).trim();
+    if (branch !== undefined && isGlobalBranchScope(req.user)) target.branch = normalizeBranch(branch);
     if (bank_scope !== undefined && ["super_admin", "admin_ops"].includes(req.user.role)) {
       target.bank_scope = bank_scope === "bsi_only" ? "bsi_only" : "all_bank";
     }
