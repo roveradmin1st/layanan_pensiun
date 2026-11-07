@@ -92,9 +92,11 @@ test('Production HTTP: password gate, session revocation, immutable document rev
 import {hashPassword,legacyPasswordHash} from './src/security/passwords.js';
 const state=getStore(), encoded=await hashPassword(${JSON.stringify(PASSWORD)});
 const user=(id,role,extra={})=>({id,name:'Fixture '+id,email:id+'@example.test',role,branch:'BANDUNG',bank_scope:'all_bank',active:true,password_hash:encoded,auth_version:1,must_change_password:false,...extra});
-state.users=[user('super','super_admin'),user('ops','admin_ops'),user('first','marketing',{must_change_password:true}),user('legacy','marketing',{password_hash:legacyPasswordHash('Legacy-unique-2026!')}),user('default','marketing',{password_hash:legacyPasswordHash('Password123!')})];
+state.users=[user('super','super_admin'),user('ops','admin_ops'),user('first','marketing',{must_change_password:true}),user('legacy','marketing',{password_hash:legacyPasswordHash('Legacy-unique-2026!')}),user('default','marketing',{password_hash:legacyPasswordHash('Password123!')}),user('siantar-manager','sales_manager',{branch:'PEMATNGSIANTAR'}),user('siantar-bsi','admin_branch',{branch:'BSI SIANTAR 2',bank_scope:'bsi_only'}),user('siantar-marketing','marketing',{branch:'PEMATANGSIANTAR',bank_scope:'bsi_only'})];
 for(const key of ['leads','lead_requests','applications','simulations','claims','imports','audit_logs','parameter_proposals']) state[key]=[];
-state.applications=[{id:'app-fixture',app_no:'APP-FIXTURE',lead_name:'Synthetic test',marketing_id:'first',marketing_name:'Fixture first',branch:'BANDUNG',bank_key:'ams2',stage:'upload_dokumen',rejected:false,history:[],checklist:DOC_TEMPLATE.map(d=>({...d,status:null,versions:0,filename:null}))}];
+state.applications=[{id:'app-fixture',app_no:'APP-FIXTURE',lead_name:'Synthetic test',marketing_id:'first',marketing_name:'Fixture first',branch:'BANDUNG',bank_key:'ams2',stage:'upload_dokumen',rejected:false,history:[],checklist:DOC_TEMPLATE.map(d=>({...d,status:null,versions:0,filename:null}))},...[
+['siantar-app-bsi','PEMATANGSIANTAR','bsi_prapen'],['siantar-app-all','PEMATANGSIANTAR','ams2'],['medan-app-bsi','MEDAN','bsi_prapen']
+].map(([id,branch,bank_key])=>({id,app_no:id,lead_name:'Synthetic branch fixture',marketing_id:'siantar-marketing',marketing_name:'Synthetic marketer',branch,bank_key,stage:'upload_dokumen',rejected:false,history:[],checklist:[]}))];
 state.claims=[{id:'claim-fixture',claim_no:'CLM-FIXTURE',application_id:'app-fixture',marketing_id:'first',branch:'BANDUNG',bank_key:'ams2',amount:250000,status:'SUBMITTED',history:[]}];
 saveStore();db.close();`));
     running = await startFixture(fixture, 'production');
@@ -115,6 +117,29 @@ saveStore();db.close();`));
     const superLogin = await login('super');
     const superToken = superLogin.access_token;
     const opsToken = (await login('ops')).access_token;
+    await t.test('Approved Siantar aliases allow supervisor assignment and branch access without broadening bank or region scope', async () => {
+      const manager = await login('siantar-manager');
+      const bsi = await login('siantar-bsi');
+      assert.equal(manager.user.branch, 'PEMATANGSIANTAR');
+      assert.equal(bsi.user.branch, 'PEMATANGSIANTAR');
+      assert.equal(bsi.user.bank_scope, 'bsi_only');
+      const team = await call('GET', '/api/users', null, manager.access_token);
+      assert.equal(team.status, 200);
+      assert.ok(team.data.some(user => user.id === 'siantar-marketing'));
+      assert.ok(team.data.every(user => user.branch === 'PEMATANGSIANTAR'));
+      const assigned = await call('PATCH', '/api/users/siantar-marketing', { manager_id: 'siantar-manager' }, superToken);
+      assert.equal(assigned.status, 200);
+      assert.equal(assigned.data.manager_id, 'siantar-manager');
+      assert.equal((await call('GET', '/api/applications/siantar-app-bsi', null, manager.access_token)).status, 200);
+      assert.equal((await call('GET', '/api/applications/siantar-app-all', null, manager.access_token)).status, 200);
+      assert.equal((await call('GET', '/api/applications/medan-app-bsi', null, manager.access_token)).status, 403);
+      assert.equal((await call('GET', '/api/applications/siantar-app-bsi', null, bsi.access_token)).status, 200);
+      assert.equal((await call('GET', '/api/applications/siantar-app-all', null, bsi.access_token)).status, 403);
+      assert.equal((await call('GET', '/api/applications/medan-app-bsi', null, bsi.access_token)).status, 403);
+      const raw = readState(fixture).users.find(user => user.id === 'siantar-bsi');
+      assert.equal(raw.branch, 'BSI SIANTAR 2');
+      assert.equal(raw.bank_scope, 'bsi_only');
+    });
     await t.test('Anonymous, legacy tokens, default credentials, production restore and quick-role are blocked', async () => {
       assert.equal((await call('GET', '/api/users')).status, 401);
       const oldToken = jwt.sign({ sub: 'super' }, running.secret);

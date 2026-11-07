@@ -106,7 +106,7 @@ function sanitizeUser(u) {
     email: u.email,
     role: u.role,
     role_label: ROLE_LABEL[u.role] || u.role,
-    branch: u.branch || "PUSAT JAKARTA",
+    branch: normalizeBranch(u.branch || "PUSAT JAKARTA"),
     bank_scope: u.bank_scope || "all_bank",
     phone: u.phone || "",
     active: u.active !== false,
@@ -581,7 +581,7 @@ app.get("/api/dashboard", requireAuth, (req, res) => {
     return {
       id: m.id,
       name: m.name,
-      branch: m.branch,
+      branch: normalizeBranch(m.branch),
       assigned: mLeads.length,
       berhasil: mBookingApps.length,
       simulasi: mSims.length,
@@ -1330,7 +1330,7 @@ app.post("/api/simulations", requireAuth, (req, res) => {
       status: "saved",
       created_by: req.user.id,
       created_by_name: req.user.name,
-      branch: req.user.branch || "BANDUNG",
+      branch: normalizeBranch(req.user.branch || "BANDUNG"),
       created_at: new Date().toISOString()
     };
     store.simulations.unshift(createdSim);
@@ -1511,7 +1511,7 @@ app.post("/api/simulations/:id/approve", requireAuth, (req, res) => {
         age: sim.result.age,
         phone: req.body?.phone || "081200000000",
         city: "Kota Bandung",
-        branch: sim.branch || req.user.branch || "BANDUNG",
+        branch: normalizeBranch(sim.branch || req.user.branch || "BANDUNG"),
         pension_salary: sim.result.salary,
         status: "proses",
         follow_up_date: new Date().toISOString().slice(0, 10),
@@ -1549,7 +1549,7 @@ app.post("/api/simulations/:id/approve", requireAuth, (req, res) => {
       marketing_name: sim.created_by_name || req.user.name,
       sales_manager_id: smUser ? smUser.id : (creatorUser?.manager_id || null),
       sales_manager_name: smUser ? smUser.name : (creatorUser?.manager_name || null),
-      branch: sim.branch || req.user.branch || lead.branch || "BANDUNG",
+      branch: normalizeBranch(sim.branch || req.user.branch || lead.branch || "BANDUNG"),
       bank_key: sim.bank_key || "ams2",
       bank_name: partnerCfg.name,
       debtor_type: sim.result.category,
@@ -1645,7 +1645,7 @@ app.get("/api/leads/meta", requireAuth, (req, res) => {
   const branches = Array.from(new Set(visibleLeads.map((l) => l.branch).filter(Boolean)));
   const marketers = store.users
     .filter((u) => u.role === "marketing" && u.active !== false && canAccessBranch(req.user, u.branch))
-    .map((u) => ({ id: u.id, name: u.name, branch: u.branch }));
+    .map((u) => ({ id: u.id, name: u.name, branch: normalizeBranch(u.branch) }));
   res.json({ branches, marketers, master_branches: MASTER_BRANCHES, kanwil_branches: KANWIL_BRANCHES });
 });
 

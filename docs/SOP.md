@@ -6,6 +6,8 @@ Laptop untuk pengembangan, GitHub untuk versi/review, salinan sementara untuk te
 
 Pertahankan Super Admin utama, CEO (super_admin/all_bank), Agung Pambudi dengan role dan cakupan saat ini, serta seluruh admin_ops dan admin_branch yang ada. Cocokkan dengan email/ID tepat; jangan menebak dari nama. Status aktif/nonaktif akun terlindungi dipertahankan, kecuali reaktivasi yang secara eksplisit disetujui pemilik dan dicantumkan dalam policy/plan. Konfirmasi terbaru: Agung ber-role Sales Manager dan harus diaktifkan kembali. Akun admin lain yang nonaktif tetap nonaktif. Daftar akun di luar kelompok ini ditampilkan dalam rencana untuk dinonaktifkan. Jika Marketing terlindungi mempunyai manager di luar daftar, tentukan dependensinya dalam rencana dahulu.
 
+Konfirmasi wilayah: Agung dan dua Admin Cabang BSI di Siantar memakai wilayah PEMATANGSIANTAR yang sama. Nama lama `PEMATNGSIANTAR`/`BSI SIANTAR 2` dikenali sebagai alias; hak dua Admin Cabang tetap khusus BSI. Perbaikan nama wilayah tidak memperluas akses bank.
+
 ## Tahapan sebelum Senin 9 November
 
 1. **Catat kondisi aktual.** Baca cwd proses PM2 dan versi rilis; verifikasi backend hanya 127.0.0.1:4000, Nginx/TLS, timer Certbot, startup PM2 dan kapasitas. Tentukan PIC teknis/operasional serta waktu maintenance.

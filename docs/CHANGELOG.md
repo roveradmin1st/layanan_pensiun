@@ -10,6 +10,8 @@ Basis bisnis: `01fa73b8fa4d433ab62cd15b3609fb46968c7155` pada branch `fix/bsi-pr
 - Frontend menyediakan gerbang ganti password pertama; panel simulasi hanya build development; fitur restore produksi diblokir di server dan dinonaktifkan di UI. Lupa kata sandi mengarahkan ke bantuan administrator, tanpa klaim pengiriman email yang belum tersedia.
 - Alat offline menyiapkan plan dan calon produksi dari arsip. Seluruh admin dan akun terpilih dipertahankan sesuai keputusan pemilik. Tidak ada perintah apply/clean live pada alat tersebut.
 - Konfirmasi inventory: reaktivasi Agung didukung melalui selector tepat dalam policy/plan, dengan role Sales Manager tetap. Reaktivasi tanpa pencantuman eksplisit atau untuk akun di luar daftar terlindungi ditolak; admin nonaktif lain tetap nonaktif.
+- Konfirmasi wilayah: alias PEMATNGSIANTAR/BSI SIANTAR 2 dikenali sebagai PEMATANGSIANTAR pada otorisasi, API profil dan pilihan SM. Role/bank_scope tetap; kandidat dan password yang sudah disiapkan tidak diubah.
+- Pemeriksaan kandidat memakai salinan fisik terpisah, semua login aktif, gerbang password, restart produksi kedua dan verifikasi checksum kandidat/kredensial asli. Pemeriksaan terintegrasi CI memakai data sintetis saja.
 - Backup SQLite konsisten sebagai lpapp, penyegelan root, timer, doctor tanpa dump secret dan ekspor GPG terenkripsi ke laptop. SOP memisahkan arsip, kandidat, review dan aktivasi.
 - CI tanpa izin deploy, database tes terpisah, tes startup/sesi/dokumen/pembayaran dan browser pada data sintetis. Tes parameter lama kini memakai DB sendiri sehingga tidak mengubah kebijakan tes berikutnya.
 

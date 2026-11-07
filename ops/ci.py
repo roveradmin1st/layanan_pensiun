@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -75,6 +76,34 @@ def production_smoke(base, password):
         raise RuntimeError('Production authenticated session smoke failed.')
 
 
+def candidate_smoke(sandbox):
+    # Exercise the complete plan -> candidate -> production login path on demo
+    # fixtures only. Actual owner selectors/passwords never enter CI.
+    setup = """import {getStore,saveStore,db} from './src/db/database.js';
+const state=getStore();
+state.users.find(u=>u.email==='salesmanager@layananpensiunan.id').branch='PEMATNGSIANTAR';
+state.users.find(u=>u.email==='admincabang.bsi@layananpensiunan.id').branch='BSI SIANTAR 2';
+saveStore();db.close();"""
+    subprocess.run(['node','--input-type=module','-e',setup], cwd=sandbox/'backend', check=True, capture_output=True)
+    modules = []
+    for name in ('production', 'check_candidate'):
+        spec = importlib.util.spec_from_file_location('lp_ci_'+name, ROOT/'ops'/f'{name}.py')
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        modules.append(module)
+    production, checker = modules
+    source = sandbox/'backend/data/enterprise.sqlite'
+    plan = production.make_plan(source, {
+        'primary_superadmin_email':'superadmin@layananpensiunan.id',
+        'ceo_email':'adminops@layananpensiunan.id',
+        'agung_email':'salesmanager@layananpensiunan.id',
+    })
+    candidate = sandbox/'candidate'
+    production.prepare(source, plan, candidate)
+    result = checker.check_candidate(ROOT, candidate, private_root=sandbox)
+    if result['status'] != 'candidate_smoke_passed': raise RuntimeError('Synthetic candidate smoke failed.')
+    print('CANDIDATE PASSED: all active synthetic logins, password gate/change, cold restart and original-file preservation.', flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--skip-install', action='store_true', help='Reuse already installed lockfile dependencies locally.')
@@ -110,11 +139,12 @@ saveStore();db.close();"""
         subprocess.run(['node','--input-type=module','-e',setup], cwd=sandbox / 'backend', input=production_password, text=True, check=True, capture_output=True)
         with server(sandbox, 'production', sandbox / 'production.log') as base:
             production_smoke(base, production_password)
+        candidate_smoke(sandbox)
         if args.browser:
             browser_args = ['node', 'ops/browser-smoke.mjs']
             if args.system_chromium: browser_args.append('--system-chromium')
             run(browser_args, ROOT)
-        print('CI PASSED: backend tests, isolated security API, production smoke and frontend build.', flush=True)
+        print('CI PASSED: backend tests, isolated security API, production/candidate smoke and frontend build.', flush=True)
 
 
 if __name__ == '__main__': main()

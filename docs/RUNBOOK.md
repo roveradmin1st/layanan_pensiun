@@ -30,6 +30,20 @@ Hasil prepare: `production.sqlite`, `plan.json`, `result.json` dan `credentials.
 
 Jika email tidak ditemukan, periksa inventory dan koreksi selector dengan pemilik; tidak ada pencocokan sebagian nama. Jika ada data nyata dalam arsip UAT, hentikan rencana mengosongkan semua koleksi dan tentukan data yang harus dipindahkan.
 
+### Memeriksa kandidat yang sudah dibangun
+
+Dari checkout persiapan yang dipin ke commit hasil review, dengan dependency backend terpasang dan `frontend/dist` sudah dibangun:
+
+```bash
+nice -n 10 python3 -I ops/check_candidate.py --candidate /path/folder-privat/candidate
+```
+
+Perintah ini tidak memerlukan sudo. Skrip membuat salinan fisik database di folder privat sementara milik operator, menjalankan dua proses Node secara berurutan hanya pada 127.0.0.1 dengan port acak, lalu menghentikan proses dan menghapus folder sementara. Ia tidak memakai PM2, runtime.env, port4000, shared/data atau Nginx. Tidak menerima URL API eksternal. Jalankan satu pemeriksaan pada satu waktu; scrypt memakai RAM/CPU sehingga prioritas diturunkan dengan nice.
+
+Semua password sementara dibaca secara privat untuk menguji akun aktif; tidak ditampilkan atau diganti pada kandidat asli. Perubahan password/revokasi sesi hanya dicoba pada salinan yang dibuang. Hasil `UJI KANDIDAT BERHASIL` memerlukan checksum kandidat dan kredensial asli identik, data bisnis tetap kosong, master bank sama, gerbang ganti password bekerja, cookie Secure/HttpOnly dan restore produksi ditolak. Metadata saja disimpan pada `candidate-check.json` di folder induk kandidat. Hasil ini belum membuktikan permission lpapp, Nginx/TLS, reboot VPS atau penerimaan angka perhitungan oleh klien.
+
+Pemilik telah menyetujui alias `PEMATNGSIANTAR` dan `BSI SIANTAR 2` sebagai wilayah PEMATANGSIANTAR yang sama. Alias diterapkan pada pengenalan cabang dan API profil/pilihan SM; bank_scope tetap terpisah. Kandidat lama berformat `lp-production-20261109-v1` tetap kompatibel dan tidak perlu dibuat ulang untuk perbaikan alias ini.
+
 ## Pemeriksaan server dan backup
 
 Skrip serta unit backup dipasang root-owned setelah review. Backup berjalan dengan SQLite worker lpapp dan hasil disimpan root700/600. Pengujian lokal bukan bukti timer/HTTPS/reboot aktual pada VPS. Catat hasil server dan tujuan offsite sebelum menyatakan siap.

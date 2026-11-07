@@ -30,6 +30,9 @@ test("Normalisasi Cabang: Mencegah kegagalan otorisasi akibat variasi nama / spa
   assert.equal(normalizeBranch("pematangsiantar"), "PEMATANGSIANTAR");
   assert.equal(normalizeBranch("SIANTAR"), "PEMATANGSIANTAR");
   assert.equal(normalizeBranch("Simalungun"), "PEMATANGSIANTAR");
+  assert.equal(normalizeBranch("PEMATNGSIANTAR"), "PEMATANGSIANTAR");
+  assert.equal(normalizeBranch("BSI SIANTAR 2"), "PEMATANGSIANTAR");
+  assert.equal(normalizeBranch(" bsi-siantar_2 "), "PEMATANGSIANTAR");
 
   // Nias & Gunungsitoli
   assert.equal(normalizeBranch("NIAS"), "NIAS");
