@@ -111,3 +111,37 @@ Pemulihan di browser produksi diblokir. Cadangan JSON bisa lebih besar dari bata
 Sebelum trafik dibuka dan tanpa penulisan baru, operator dapat mengembalikan pasangan kode/database/config sebelum cutover. Setelah trafik mungkin terbuka, pertahankan data terbaru dan tutup input untuk pemeriksaan. Pilih perbaikan maju atau rekonsiliasi; jangan menimpa database dengan snapshot lama. Simpan direktori data dan sidecar sebagai satu kesatuan, verifikasi tidak ada proses lama yang masih membuka DB sebelum mengganti direktori.
 
 Jangan membagikan runtime.env, token, pm2 jlist/env, kredensial sementara atau isi dokumen. Log operasional yang dibagikan cukup status, commit, checksum, waktu dan jumlah record.
+
+## Persiapan dan aktivasi UAT menjadi produksi
+
+`production_cutover.py` adalah alat bootstrap produksi pertama untuk state BSI products v2 yang belum mempunyai production_format. Ia tidak dipakai untuk update kode rutin atau mengosongkan database produksi yang sudah berjalan. Kode aplikasi tetap c76e823; alat operasi diambil dari commit yang direview dan dipasang root-owned secara terpisah. Verifikasi SHA256 file sebelum install.
+
+Persiapan tidak memerlukan penghentian aplikasi:
+
+```bash
+sudo python3 -I /usr/local/lib/layanan-pensiunan/ops/production_cutover.py prepare \
+  --release /srv/layanan-pensiunan/releases/layanan-pensiunan-c76e823-production \
+  --candidate /path/folder-privat/candidate \
+  --reviewed-plan-sha256 CHECKSUM_PLAN_UAT_YANG_DISETUJUI
+```
+
+Prepare memeriksa manifest/checksum dan bukti lpapp, Node, process/current, saved list tepat satu fork, serta doctor (format/password UAT memang belum lolos). Ia membuat snapshot konsisten sebagai lpapp menggunakan worker backup terpasang, kemudian menghitung fingerprint state dan seluruh BLOB dengan format yang sama dengan plan awal. Jika fingerprint berbeda, ia berhenti tanpa maintenance/pergantian dan menyimpan snapshot untuk review. Perubahan audit/login pun dapat menyebabkan penolakan ini; jangan mengubah checksum supaya lolos.
+
+Jika cocok, kandidat dibekukan sebagai salinan root600 di folder root700 bersama snapshot, Nginx, runtime.env dan saved list privat. Master/parameter serta riwayat migrasi wajib identik, password aktif harus scrypt, target bisnis/BLOB kosong, source belum format produksi. Rencana aktivasi mengikat SHA256 kandidat, kode, alat operasi, ENV, Nginx, saved list dan bukti lpapp. `RENCANA AKTIVASI SIAP` hanya mencetak metadata/jumlah data serta path/checksum plan; belum mengaktifkan apa pun. Jangan membagikan isi folder privat tersebut.
+
+Setelah hasil konkret ditinjau dan waktu maintenance disepakati, jalankan apply melalui unit systemd agar tidak bergantung pada koneksi SSH. Gunakan path/checksum keluaran prepare yang sebenarnya, bukan placeholder berikut:
+
+```bash
+sudo systemd-run --unit=lp-production-cutover --wait --collect \
+  --property=Type=oneshot --property=RuntimeMaxSec=1200 --property=TimeoutStopSec=180 \
+  /usr/bin/python3 -I /usr/local/lib/layanan-pensiunan/ops/production_cutover.py apply \
+  --plan /srv/layanan-pensiunan/backups/FOLDER_AKTUAL/plan.json \
+  --plan-sha256 CHECKSUM_PLAN_AKTIVASI_AKTUAL \
+  --confirm-clean-reviewed-uat
+```
+
+Apply memverifikasi ulang seluruh ikatan dan fingerprint sebelum maintenance. Ia menutup proxy aplikasi dengan503 sambil mempertahankan ACME/HTTPS, memastikan status publik503, menghentikan satu proses, membuat backup terakhir dan memeriksa fingerprint lagi. Data baru yang sempat committed sebelum stop membatalkan pergantian tanpa menghilangkan input itu. Setelah tidak ada handle database lain, seluruh direktori data lama termasuk WAL/SHM diarsipkan, kemudian direktori kandidat dipasang. Kode/current/data dijalankan sebagai pasangan baru, satu fork lpapp, HTML/API/fingerprint diverifikasi, saved list disimpan, backup produksi awal dibuat dan doctor diperiksa sebelum akses dibuka.
+
+Jika gagal sebelum pembukaan, alat mengembalikan direktori data asli bersama kode/saved list lama; data baru yang gagal disimpan untuk pemeriksaan. Ia tidak memulihkan snapshot lama di atas input baru. Jika pembukaan mungkin sudah dicoba, rollback otomatis dilarang: data terbaru tetap, penutupan publik diupayakan dan status keberhasilannya dicatat. Periksa status/journal privat; jangan mengulang apply atau melakukan reset/restore. Plan yang sudah dipakai tidak dapat diterapkan ulang. Gangguan daya/kill yang tidak bisa ditangani memerlukan pemeriksaan manual journal dan direktori pasangan.
+
+Aktivasi bukan bukti reboot. Uji reboot/startup aktual tetap dilakukan pada jendela yang disepakati, lalu jalankan doctor, periksa login pemilik akun melalui HTTPS dan verifikasi backup terenkripsi terbaru di laptop. Setelah trafik berpotensi terbuka, pemulihan selalu mempertimbangkan input sejak snapshot. Untuk insiden, bagikan status ringkas saja; raw PM2 JSON dan konfigurasi privat mengandung secret.

@@ -31,3 +31,5 @@ Checklist untuk pemilik/PIC ada di [CHECKLIST-PEMILIK.md](CHECKLIST-PEMILIK.md);
 - Persetujuan klaim menghasilkan APPROVED. PAID hanya setelah transfer aktual, unggah bukti valid dan nominal sesuai persetujuan.
 - Pemulihan password dibantu administrator setelah verifikasi identitas. Kata sandi sementara unik dan sesi lama dicabut. CEO mempunyai hak Super Admin sesuai keputusan pemilik.
 - Catat setiap insiden tanpa password/token/isi dokumen. Setelah data produksi masuk, pengembalian snapshot yang menghilangkan input memerlukan penilaian rekonsiliasi dan keputusan pemilik. Pemulihan kode saja ke versi01fa73b tidak kompatibel dengan kontrak data baru.
+
+Keputusan pemilik pada persiapan terakhir: klien memperbolehkan pemakaian untuk saat ini meski masih ada kendala; kendala fitur dikumpulkan selama satu minggu berjalan lalu ditangani bersama sesuai prioritas. Rilis aktivasi tetap beku pada c76e823. Catat gejala/waktu/peran/langkah dan nomor referensi tanpa data nasabah untuk daftar pendampingan. Jangan memasukkan perbaikan fitur yang belum diuji ke direktori proses live.

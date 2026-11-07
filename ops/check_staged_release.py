@@ -84,6 +84,8 @@ def start_and_check(release, work, app, node):
 def check_release(release, candidate, commit, *, base=BASE, app=None, node=NODE):
     os.umask(0o077)
     app=app or pwd.getpwnam('lpapp')
+    require(not release.is_symlink() and not candidate.is_symlink(),'Rilis/kandidat harus direktori biasa.')
+    base=base.resolve(strict=True);release=release.resolve(strict=True);candidate=candidate.resolve(strict=True)
     require(re.fullmatch(r'[0-9a-f]{40}',commit),'Commit harus SHA lengkap.')
     require(not release.is_symlink() and release.parent.resolve(strict=True)==(base/'releases').resolve(strict=True),'Folder rilis di luar releases.')
     require(not candidate.resolve(strict=True).is_relative_to(base.resolve(strict=True)),'Kandidat harus salinan privat di luar instalasi live.')
