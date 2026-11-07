@@ -4,7 +4,7 @@ Laptop untuk pengembangan, GitHub untuk versi/review, salinan sementara untuk te
 
 ## Aturan akun yang sudah disepakati
 
-Pertahankan Super Admin utama, CEO (super_admin/all_bank), Agung Pambudi dengan role dan cakupan saat ini, serta seluruh admin_ops dan admin_branch yang ada. Cocokkan dengan email/ID tepat; jangan menebak dari nama. Status aktif/nonaktif akun terlindungi dipertahankan. Daftar akun di luar kelompok ini ditampilkan dalam rencana untuk dinonaktifkan. Jika Agung ber-role Marketing dengan manager di luar daftar, tentukan dependensinya dalam rencana dahulu.
+Pertahankan Super Admin utama, CEO (super_admin/all_bank), Agung Pambudi dengan role dan cakupan saat ini, serta seluruh admin_ops dan admin_branch yang ada. Cocokkan dengan email/ID tepat; jangan menebak dari nama. Status aktif/nonaktif akun terlindungi dipertahankan, kecuali reaktivasi yang secara eksplisit disetujui pemilik dan dicantumkan dalam policy/plan. Konfirmasi terbaru: Agung ber-role Sales Manager dan harus diaktifkan kembali. Akun admin lain yang nonaktif tetap nonaktif. Daftar akun di luar kelompok ini ditampilkan dalam rencana untuk dinonaktifkan. Jika Marketing terlindungi mempunyai manager di luar daftar, tentukan dependensinya dalam rencana dahulu.
 
 ## Tahapan sebelum Senin 9 November
 

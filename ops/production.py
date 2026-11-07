@@ -94,12 +94,21 @@ def make_plan(path, policy):
     for email in policy.get('extra_keep_emails', []):
         if email.strip().lower() not in by_email: raise ValueError('Extra retained account not found: ' + email)
         keep.add(by_email[email.strip().lower()]['id'])
+    reactivation_emails = policy.get('reactivate_emails', [])
+    if not isinstance(reactivation_emails, list) or any(not isinstance(email, str) or not email.strip() for email in reactivation_emails):
+        raise ValueError('reactivate_emails must be a list of exact account emails.')
+    reactivate = set()
+    for email in reactivation_emails:
+        if email.strip().lower() not in by_email: raise ValueError('Reactivation account not found: ' + email)
+        ident = by_email[email.strip().lower()]['id']
+        if ident not in keep: raise ValueError('Reactivation requires a retained account in the reviewed policy.')
+        reactivate.add(ident)
     dependencies = []
     changes = []
     for user in state['users']:
         new = account(user)
         new['retained'] = user['id'] in keep
-        new['proposed_active'] = user.get('active', True) is not False if new['retained'] else False
+        new['proposed_active'] = (user.get('active', True) is not False or user['id'] in reactivate) if new['retained'] else False
         new['proposed_role'] = 'super_admin' if user['id'] == selected['ceo_email'] else user['role']
         new['proposed_bank_scope'] = 'all_bank' if user['id'] == selected['ceo_email'] else user.get('bank_scope')
         if new['retained'] and user['role'] == 'marketing' and user.get('manager_id') and user['manager_id'] not in keep:
@@ -108,7 +117,7 @@ def make_plan(path, policy):
     plan = {'format':1,'database_format':'enterprise-state-bsi-products-v2','source_fingerprint':fingerprint,
             'source_counts':{key:len(state[key]) for key in COLLECTIONS} | {'files':len(files)},
             'source_records':{key:[{field:row[field] for field in ('id','lead_id','application_id','sim_id','sim_no','app_no','claim_no','created_at') if field in row} for row in state[key]] for key in CLEAR},
-            'protected_selectors':selected, 'accounts':changes, 'unresolved_manager_dependencies':dependencies,
+            'protected_selectors':selected, 'accounts':changes, 'explicit_reactivation_ids':sorted(reactivate), 'unresolved_manager_dependencies':dependencies,
             'business_collections_to_clear':list(CLEAR),'uploaded_files_to_clear':len(files),
             'preserved_master':['partner_parameters','parameter_migration_snapshots','meta'],
             'credential_action':'rotate_every_account; issue_private_temporary_passwords_only_for_active_retained_accounts',
@@ -139,6 +148,10 @@ def prepare(path, plan, output):
     old_agung = dict(next(user for user in state['users'] if user['id'] == selected['agung_email']))
     protected_roles = {user['id'] for user in state['users'] if user['role'] in ('admin_ops','admin_branch')}
     if not protected_roles.issubset(keep) or not set(selected.values()).issubset(keep): raise ValueError('Required accounts were removed from plan.')
+    reactivate = set(plan.get('explicit_reactivation_ids', []))
+    if not reactivate.issubset(keep): raise ValueError('Reactivation requires a retained account in the reviewed plan.')
+    expected_active = {user['id']:(user.get('active', True) is not False or user['id'] in reactivate) if user['id'] in keep else False for user in state['users']}
+    if any(row['proposed_active'] is not expected_active[row['id']] for row in plan['accounts']): raise ValueError('Proposed account status differs from the explicit reactivation policy.')
     output.mkdir(mode=0o700, parents=False, exist_ok=False)
     os.chmod(output, 0o700)
     candidate = output/'production.sqlite'
@@ -149,7 +162,7 @@ def prepare(path, plan, output):
     for user in state['users']:
         if user['id'] == selected['ceo_email']:
             user['role'] = 'super_admin'; user['bank_scope'] = 'all_bank'
-        user['active'] = user.get('active', True) is not False if user['id'] in keep else False
+        user['active'] = expected_active[user['id']]
         user['auth_version'] = (user.get('auth_version') if isinstance(user.get('auth_version'), int) else 0) + 1
         user['must_change_password'] = True
         temporary = 'Lp-' + secrets.token_urlsafe(24) + '!'

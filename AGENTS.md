@@ -13,5 +13,5 @@ Read `docs/STATUS.md`, `docs/SOP.md` and `docs/RUNBOOK.md` before changing or de
 - Deployment status comes from `doctor`/the actual process and release manifest, not the folder name or an old chat message. Record tests actually executed and distinguish local tests, GitHub workflow runs and VPS verification.
 - Keep `docs/STATUS.md`, release notes and the runbook current. State remaining work and the exact command/UI action needed to resume after a chat interruption.
 
-- Go-live work: protect primary Super Admin and CEO (CEO uses super_admin), Agung keeps the current role, and retain every admin_ops/admin_branch account. Select accounts by exact ID/email, never fuzzy name matching.
+- Go-live work: protect primary Super Admin and CEO (CEO uses super_admin), Agung keeps the current role and is explicitly reactivated as confirmed by the owner, and retain every admin_ops/admin_branch account. Preserve other inactive accounts' status. Select accounts by exact ID/email, never fuzzy name matching; actual selectors belong only in the private policy.
 - Production customer-data cleanup is a separate reviewed cutover. ops/production.py prepares a new candidate only; never run tests/reset/restore against shared/data. Never commit a live roster, private policy or temporary passwords.

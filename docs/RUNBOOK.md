@@ -19,11 +19,12 @@ Template policy; isi dengan selector tepat yang dikonfirmasi pemilik, simpan600 
   "primary_superadmin_email": "superadmin@example.invalid",
   "ceo_email": "ceo@example.invalid",
   "agung_email": "agung@example.invalid",
-  "extra_keep_emails": []
+  "extra_keep_emails": [],
+  "reactivate_emails": ["agung@example.invalid"]
 }
 ```
 
-Plan menampilkan semua akun, usulan aktif/role, kelompok bisnis yang akan kosong dan dependensi manager. Seluruh admin_ops/admin_branch wajib masuk daftar terlindungi. CEO menjadi super_admin/all_bank. Role/cabang/bank Agung tetap. Source berubah setelah plan dibuat menyebabkan prepare ditolak. Folder keluaran harus baru.
+Plan menampilkan semua akun, usulan aktif/role, kelompok bisnis yang akan kosong dan dependensi manager. Seluruh admin_ops/admin_branch wajib masuk daftar terlindungi. CEO menjadi super_admin/all_bank. Role/cabang/bank Agung tetap. `reactivate_emails` hanya berisi selector tepat untuk akun terlindungi yang telah disetujui untuk aktif kembali; kosongkan jika tidak ada. Konfirmasi terbaru pemilik mengaktifkan kembali Agung sebagai Sales Manager, tanpa mengubah status akun admin nonaktif lainnya. Source berubah setelah plan dibuat menyebabkan prepare ditolak. Folder keluaran harus baru.
 
 Hasil prepare: `production.sqlite`, `plan.json`, `result.json` dan `credentials.private.json`. Tiga berkas pertama untuk pemeriksaan operator; kredensial hanya untuk penyerahan privat. Hasil CLI tidak mencetak password. Prepare tidak memasang database di server, tidak menjalankan PM2 dan tidak menghapus arsip.
 

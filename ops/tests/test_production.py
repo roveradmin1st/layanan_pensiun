@@ -74,6 +74,28 @@ class ProductionPreparationTests(unittest.TestCase):
         before=p.file_hash(self.source);self.policy['agung_email']='agung-typo@example.test'
         with self.assertRaisesRegex(ValueError,'not found'):self.plan()
         self.assertEqual(before,p.file_hash(self.source))
+    def test_explicit_reactivation_preserves_role_scope_and_other_inactive_admins(self):
+        agung=self.state['users'][2];agung['active']=False;agung['role']='sales_manager'
+        self.update(self.state)
+        self.assertFalse(next(row for row in self.plan()['accounts'] if row['id']=='agung')['proposed_active'])
+        self.policy['reactivate_emails']=['agung@example.test']
+        plan=self.plan();self.assertEqual(plan['explicit_reactivation_ids'],['agung'])
+        self.assertTrue(next(row for row in plan['accounts'] if row['id']=='agung')['proposed_active'])
+        output=self.root/'reactivated';p.prepare(self.source,plan,output)
+        after,_,_=p.read_snapshot(output/'production.sqlite');byid={user['id']:user for user in after['users']}
+        self.assertTrue(byid['agung']['active']);self.assertEqual(byid['agung']['role'],'sales_manager')
+        self.assertEqual(byid['agung']['branch'],agung['branch']);self.assertEqual(byid['agung']['bank_scope'],agung['bank_scope'])
+        self.assertTrue(byid['agung']['must_change_password']);self.assertFalse(byid['ops-b']['active'])
+        self.assertIn('agung',[user['id'] for user in json.loads((output/'credentials.private.json').read_text())['accounts']])
+        self.assertFalse(p.read_snapshot(self.source)[0]['users'][2]['active'])
+    def test_unretained_unknown_and_unreviewed_reactivation_are_rejected(self):
+        for emails in (['marketing-other@example.test'],['missing@example.test'],'agung@example.test'):
+            self.policy['reactivate_emails']=emails
+            with self.assertRaises(ValueError):self.plan()
+        self.policy.pop('reactivate_emails')
+        plan=self.plan();next(row for row in plan['accounts'] if row['id']=='ops-b')['proposed_active']=True
+        body=dict(plan);body.pop('plan_sha256');plan['plan_sha256']=p.hash_value(body)
+        with self.assertRaisesRegex(ValueError,'explicit reactivation'):p.prepare(self.source,plan,self.root/'rejected')
     def test_prepare_builds_private_candidate_and_preserves_source_masters_and_roles(self):
         before=p.file_hash(self.source);output=self.root/'candidate';result=p.prepare(self.source,self.plan(),output)
         state,files,_=p.read_snapshot(output/'production.sqlite')

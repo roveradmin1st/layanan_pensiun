@@ -16,7 +16,7 @@ Satu orang dapat memegang beberapa tugas pada tahap awal, tetapi setiap hasil te
 |---|---|
 | Super Admin utama | Pertahankan akun dan hak penuh |
 | CEO | Pertahankan; super_admin dan seluruh bank |
-| Agung Pambudi | Pertahankan role, cabang dan cakupan saat ini |
+| Agung Pambudi | Aktifkan kembali sebagai Sales Manager; pertahankan cabang dan cakupan saat ini |
 | Seluruh Admin Operasional dan Admin Cabang | Pertahankan semuanya; bukan batas lima akun |
 | Akun lain | Usulkan nonaktif, bukan hapus; tampilkan dalam plan untuk ditinjau |
 | Master/parameter bank kustom | Pertahankan; bandingkan checksum/isi sebelum dan sesudah |
@@ -25,7 +25,7 @@ Satu orang dapat memegang beberapa tugas pada tahap awal, tetapi setiap hasil te
 | Klaim | APPROVED dahulu; PAID setelah transfer nyata dan bukti valid |
 | Backup luar VPS | Terenkripsi, simpan di laptop pemilik dahulu |
 
-Akun terlindungi yang sebelumnya nonaktif tetap nonaktif. Jangan menebak email dari nama. Jika Marketing terlindungi masih bergantung pada SM yang akan nonaktif, tinjau dependensinya terlebih dahulu.
+Akun terlindungi yang sebelumnya nonaktif tetap nonaktif, kecuali Agung yang reaktivasinya telah disetujui pemilik. Reaktivasi harus tercantum eksplisit dalam policy/plan. Jangan menebak email dari nama. Jika Marketing terlindungi masih bergantung pada SM yang akan nonaktif, tinjau dependensinya terlebih dahulu.
 
 ## Syarat membuka operasional
 
