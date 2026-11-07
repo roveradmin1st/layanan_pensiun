@@ -12,6 +12,7 @@ Basis bisnis: `01fa73b8fa4d433ab62cd15b3609fb46968c7155` pada branch `fix/bsi-pr
 - Konfirmasi inventory: reaktivasi Agung didukung melalui selector tepat dalam policy/plan, dengan role Sales Manager tetap. Reaktivasi tanpa pencantuman eksplisit atau untuk akun di luar daftar terlindungi ditolak; admin nonaktif lain tetap nonaktif.
 - Konfirmasi wilayah: alias PEMATNGSIANTAR/BSI SIANTAR 2 dikenali sebagai PEMATANGSIANTAR pada otorisasi, API profil dan pilihan SM. Role/bank_scope tetap; kandidat dan password yang sudah disiapkan tidak diubah.
 - Pemeriksaan kandidat memakai salinan fisik terpisah, semua login aktif, gerbang password, restart produksi kedua dan verifikasi checksum kandidat/kredensial asli. Pemeriksaan terintegrasi CI memakai data sintetis saja.
+- Alat operasi terpisah memeriksa rilis yang belum aktif sebagai UID/GID lpapp dengan data sementara dan dua startup. Checksum/izin kode, identitas proses, loopback, HTML/API dan kebersihan data diperiksa. Kegagalan setelah startup tetap membersihkan proses/link/data uji; kode aplikasi tetap dipin ke c76e823 selama publikasi alat ini.
 - Backup SQLite konsisten sebagai lpapp, penyegelan root, timer, doctor tanpa dump secret dan ekspor GPG terenkripsi ke laptop. SOP memisahkan arsip, kandidat, review dan aktivasi.
 - CI tanpa izin deploy, database tes terpisah, tes startup/sesi/dokumen/pembayaran dan browser pada data sintetis. Tes parameter lama kini memakai DB sendiri sehingga tidak mengubah kebijakan tes berikutnya.
 

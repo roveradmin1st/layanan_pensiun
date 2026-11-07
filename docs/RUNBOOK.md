@@ -44,6 +44,21 @@ Semua password sementara dibaca secara privat untuk menguji akun aktif; tidak di
 
 Pemilik telah menyetujui alias `PEMATNGSIANTAR` dan `BSI SIANTAR 2` sebagai wilayah PEMATANGSIANTAR yang sama. Alias diterapkan pada pengenalan cabang dan API profil/pilihan SM; bank_scope tetap terpisah. Kandidat lama berformat `lp-production-20261109-v1` tetap kompatibel dan tidak perlu dibuat ulang untuk perbaikan alias ini.
 
+### Memeriksa rilis sebagai lpapp
+
+Alat operasi mempunyai versi tersendiri dari aplikasi. Untuk persiapan ini kode aplikasi tetap dipin ke c76e823 yang sudah lulus GitHub Actions dan uji kandidat VPS. Publikasi alat pemeriksaan tidak meminta build atau checkout ulang aplikasi. Ambil file alat dari commit operasi yang direview, verifikasi SHA256, lalu pasang root-owned seperti alat backup sebelum menjalankan:
+
+```bash
+sudo python3 -I /usr/local/lib/layanan-pensiunan/ops/check_staged_release.py \
+  --release /srv/layanan-pensiunan/releases/layanan-pensiunan-c76e823-production \
+  --candidate /path/folder-privat/candidate \
+  --commit c76e823db5a047807bea77ad6c03f2985e62560b
+```
+
+Rilis wajib belum aktif, root-owned, sesuai DEPLOYMENT.json dan belum mempunyai backend/data. Database kandidat serta candidate-check.json harus cocok dengan commit dan checksum yang telah diuji. Alat menahan .deploy.lock, membuat salinan fisik kandidat di folder privat sementara, memasang link data hanya dalam rilis yang belum aktif, lalu menjalankan dua startup Node sebagai UID/GID lpapp dengan secret uji acak di environment. Port acak hanya127.0.0.1. HTML harus sama, API anonim401 dan quick-role403. Proses dihentikan sebelum link/data uji dihapus, termasuk saat HTTP check gagal.
+
+Hasil UJI LPAPP BERHASIL disimpan pada LPAPP-CHECK.json root-owned dalam rilis. candidate_unchanged/temporary_processes_stopped/temporary_data_removed harus true, live_release_changed/live_database_modified/release_data_link_present harus false. Tidak ada password dibaca/dicetak, runtime.env dimuat, shared/data dibuka, PM2 dipanggil atau Nginx diubah. Pemeriksaan ini belum membuktikan reboot aktual maupun penerimaan perhitungan bank oleh klien. Jangan membuat link ke shared/data atau menyalakan rilis baru sebelum rencana cutover selesai.
+
 ## Pemeriksaan server dan backup
 
 Skrip serta unit backup dipasang root-owned setelah review. Backup berjalan dengan SQLite worker lpapp dan hasil disimpan root700/600. Pengujian lokal bukan bukti timer/HTTPS/reboot aktual pada VPS. Catat hasil server dan tujuan offsite sebelum menyatakan siap.
