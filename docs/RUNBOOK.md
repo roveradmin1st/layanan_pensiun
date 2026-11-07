@@ -133,7 +133,7 @@ Setelah hasil konkret ditinjau dan waktu maintenance disepakati, jalankan apply 
 
 ```bash
 sudo systemd-run --unit=lp-production-cutover --wait --collect \
-  --property=Type=oneshot --property=RuntimeMaxSec=1200 --property=TimeoutStopSec=180 \
+  --property=Type=oneshot --property=TimeoutStartSec=1200 --property=TimeoutStopSec=180 \
   /usr/bin/python3 -I /usr/local/lib/layanan-pensiunan/ops/production_cutover.py apply \
   --plan /srv/layanan-pensiunan/backups/FOLDER_AKTUAL/plan.json \
   --plan-sha256 CHECKSUM_PLAN_AKTIVASI_AKTUAL \
