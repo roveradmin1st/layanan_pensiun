@@ -104,6 +104,18 @@ export const StageTracker = ({ app }) => {
 function DocChecklist({ app, admin, canUpload, onChanged }) {
   const ref = useRef();
   const [target, setTarget] = useState(null);
+  const [viewed, setViewed] = useState({});
+  const viewDocument = async (doc) => {
+    try {
+      const proof = await openFile(`/applications/${app.id}/documents/${doc.key}`);
+      if (proof.version !== Math.max(1, doc.versions || 1)) {
+        onChanged();
+        toast.info("Versi dokumen sudah berubah. Buka kembali berkas terbaru setelah daftar diperbarui.");
+        return;
+      }
+      setViewed((old) => ({ ...old, [doc.key]: proof }));
+    } catch (e) { toast.error(errMsg(e)); }
+  };
   const upload = async (file) => {
     if (!file) return;
     if (!file.name.toLowerCase().endsWith(".pdf")) { toast.error("Format dokumen harus PDF"); return; }
@@ -114,7 +126,10 @@ function DocChecklist({ app, admin, canUpload, onChanged }) {
   const review = async (key, status) => {
     const note = status === "ditolak" ? window.prompt("Catatan revisi dokumen (wajib):") : "";
     if (status === "ditolak" && !note) return;
-    try { await api.post(`/applications/${app.id}/documents/${key}/review`, { status, note }); toast.success(status === "ditolak" ? "Dokumen ditandai perlu revisi" : "Dokumen diterima"); onChanged(); } catch (e) { toast.error(errMsg(e)); }
+    const doc = app.checklist.find((d) => d.key === key);
+    const proof = viewed[key];
+    if (status === "diterima" && (!proof?.sha256 || proof.version !== Math.max(1, doc?.versions || 1))) return toast.error("Buka dan periksa berkas terbaru sebelum menyetujui.");
+    try { await api.post(`/applications/${app.id}/documents/${key}/review`, { status, note, expected_version: proof?.version || Math.max(1, doc?.versions || 1), expected_sha256: proof?.sha256 }); toast.success(status === "ditolak" ? "Dokumen ditandai perlu revisi" : "Dokumen diterima"); onChanged(); } catch (e) { toast.error(errMsg(e)); }
   };
   const totalDocs = app.checklist.length;
   const uploadedDocs = app.checklist.filter((d) => Boolean(d.filename)).length;
@@ -137,7 +152,7 @@ function DocChecklist({ app, admin, canUpload, onChanged }) {
               {d.filename ? (
                 <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
                   <button
-                    onClick={() => openFile(`/applications/${app.id}/documents/${d.key}`)}
+                    onClick={() => viewDocument(d)}
                     className="flex max-w-[280px] items-center gap-1 truncate font-medium text-[#5720B8] hover:underline"
                     title={d.filename}
                   >
@@ -174,10 +189,10 @@ function DocChecklist({ app, admin, canUpload, onChanged }) {
                   <FileUp className="h-3.5 w-3.5" />
                 </Button>
               )}
-              {admin && d.filename && app.stage === "upload_dokumen" && (
+              {admin && d.filename && !app.rejected && app.stage !== "booking_live" && (
                 <>
                   {d.status !== "diterima" && (
-                    <Button size="sm" variant="ghost" className="h-8 text-[#078D67] hover:bg-emerald-50 px-2 font-medium" onClick={() => review(d.key, "diterima")} data-testid={`accept-${d.key}`}>
+                    <Button size="sm" variant="ghost" className="h-8 text-[#078D67] hover:bg-emerald-50 px-2 font-medium" onClick={() => review(d.key, "diterima")} title="Buka berkas terbaru untuk diperiksa, lalu pilih Terima" data-testid={`accept-${d.key}`}>
                       Terima
                     </Button>
                   )}

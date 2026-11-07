@@ -15,29 +15,36 @@ import {
   buildMigratedBsiPartner
 } from "../config/bsi-product-config.js";
 import { calculatePreview } from "../engines/calc-engine.js";
+import { validateState } from "./state-schema.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const IS_PROD = process.env.NODE_ENV === "production";
 const DATA_DIR = path.resolve(__dirname, "../../data");
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-
 const SQLITE_PATH = path.join(DATA_DIR, "enterprise.sqlite");
+if (IS_PROD && !fs.existsSync(SQLITE_PATH)) {
+  throw new Error("PRODUCTION_DATABASE_REQUIRED: siapkan database produksi dari salinan terverifikasi; data demo tidak dibuat.");
+}
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 export const db = new DatabaseSync(SQLITE_PATH);
-
-db.exec(`
-  PRAGMA journal_mode = WAL;
-  CREATE TABLE IF NOT EXISTS kv_store (
-    collection TEXT PRIMARY KEY,
-    payload TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS uploaded_files (
-    id TEXT PRIMARY KEY,
-    filename TEXT NOT NULL,
-    mime_type TEXT NOT NULL,
-    data BLOB NOT NULL,
-    created_at TEXT NOT NULL
-  );
-`);
+if (IS_PROD) {
+  try {
+    const row = db.prepare("SELECT payload FROM kv_store WHERE collection='enterprise_state'").get();
+    if (!row?.payload) throw new Error("State produksi tidak ditemukan.");
+    validateState(JSON.parse(row.payload), { production: true });
+    if (db.prepare("PRAGMA quick_check").all().some((row) => Object.values(row)[0] !== "ok")) throw new Error("SQLite tidak sehat.");
+    db.prepare("SELECT id,filename,mime_type,data,created_at FROM uploaded_files LIMIT 0").all();
+  } catch (error) {
+    db.close();
+    throw new Error("PRODUCTION_DATABASE_INVALID: data asli dipertahankan; periksa backup dan log operator.");
+  }
+  db.exec("PRAGMA journal_mode=WAL;");
+} else {
+  db.exec(`
+    PRAGMA journal_mode=WAL;
+    CREATE TABLE IF NOT EXISTS kv_store (collection TEXT PRIMARY KEY,payload TEXT NOT NULL,updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS uploaded_files (id TEXT PRIMARY KEY,filename TEXT NOT NULL,mime_type TEXT NOT NULL,data BLOB NOT NULL,created_at TEXT NOT NULL);
+  `);
+}
 
 export const APP_STAGES = [
   { key: "upload_dokumen", label: "Upload Dokumen" },
@@ -61,7 +68,7 @@ export const DOC_TEMPLATE = [
   { key: "kk_ahliwaris", label: "Kartu Keluarga (KK) Ahli Waris", group: "Ahli Waris" }
 ];
 
-export function hashPassword(plain) {
+function demoPasswordHash(plain) {
   return crypto.createHash("sha256").update(`lp_salt_2026_${plain}`).digest("hex");
 }
 
@@ -79,7 +86,7 @@ function buildChecklist(prefilled = false) {
 
 function createInitialState() {
   const now = new Date().toISOString();
-  const defaultPwdHash = hashPassword("Password123!");
+  const defaultPwdHash = demoPasswordHash("Password123!");
 
   const users = [
     {
@@ -804,10 +811,12 @@ function createInitialState() {
 let stateCache = null;
 
 export function ensureStoreUpgrades(state) {
+  // Demo fixture upgrades are never allowed to create accounts/transactions in production.
+  if (IS_PROD) { validateState(state, { production: true }); return false; }
   let changed = false;
-  const defaultPwdHash = hashPassword("Password123!");
+  const defaultPwdHash = demoPasswordHash("Password123!");
   const legacySeedHashes = new Set([
-    hashPassword("admin123"),
+    demoPasswordHash("admin123"),
     "50fab87845e64326b207768b12e5a58ffb989871b3ecb170e67532bb7d354f63"
   ]);
 
@@ -1191,18 +1200,23 @@ export function ensureStoreUpgrades(state) {
 export function getStore() {
   if (stateCache) return stateCache;
   const row = db.prepare("SELECT payload FROM kv_store WHERE collection = 'enterprise_state'").get();
-  if (row && row.payload) {
+  if (row?.payload) {
     try {
-      stateCache = JSON.parse(row.payload);
-      if (ensureStoreUpgrades(stateCache)) {
-        saveStore();
-      }
+      const loaded = JSON.parse(row.payload);
+      if (IS_PROD) validateState(loaded, { production: true });
+      const changed = ensureStoreUpgrades(loaded);
+      validateState(loaded, { production: IS_PROD });
+      stateCache = loaded;
+      if (changed) saveStore();
       return stateCache;
-    } catch {
-      // fallback to re-seed
+    } catch (error) {
+      stateCache = null;
+      throw new Error("APPLICATION_STATE_INVALID: data dipertahankan; pengisian ulang data demo diblokir.");
     }
   }
+  if (IS_PROD) throw new Error("PRODUCTION_DATABASE_REQUIRED: state produksi tidak ditemukan.");
   stateCache = createInitialState();
+  validateState(stateCache);
   saveStore();
   return stateCache;
 }

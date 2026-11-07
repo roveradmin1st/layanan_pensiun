@@ -32,7 +32,6 @@ import {
   saveStore,
   withTransaction,
   addAuditLog,
-  hashPassword,
   APP_STAGES,
   DOC_TEMPLATE,
   saveUploadedFile,
@@ -42,6 +41,9 @@ import {
   restoreUploadedFileFromBackup
 } from "./db/database.js";
 import crypto from "node:crypto";
+import { hashPassword, verifyPassword, passwordProblem, isDefaultPassword, PasswordServiceBusy } from "./security/passwords.js";
+import { LoginLimiter } from "./security/login-limiter.js";
+import { documentVersion, documentHash, documentFileId, documentAccepted } from "./security/application-documents.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4000);
@@ -80,9 +82,10 @@ const ROLE_LABEL = {
 
 const app = express();
 app.set("trust proxy", 1);
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 12 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 12 * 1024 * 1024, files: 1, fields: 24, fieldSize: 64 * 1024, parts: 26 } });
 
-app.use(cors({ origin: true, credentials: true }));
+app.use(cors({ origin: IS_PROD ? false : true, credentials: true, exposedHeaders: ["X-Document-Version", "X-Document-SHA256"] }));
+app.use("/api/auth", express.json({ limit: "8kb" }));
 app.use(express.json({ limit: "10mb" }));
 app.use(cookieParser());
 
@@ -107,13 +110,15 @@ function sanitizeUser(u) {
     bank_scope: u.bank_scope || "all_bank",
     phone: u.phone || "",
     active: u.active !== false,
+    must_change_password: u.must_change_password === true,
+    capabilities: { web_restore: !IS_PROD },
     manager_id: u.manager_id || null,
     manager_name: u.manager_name || null
   };
 }
 
 function issueSession(res, user) {
-  const token = jwt.sign({ sub: user.id, role: user.role }, JWT_SECRET, { expiresIn: "12h" });
+  const token = jwt.sign({ sub: user.id, role: user.role, ver: user.auth_version || 0 }, JWT_SECRET, { expiresIn: "12h" });
   res.cookie("lp_token", token, {
     httpOnly: true,
     secure: IS_PROD,
@@ -134,7 +139,7 @@ function getAuthUser(req) {
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     const user = store.users.find((u) => u.id === decoded.sub && u.active !== false);
-    return user || null;
+    return user && Number.isInteger(decoded.ver) && decoded.ver === (user.auth_version || 0) ? user : null;
   } catch {
     return null;
   }
@@ -144,7 +149,26 @@ function requireAuth(req, res, next) {
   const user = getAuthUser(req);
   if (!user) return res.status(401).json({ detail: "Sesi berakhir atau belum login." });
   req.user = user;
+  if (user.must_change_password && !["/api/auth/me", "/api/auth/change-password"].includes(req.path)) {
+    return res.status(403).json({ error_code: "PASSWORD_CHANGE_REQUIRED", detail: "Perbarui kata sandi pribadi sebelum melanjutkan." });
+  }
   next();
+}
+
+const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+const loginLimiter = new LoginLimiter({ accountLimit: IS_PROD ? 10 : 500, ipLimit: IS_PROD ? 100 : 5000 });
+function reserveLogin(req, res, email) {
+  const value = loginLimiter.reserve(req.ip, email);
+  if (value.allowed) return true;
+  res.setHeader("Retry-After", String(value.retryAfter));
+  res.status(429).json({ detail: "Terlalu banyak percobaan. Tunggu beberapa saat sebelum mencoba kembali." });
+  return false;
+}
+function currentActor(req) {
+  const actor = getAuthUser(req);
+  if (!actor) { const error = new Error("Sesi berubah. Silakan masuk kembali."); error.status = 401; throw error; }
+  req.user = actor;
+  return actor;
 }
 
 function requireRoles(...roles) {
@@ -312,24 +336,33 @@ function scopeLeads(store, user) {
 // ============================================================================
 // 1. AUTHENTICATION & QUICK ROLE SWITCHER
 // ============================================================================
-app.post("/api/auth/login", (req, res) => {
+app.post("/api/auth/login", asyncHandler(async (req, res) => {
   const { email, password } = req.body || {};
-  if (!email || !password || typeof password !== "string") {
+  if (!reserveLogin(req, res, email)) return;
+  if (typeof email !== "string" || !email.trim() || email.length > 254 || typeof password !== "string" || Buffer.byteLength(password, "utf8") > 256) {
     return res.status(401).json({ detail: "Email atau kata sandi tidak valid." });
   }
-  const store = getStore();
-  const user = store.users.find((u) => u.email.toLowerCase() === String(email).trim().toLowerCase());
-  if (!user || user.active === false) {
+  const user = getStore().users.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
+  const oldHash = user?.password_hash;
+  const oldVersion = user?.auth_version || 0;
+  const dummy = "scrypt$131072$8$1$" + "00".repeat(16) + "$" + "00".repeat(64);
+  const result = await verifyPassword(password, user?.active !== false && user ? oldHash : dummy);
+  if (!user || user.active === false || !result.valid) {
+    if (user && result.needsRehash) await verifyPassword(password, dummy);
     return res.status(401).json({ detail: "Email atau kata sandi tidak valid." });
   }
-  const hashed = hashPassword(password);
-  if (user.password_hash !== hashed) {
-    return res.status(401).json({ detail: "Email atau kata sandi tidak valid." });
-  }
-  const token = issueSession(res, user);
-  addAuditLog(user, "login", "auth", `Login berhasil (${ROLE_LABEL[user.role]})`, req.ip);
-  res.json({ user: sanitizeUser(user), access_token: token });
-});
+  if (IS_PROD && isDefaultPassword(password)) return res.status(403).json({ error_code: "PASSWORD_RESET_REQUIRED", detail: "Akun memerlukan kata sandi pribadi. Hubungi administrator untuk pengaturan ulang." });
+  const replacement = result.needsRehash ? await hashPassword(password) : null;
+  const current = getStore().users.find((u) => u.id === user.id && u.active !== false);
+  if (!current || current.password_hash !== oldHash || (current.auth_version || 0) !== oldVersion) return res.status(401).json({ detail: "Akun berubah saat masuk. Silakan coba kembali." });
+  withTransaction(() => {
+    if (replacement) current.password_hash = replacement;
+    if (IS_PROD && password.length < 12) current.must_change_password = true;
+    addAuditLog(current, "login", "auth", `Login berhasil (${ROLE_LABEL[current.role]})`, req.ip);
+  });
+  const token = issueSession(res, current);
+  res.json({ user: sanitizeUser(current), access_token: token });
+}));
 
 app.post("/api/auth/quick-role", (req, res) => {
   // Nonaktifkan secara mutlak pada mode produksi atau jika dinonaktifkan via env.
@@ -361,7 +394,10 @@ app.post("/api/auth/quick-role", (req, res) => {
 
 app.post("/api/auth/logout", (req, res) => {
   const user = getAuthUser(req);
-  if (user) addAuditLog(user, "logout", "auth", "Logout dari aplikasi", req.ip);
+  if (user) withTransaction(() => {
+    user.auth_version = (user.auth_version || 0) + 1;
+    addAuditLog(user, "logout", "auth", "Logout dari aplikasi", req.ip);
+  });
   res.clearCookie("lp_token");
   res.json({ ok: true });
 });
@@ -377,72 +413,33 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
   res.json(sanitizeUser(req.user));
 });
 
-app.post("/api/auth/change-password", requireAuth, (req, res) => {
+app.post("/api/auth/change-password", requireAuth, asyncHandler(async (req, res) => {
   const { current_password, new_password } = req.body || {};
-  if (!current_password || typeof current_password !== "string") {
-    return res.status(400).json({ detail: "Kata sandi saat ini wajib diisi." });
-  }
-  if (!new_password || typeof new_password !== "string" || String(new_password).length < 8) {
-    return res.status(400).json({ detail: "Kata sandi baru minimal 8 karakter." });
-  }
-  const hashedCurrent = hashPassword(current_password);
-  if (req.user.password_hash !== hashedCurrent) {
-    return res.status(400).json({ detail: "Kata sandi saat ini tidak sesuai." });
-  }
+  const problem = passwordProblem(new_password, IS_PROD);
+  if (problem) return res.status(400).json({ detail: problem });
+  const oldHash = req.user.password_hash;
+  if (!(await verifyPassword(current_password, oldHash)).valid) return res.status(400).json({ detail: "Kata sandi saat ini tidak sesuai." });
+  if (current_password === new_password) return res.status(400).json({ detail: "Kata sandi baru harus berbeda dari kata sandi saat ini." });
+  const encoded = await hashPassword(new_password);
+  const actor = currentActor(req);
+  if (actor.password_hash !== oldHash) return res.status(409).json({ detail: "Kata sandi sudah berubah. Silakan ulangi." });
   withTransaction(() => {
-    req.user.password_hash = hashPassword(new_password);
-    addAuditLog(req.user, "change_password", "user", "Memperbarui kata sandi akun", req.ip);
+    actor.password_hash = encoded;
+    actor.auth_version = (actor.auth_version || 0) + 1;
+    actor.must_change_password = false;
+    addAuditLog(actor, "change_password", "user", "Memperbarui kata sandi akun", req.ip);
   });
-  res.json({ ok: true });
-});
-
-const passwordResetTokens = new Map();
+  const token = issueSession(res, actor);
+  res.json({ ok: true, user: sanitizeUser(actor), access_token: token });
+}));
 
 app.post("/api/auth/forgot-password", (req, res) => {
-  const { email } = req.body || {};
-  if (!email || !String(email).trim()) {
-    return res.status(400).json({ detail: "Email wajib diisi." });
-  }
-  const store = getStore();
-  const user = store.users.find(
-    (u) => u.email.toLowerCase() === String(email).trim().toLowerCase() && u.active !== false
-  );
-  if (user) {
-    const token = crypto.randomBytes(32).toString("hex");
-    passwordResetTokens.set(token, {
-      email: user.email,
-      expiresAt: Date.now() + 60 * 60 * 1000 // 1 hour
-    });
-    addAuditLog(user, "forgot_password", user.email, "Permintaan reset kata sandi diajukan", req.ip);
-  }
-  res.json({ message: "Jika email terdaftar, tautan reset telah dikirim. Tautan berlaku selama 1 jam." });
+  if (!reserveLogin(req, res, "recovery:" + String(req.body?.email || ""))) return;
+  if (typeof req.body?.email !== "string" || !req.body.email.trim()) return res.status(400).json({ detail: "Email wajib diisi." });
+  res.json({ delivery: "administrator", message: "Hubungi administrator untuk pengaturan ulang kata sandi. Siapkan email akun Anda untuk verifikasi identitas." });
 });
-
 app.post("/api/auth/reset-password", (req, res) => {
-  const { token, password } = req.body || {};
-  if (!token || !passwordResetTokens.has(token)) {
-    return res.status(400).json({ detail: "Tautan reset kata sandi tidak valid atau telah kedaluwarsa." });
-  }
-  const record = passwordResetTokens.get(token);
-  if (Date.now() > record.expiresAt) {
-    passwordResetTokens.delete(token);
-    return res.status(400).json({ detail: "Tautan reset kata sandi telah kedaluwarsa." });
-  }
-  if (typeof password !== "string" || password.length < 8) {
-    return res.status(400).json({ detail: "Kata sandi baru minimal 8 karakter." });
-  }
-  const store = getStore();
-  const user = store.users.find((u) => u.email.toLowerCase() === record.email.toLowerCase());
-  if (!user) {
-    passwordResetTokens.delete(token);
-    return res.status(404).json({ detail: "Pengguna tidak ditemukan." });
-  }
-  withTransaction(() => {
-    user.password_hash = hashPassword(password);
-    passwordResetTokens.delete(token);
-    addAuditLog(user, "reset_password", user.email, "Kata sandi berhasil diperbarui melalui token reset", req.ip);
-  });
-  res.json({ message: "Kata sandi berhasil diperbarui." });
+  res.status(400).json({ detail: "Pengaturan ulang kata sandi dibantu administrator. Hubungi administrator akun Anda." });
 });
 
 // ============================================================================
@@ -2602,13 +2599,28 @@ app.post("/api/applications/:id/documents/:key", requireAuth, upload.single("fil
     });
   }
 
+  if (appItem.stage === "booking_live") return res.status(409).json({ detail: "Dokumen pengajuan yang sudah Booking/Live tidak dapat diganti." });
   withTransaction(() => {
-    const fileId = `appdoc-${appItem.id}-${doc.key}`;
+    const previousId = documentFileId(appItem, doc);
+    const previous = previousId && getUploadedFile(previousId);
+    const previousVersion = documentVersion(doc);
+    doc.version_history = Array.isArray(doc.version_history) ? doc.version_history : [];
+    if (previous && !doc.version_history.some((item) => item.file_id === previousId)) {
+      doc.version_history.push({ version: previousVersion, file_id: previousId, filename: previous.filename,
+        sha256: documentHash(previous.data), uploaded_at: doc.uploaded_at });
+    }
+    const version = previous ? previousVersion + 1 : Math.max(1, (doc.versions || 0) + 1);
+    const fileId = `appdoc-${appItem.id}-${doc.key}-v${version}-${crypto.randomUUID()}`;
     saveUploadedFile(fileId, req.file.originalname, detected.mime, req.file.buffer);
+    doc.file_id = fileId;
+    doc.versions = version;
+    doc.sha256 = documentHash(req.file.buffer);
+    doc.version_history.push({ version, file_id: fileId, filename: req.file.originalname,
+      sha256: doc.sha256, uploaded_at: new Date().toISOString(), uploaded_by_id: req.user.id });
+    delete doc.reviewed_version; delete doc.reviewed_sha256; delete doc.reviewed_by; delete doc.reviewed_at;
     doc.status = "diunggah";
     doc.filename = req.file.originalname;
     doc.uploaded_at = new Date().toISOString();
-    doc.versions = (doc.versions || 0) + 1;
     doc.note = "";
 
     appItem.history.push({
@@ -2634,17 +2646,20 @@ app.get("/api/applications/:id/documents/:key", requireAuth, (req, res) => {
   if (!doc || !doc.filename) {
     return res.status(404).json({ detail: "Berkas dokumen belum diunggah." });
   }
-  const fileId = `appdoc-${appItem.id}-${req.params.key}`;
-  const stored = getUploadedFile(fileId);
+  const fileId = documentFileId(appItem, doc);
+  const stored = fileId && getUploadedFile(fileId);
   if (stored) {
     res.setHeader("Content-Type", stored.mime_type || "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="${stored.filename}"`);
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Document-Version", String(documentVersion(doc)));
+    res.setHeader("X-Document-SHA256", documentHash(stored.data));
     return res.send(Buffer.from(stored.data));
   }
-  // Fallback for pre-seeded demo documents with defined filename
-  if (doc.filename) {
+  // Synthetic files belong only to the local demo, never production documents.
+  if (!IS_PROD && doc.filename) {
     const sim = store.simulations.find((s) => s.id === appItem.sim_id) || store.simulations[0];
     const pdfBuf = generateSimulationPdfBuffer(sim);
     res.setHeader("Content-Type", "application/pdf");
@@ -2666,7 +2681,7 @@ app.post("/api/applications/:id/documents/:key/review", requireAuth, requireRole
   const doc = appItem.checklist.find((d) => d.key === req.params.key);
   if (!doc) return res.status(404).json({ detail: "Dokumen tidak ditemukan" });
 
-  const { status, note } = req.body || {};
+  const { status, note, expected_version, expected_sha256 } = req.body || {};
   const normalizedStatus = status === "lengkap" ? "diterima" : status;
   if (!["diterima", "ditolak", "diunggah"].includes(normalizedStatus)) {
     return res.status(400).json({ detail: "Status verifikasi dokumen tidak valid." });
@@ -2678,15 +2693,24 @@ app.post("/api/applications/:id/documents/:key/review", requireAuth, requireRole
     return res.status(400).json({ detail: "Catatan alasan penolakan/revisi dokumen wajib diisi." });
   }
 
+  if (appItem.rejected || appItem.stage === "booking_live") return res.status(409).json({ detail: "Pengajuan yang final tidak dapat diubah verifikasi dokumennya." });
+  const fileId = documentFileId(appItem, doc);
+  const stored = fileId && getUploadedFile(fileId);
+  if (normalizedStatus === "diterima" && !stored) return res.status(400).json({ detail: "Berkas asli tidak ditemukan. Unggah ulang sebelum menyetujui." });
+  if (!Number.isInteger(expected_version) || expected_version !== documentVersion(doc)) return res.status(409).json({ error_code: "DOCUMENT_VERSION_CONFLICT", detail: "Versi berkas berubah atau belum dipilih. Buka dan periksa kembali berkas terbaru." });
+  const currentHash = stored && documentHash(stored.data);
+  if (normalizedStatus === "diterima" && expected_sha256 !== currentHash) return res.status(409).json({ error_code: "DOCUMENT_VERSION_CONFLICT", detail: "Isi berkas berubah. Buka dan periksa kembali berkas terbaru." });
   withTransaction(() => {
     doc.status = normalizedStatus;
+    doc.reviewed_version = documentVersion(doc);
+    doc.reviewed_sha256 = currentHash || null;
     doc.note = note || "";
     doc.reviewed_by = req.user.name;
     doc.reviewed_at = new Date().toISOString();
     if (normalizedStatus === "ditolak") {
       appItem.pending = { party: "marketing", type: "revisi", note: `Revisi dokumen ${doc.label}: ${note}` };
     } else if (normalizedStatus === "diterima") {
-      const allAccepted = appItem.checklist.every((d) => d.status === "diterima" && d.filename);
+      const allAccepted = appItem.checklist.every((d) => documentAccepted(appItem, d, getUploadedFile));
       if (allAccepted && appItem.pending?.type === "revisi") {
         appItem.pending = { party: "admin_ops", type: "pemeriksaan", note: "Seluruh dokumen telah diperbaiki dan diterima." };
       }
@@ -2742,7 +2766,7 @@ app.post("/api/applications/:id/action", requireAuth, (req, res) => {
 
   // Validate required inputs before transaction
   if (action === "submit") {
-    const unuploaded = (appItem.checklist || []).filter((d) => !d.filename);
+    const unuploaded = (appItem.checklist || []).filter((d) => !d.filename || !getUploadedFile(documentFileId(appItem, d) || ""));
     if (unuploaded.length > 0) {
       return res.status(400).json({
         detail: `Tidak dapat mengajukan pemeriksaan: masih ada ${unuploaded.length} dokumen yang belum diunggah (${unuploaded.map((d) => d.label).join(", ")}).`
@@ -2756,7 +2780,7 @@ app.post("/api/applications/:id/action", requireAuth, (req, res) => {
     }
   }
   if (action === "forward") {
-    const notAccepted = (appItem.checklist || []).filter((d) => d.status !== "diterima" || !d.filename);
+    const notAccepted = (appItem.checklist || []).filter((d) => !documentAccepted(appItem, d, getUploadedFile));
     if (notAccepted.length > 0) {
       return res.status(400).json({
         detail: `Pengajuan belum dapat diteruskan ke bank: terdapat ${notAccepted.length} dokumen yang belum diverifikasi dan disetujui (${notAccepted.map((d) => d.label).join(", ")}).`
@@ -2776,8 +2800,8 @@ app.post("/api/applications/:id/action", requireAuth, (req, res) => {
     return res.status(400).json({ detail: "Alasan penolakan bank wajib diisi" });
   }
   if (action === "advance") {
-    if (appItem.stage === "upload_dokumen") {
-      const notAccepted = (appItem.checklist || []).filter((d) => d.status !== "diterima" || !d.filename);
+    {
+      const notAccepted = (appItem.checklist || []).filter((d) => !documentAccepted(appItem, d, getUploadedFile));
       if (notAccepted.length > 0) {
         return res.status(400).json({
           detail: `Tahap pengajuan tidak dapat dimajukan: seluruh dokumen wajib diverifikasi dan disetujui (diterima) terlebih dahulu (${notAccepted.map((d) => d.label).join(", ")}).`
@@ -2985,7 +3009,7 @@ app.post("/api/claims/:id/action", requireAuth, (req, res) => {
     return res.status(403).json({ detail: "Anda tidak memiliki akses pada klaim ini." });
   }
   const { action, note, amount } = req.body || {};
-  const map = { submit: "SUBMITTED", review: "REVIEW", revision: "REVISION", approve: "PAID", reject: "REJECTED" };
+  const map = { submit: "SUBMITTED", review: "REVIEW", revision: "REVISION", approve: "APPROVED", reject: "REJECTED" };
   const nextStatus = map[action];
   if (!nextStatus) {
     return res.status(400).json({ detail: "Aksi klaim tidak valid." });
@@ -3028,7 +3052,8 @@ app.post("/api/claims/:id/action", requireAuth, (req, res) => {
     if (claim.status === "PAID") {
       return res.status(409).json({ detail: "Klaim ini sudah disetujui & dibayarkan (PAID) sebelumnya." });
     }
-    if (!["DRAFT", "SUBMITTED", "REVIEW", "REVISION", "APPROVED"].includes(claim.status)) {
+    if (claim.status === "APPROVED") return res.status(409).json({ detail: "Klaim sudah disetujui. Lanjutkan pencatatan pembayaran dengan bukti transfer." });
+    if (!["DRAFT", "SUBMITTED", "REVIEW", "REVISION"].includes(claim.status)) {
       return res.status(400).json({ detail: `Klaim berstatus ${claim.status} tidak dapat disetujui.` });
     }
   } else if (action === "reject") {
@@ -3063,14 +3088,14 @@ app.post("/api/claims/:id/action", requireAuth, (req, res) => {
     if (action === "revision") claim.revision_note = note;
     if (action === "reject") claim.reject_reason = note;
     if (action === "approve") {
-      claim.paid_at = new Date().toISOString();
-      claim.paid_by = req.user.name;
-      claim.payment_note = note || `Disetujui dan dibayarkan (PAID) oleh ${req.user.name}`;
+      claim.approved_at = new Date().toISOString();
+      claim.approved_by_id = req.user.id;
+      claim.approved_by = req.user.name;
     }
     claim.history.push({
       id: `ch-${Date.now()}`,
       action: claim.status,
-      note: note || (action === "approve" ? "Klaim disetujui & dibayarkan (PAID)" : ""),
+      note: note || (action === "approve" ? "Klaim disetujui (APPROVED); menunggu pembayaran" : ""),
       user_name: req.user.name,
       at: new Date().toISOString()
     });
@@ -3092,7 +3117,7 @@ app.post("/api/claims/:id/pay", requireAuth, requireRoles("super_admin", "admin_
   if (claim.status !== "APPROVED") {
     return res.status(400).json({ detail: "Pembayaran klaim hanya dapat dilakukan setelah klaim berstatus APPROVED." });
   }
-  if (!req.file && !claim.payment_proof) {
+  if (!req.file && !getUploadedFile(`${claim.id}-payment`)) {
     return res.status(400).json({ detail: "Bukti transfer/pembayaran wajib diunggah untuk menyelesaikan pembayaran klaim." });
   }
 
@@ -3104,6 +3129,7 @@ app.post("/api/claims/:id/pay", requireAuth, requireRoles("super_admin", "admin_
     }
   }
 
+  if (parsedAmount !== null && Math.round(parsedAmount) !== claim.amount) return res.status(409).json({ detail: "Nominal pembayaran harus sama dengan nominal klaim yang telah disetujui." });
   let payFileMime = "application/pdf";
   if (req.file) {
     const detected = detectSafeDocumentType(req.file.buffer, req.file.originalname);
@@ -3208,7 +3234,7 @@ app.get("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops", 
   res.json(sanitizeUser(target));
 });
 
-app.post("/api/users", requireAuth, requireRoles("super_admin", "admin_ops"), (req, res) => {
+app.post("/api/users", requireAuth, requireRoles("super_admin", "admin_ops"), asyncHandler(async (req, res) => {
   const store = getStore();
   const body = req.body || {};
   const targetRole = body.role || "marketing";
@@ -3221,12 +3247,13 @@ app.post("/api/users", requireAuth, requireRoles("super_admin", "admin_ops"), (r
   if (isBsiScopedUser(req.user) && body.bank_scope && body.bank_scope !== "bsi_only") {
     return res.status(403).json({ detail: "Admin BSI hanya dapat membuat pengguna dengan cakupan khusus BSI." });
   }
-  if (!body.email || !body.name) {
-    return res.status(400).json({ detail: "Nama dan email wajib diisi." });
+  if (typeof body.name !== "string" || !body.name.trim() || body.name.trim().length > 120 ||
+      typeof body.email !== "string" || body.email.trim().length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email.trim())) {
+    return res.status(400).json({ detail: "Isi nama dan alamat email yang valid (nama maksimal 120 karakter)." });
   }
-  if (body.password !== undefined && String(body.password).length < 8) {
-    return res.status(400).json({ detail: "Kata sandi minimal 8 karakter." });
-  }
+  if (body.bank_scope !== undefined && !["all_bank", "bsi_only"].includes(body.bank_scope)) return res.status(400).json({ detail: "Cakupan bank tidak valid." });
+  const passwordError = passwordProblem(body.password, IS_PROD);
+  if (passwordError) return res.status(400).json({ detail: passwordError });
   const targetBranch = isGlobalBranchScope(req.user)
     ? (body.branch !== undefined ? normalizeBranch(body.branch) : normalizeBranch(req.user.branch || "BANDUNG"))
     : normalizeBranch(req.user.branch || "BANDUNG");
@@ -3246,7 +3273,7 @@ app.post("/api/users", requireAuth, requireRoles("super_admin", "admin_ops"), (r
   let assignedManagerName = null;
   if (targetRole === "marketing" && body.manager_id) {
     const mgr = store.users.find((u) => u.id === body.manager_id);
-    if (!mgr || mgr.role !== "sales_manager") {
+    if (!mgr || mgr.role !== "sales_manager" || mgr.active === false) {
       return res.status(400).json({ detail: "Sales Manager pembina yang dipilih tidak valid." });
     }
     if (normalizeBranch(mgr.branch) !== targetBranch) {
@@ -3259,12 +3286,23 @@ app.post("/api/users", requireAuth, requireRoles("super_admin", "admin_ops"), (r
     assignedManagerName = mgr.name;
   }
 
+  const encodedPassword = await hashPassword(body.password);
+  currentActor(req);
+  const currentStore = getStore();
+  if (assignedManagerId) {
+    const manager = currentStore.users.find((u) => u.id === assignedManagerId && u.role === "sales_manager" && u.active !== false);
+    if (!manager || normalizeBranch(manager.branch) !== targetBranch || (bankScope === "all_bank" && isBsiScopedUser(manager))) return res.status(409).json({ detail: "Data Sales Manager berubah. Muat ulang pengguna." });
+    assignedManagerName = manager.name;
+  }
+  if (currentStore.users.some((u) => u.email.toLowerCase() === String(body.email).trim().toLowerCase())) return res.status(409).json({ detail: "Email sudah terdaftar." });
   const newUser = withTransaction(() => {
     const createdUser = {
-      id: `u-${Date.now()}`,
+      id: `u-${crypto.randomUUID()}`,
       name: String(body.name).trim(),
       email: String(body.email).trim().toLowerCase(),
-      password_hash: hashPassword(body.password || "Password123!"),
+      password_hash: encodedPassword,
+      auth_version: 0,
+      must_change_password: IS_PROD,
       role: targetRole,
       branch: targetBranch,
       bank_scope: bankScope,
@@ -3274,16 +3312,16 @@ app.post("/api/users", requireAuth, requireRoles("super_admin", "admin_ops"), (r
       manager_name: assignedManagerName,
       created_at: new Date().toISOString()
     };
-    store.users.push(createdUser);
+    currentStore.users.push(createdUser);
     addAuditLog(req.user, "create_user", createdUser.email, `Membuat akun ${createdUser.name} (${ROLE_LABEL[createdUser.role]})`, req.ip);
     return createdUser;
   });
   res.json(sanitizeUser(newUser));
-});
+}));
 
-app.patch("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops", "admin_branch", "sales_manager"), (req, res) => {
+app.patch("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops", "admin_branch", "sales_manager"), asyncHandler(async (req, res) => {
   const store = getStore();
-  const target = store.users.find((u) => u.id === req.params.id);
+  let target = store.users.find((u) => u.id === req.params.id);
   if (!target) return res.status(404).json({ detail: "Pengguna tidak ditemukan" });
   if (!canAccessBranch(req.user, target.branch)) {
     return res.status(403).json({ detail: "Anda tidak memiliki akses untuk mengubah pengguna cabang lain." });
@@ -3299,8 +3337,13 @@ app.patch("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops"
   }
 
   const { name, role, branch, bank_scope, phone, active, password, manager_id } = req.body || {};
-  if (password !== undefined && password !== "" && String(password).length < 8) {
-    return res.status(400).json({ detail: "Kata sandi baru minimal 8 karakter." });
+  if (name !== undefined && (typeof name !== "string" || !name.trim() || name.trim().length > 120)) return res.status(400).json({ detail: "Nama wajib diisi dan maksimal 120 karakter." });
+  if (bank_scope !== undefined && !["all_bank", "bsi_only"].includes(bank_scope)) return res.status(400).json({ detail: "Cakupan bank tidak valid." });
+  if (active !== undefined && typeof active !== "boolean") return res.status(400).json({ detail: "Status aktif harus berupa boolean." });
+  if (IS_PROD && target.active === false && active === true && !password) return res.status(400).json({ detail: "Tetapkan kata sandi sementara baru saat mengaktifkan kembali akun." });
+  if (password !== undefined && password !== "") {
+    const problem = passwordProblem(password, IS_PROD);
+    if (problem) return res.status(400).json({ detail: problem });
   }
   if (role !== undefined && role !== target.role) {
     if (!ROLE_LABEL[role]) return res.status(400).json({ detail: "Peran tidak valid." });
@@ -3323,7 +3366,7 @@ app.patch("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops"
   if (manager_id !== undefined) {
     if (manager_id && (target.role === "marketing" || role === "marketing")) {
       const mgr = store.users.find((u) => u.id === manager_id);
-      if (!mgr || mgr.role !== "sales_manager") {
+      if (!mgr || mgr.role !== "sales_manager" || mgr.active === false) {
         return res.status(400).json({ detail: "Sales Manager pembina yang dipilih tidak valid." });
       }
       const effectiveBranch = branch !== undefined ? normalizeBranch(branch) : normalizeBranch(target.branch);
@@ -3342,7 +3385,25 @@ app.patch("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops"
     }
   }
 
+  const previousHash = target.password_hash;
+  const previousVersion = target.auth_version || 0;
+  const encodedPassword = password ? await hashPassword(password) : null;
+  currentActor(req);
+  target = getStore().users.find((u) => u.id === req.params.id);
+  if (!target || target.password_hash !== previousHash || (target.auth_version || 0) !== previousVersion) return res.status(409).json({ detail: "Akun berubah. Muat ulang data pengguna." });
+  if (newManagerId) {
+    const manager = getStore().users.find((u) => u.id === newManagerId && u.role === "sales_manager" && u.active !== false);
+    const effectiveBranch = branch !== undefined ? normalizeBranch(branch) : normalizeBranch(target.branch);
+    const effectiveScope = bank_scope !== undefined ? bank_scope : (target.bank_scope || "all_bank");
+    if (!manager || normalizeBranch(manager.branch) !== effectiveBranch || (effectiveScope === "all_bank" && isBsiScopedUser(manager))) return res.status(409).json({ detail: "Data Sales Manager berubah. Muat ulang pengguna." });
+    newManagerName = manager.name;
+  }
+  if (target.id === req.user.id && (active === false || (role && role !== "super_admin")) && target.role === "super_admin") return res.status(400).json({ detail: "Super Admin tidak dapat menonaktifkan atau menurunkan perannya sendiri." });
   withTransaction(() => {
+    if (password || (role !== undefined && role !== target.role) ||
+        (branch !== undefined && normalizeBranch(branch) !== normalizeBranch(target.branch)) ||
+        (bank_scope !== undefined && bank_scope !== (target.bank_scope || "all_bank")) ||
+        (active !== undefined && Boolean(active) !== (target.active !== false))) target.auth_version = (target.auth_version || 0) + 1;
     if (name !== undefined) target.name = String(name).trim();
     if (role !== undefined) target.role = role;
     if (branch !== undefined && isGlobalBranchScope(req.user)) target.branch = normalizeBranch(branch);
@@ -3351,7 +3412,7 @@ app.patch("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops"
     }
     if (phone !== undefined) target.phone = String(phone).trim();
     if (active !== undefined) target.active = Boolean(active);
-    if (password) target.password_hash = hashPassword(password);
+    if (encodedPassword) { target.password_hash = encodedPassword; target.must_change_password = IS_PROD; }
     if (newManagerId !== undefined) {
       target.manager_id = newManagerId;
       target.manager_name = newManagerName;
@@ -3366,7 +3427,7 @@ app.patch("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops"
     addAuditLog(req.user, "update_user", target.email, `Memperbarui profil pengguna ${target.name}`, req.ip);
   });
   res.json(sanitizeUser(target));
-});
+}));
 
 app.get("/api/audit-logs", requireAuth, requireRoles("super_admin", "admin_ops"), (req, res) => {
   const store = getStore();
@@ -3401,7 +3462,10 @@ app.get("/api/backup", requireAuth, requireRoles("super_admin"), (req, res) => {
   res.send(JSON.stringify(backupPayload, null, 2));
 });
 
-app.post("/api/backup/restore", requireAuth, requireRoles("super_admin"), upload.single("file"), (req, res) => {
+app.post("/api/backup/restore", requireAuth, requireRoles("super_admin"), (req, res, next) => {
+  if (IS_PROD) return res.status(403).json({ detail: "Pemulihan data produksi dilakukan pengelola sistem saat maintenance menggunakan backup SQLite terverifikasi." });
+  next();
+}, upload.single("file"), (req, res) => {
   if (!req.file) return res.status(400).json({ detail: "Pilih file JSON backup" });
   let incoming;
   try {
@@ -3487,8 +3551,25 @@ if (fs.existsSync(FRONTEND_DIST)) {
   });
 }
 
+app.use((error, req, res, next) => {
+  if (res.headersSent) return next(error);
+  if (error instanceof PasswordServiceBusy) {
+    res.setHeader("Retry-After", "5");
+    return res.status(503).json({ detail: error.message });
+  }
+  if (error instanceof multer.MulterError) return res.status(400).json({ detail: error.code === "LIMIT_FILE_SIZE" ? "Berkas melebihi batas 12 MB." : "Unggahan tidak valid. Silakan pilih ulang berkas." });
+  if (req.is("multipart/form-data") && /^(Unexpected end of (form|file)|Multipart:)/i.test(error.message || "")) return res.status(400).json({ detail: "Unggahan terputus atau tidak lengkap. Silakan pilih ulang berkas." });
+  if (error.type === "entity.too.large") return res.status(413).json({ detail: "Ukuran permintaan melebihi batas yang diperbolehkan." });
+  if (error instanceof SyntaxError && "body" in error) return res.status(400).json({ detail: "Format permintaan JSON tidak valid." });
+  console.error("[API_ERROR]", req.method, req.path, error.code || error.name);
+  res.status(error.status || 500).json({ detail: error.status ? error.message : "Operasi gagal. Hubungi administrator jika masalah berulang." });
+});
+
+// Validate/load state before accepting traffic; never reseed a failed production state.
+getStore();
+
 // A draft pension preview is a local validation tool; do not expose this development server to the LAN.
-const BIND_HOST = process.env.HOST || (!IS_PROD && process.env.BSI_PENSIUN_PREVIEW === "true" ? "127.0.0.1" : undefined);
+const BIND_HOST = process.env.HOST || (IS_PROD || process.env.BSI_PENSIUN_PREVIEW === "true" ? "127.0.0.1" : undefined);
 app.listen(PORT, BIND_HOST, () => {
   console.log(`[Layanan Pensiunan Enterprise API] Running on http://localhost:${PORT}`);
 });

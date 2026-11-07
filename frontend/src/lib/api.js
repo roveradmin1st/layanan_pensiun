@@ -21,9 +21,13 @@ api.interceptors.request.use((config) => {
 
 let refreshing = null;
 api.interceptors.response.use(
-  (r) => r,
+  (r) => {
+    if (r.data?.access_token) sessionStorage.setItem("lp_access_token", r.data.access_token);
+    return r;
+  },
   async (err) => {
     const cfg = err.config || {};
+    if (err.response?.data?.error_code === "PASSWORD_CHANGE_REQUIRED") window.dispatchEvent(new Event("auth:password-required"));
     if (err.response?.status === 401 && !cfg._retry && !String(cfg.url).includes("/auth/")) {
       cfg._retry = true;
       try {
@@ -80,6 +84,7 @@ export async function openFile(path) {
   const filename = m ? m[1] : (path.split("/").pop() || "dokumen");
   const mimeType = res.data?.type || res.headers["content-type"] || "application/octet-stream";
   const url = URL.createObjectURL(res.data);
+  const document = { version: Number(res.headers["x-document-version"]), sha256: res.headers["x-document-sha256"] };
 
   // Di mode PWA Standalone / layar HP, tampilkan modal preview in-app agar user tidak terjebak di layar penuh tanpa tombol kembali
   if (typeof window !== "undefined" && (isStandalonePwa() || window.innerWidth < 1024)) {
@@ -88,9 +93,10 @@ export async function openFile(path) {
       detail: { url, filename, mimeType }
     });
     const unhandled = window.dispatchEvent(ev);
-    if (!unhandled) return;
+    if (!unhandled) return document;
   }
 
   window.open(url, "_blank", "noopener");
   setTimeout(() => URL.revokeObjectURL(url), 60000);
+  return document;
 }

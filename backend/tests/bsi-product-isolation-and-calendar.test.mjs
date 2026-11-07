@@ -5,10 +5,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { disposableBackend, startFixture } from "./helpers/disposable.mjs";
 
 import { DEFAULT_PARTNER_PARAMETERS } from "../src/config/default-parameters.js";
 import {
@@ -24,8 +21,6 @@ import {
   calculateMax,
   calculatePreview
 } from "../src/engines/calc-engine.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function cloneParams() {
   return JSON.parse(JSON.stringify(DEFAULT_PARTNER_PARAMETERS));
@@ -517,31 +512,11 @@ test("T19 & T20: ensureStoreUpgrades migrates legacy bsi_prapen idempotently, sa
 });
 
 test("T21 & T22: Product-scoped API endpoints enforce Dual Control per product and return 409 on stale expectedPolicyVersion", async () => {
-  const storePath = path.join(__dirname, "../data/store.json");
-  const originalStoreBytes = fs.existsSync(storePath) ? fs.readFileSync(storePath) : null;
-  const testPort = 4097;
-  const baseUrl = `http://127.0.0.1:${testPort}`;
-
-  const child = spawn(process.execPath, ["src/server.js"], {
-    cwd: path.join(__dirname, ".."),
-    env: { ...process.env, PORT: String(testPort) },
-    stdio: ["ignore", "pipe", "pipe"]
-  });
-
+  const fixture = disposableBackend();
+  let running;
   try {
-    await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("Server startup timed out")), 8000);
-      child.stdout.on("data", (chunk) => {
-        if (String(chunk).toLowerCase().includes("running on")) {
-          clearTimeout(timer);
-          resolve();
-        }
-      });
-      child.on("exit", (code) => {
-        clearTimeout(timer);
-        reject(new Error(`Server exited early with code ${code}`));
-      });
-    });
+    running = await startFixture(fixture);
+    const baseUrl = running.base;
 
     const apiCall = async (method, endpoint, { token, body } = {}) => {
       const headers = {};
@@ -619,10 +594,7 @@ test("T21 & T22: Product-scoped API endpoints enforce Dual Control per product a
     });
     assert.equal(staleRes.status, 409);
   } finally {
-    child.kill();
-    await new Promise((resolve) => child.once("exit", resolve));
-    if (originalStoreBytes) {
-      fs.writeFileSync(storePath, originalStoreBytes);
-    }
+    if (running) await running.stop();
+    fixture.cleanup();
   }
 });

@@ -140,7 +140,7 @@ try {
     }
   });
   assert.equal(createTempUser.status, 200);
-  const tempToken = await login(tempEmail, "InitialPassword99!");
+  let tempToken = await login(tempEmail, "InitialPassword99!");
 
   // Universal password "Password123!" must fail for user whose password is "InitialPassword99!"
   const universalBypassAttempt = await api("POST", "/api/auth/login", {
@@ -167,6 +167,8 @@ try {
     body: { email: tempEmail, password: "InitialPassword99!" }
   });
   assert.equal(oldPassAttempt.status, 401, "Password lama harus ditolak setelah ganti password");
+  assert.equal((await api("GET", "/api/auth/me", { token: tempToken })).status, 401, "Token sebelum ganti password harus dicabut");
+  tempToken = await login(tempEmail, "UpdatedPassword99!");
 
   // 2c. Unauthenticated quick-role with ?demo=1 and spoofed headers must be rejected
   const unauthQuickRole = await api("POST", "/api/auth/quick-role?demo=1", {
@@ -763,7 +765,7 @@ try {
     // Review per-berkas: status diterima wajib 200 (P1 Fix)
     const revDocRes = await api("POST", `/api/applications/${createdApp.id}/documents/${docItem.key}/review`, {
       token: adminOpsToken,
-      body: { status: "diterima" }
+      body: { status: "diterima", expected_version: upDocRes.data.versions, expected_sha256: upDocRes.data.sha256 }
     });
     assert.equal(revDocRes.status, 200, `Review dokumen ${docItem.key} status diterima wajib berhasil (200)`);
     assert.equal(revDocRes.data.status, "diterima");
@@ -887,15 +889,22 @@ try {
   assert.equal(unchangedClaim.status, "SUBMITTED", "Status klaim harus tetap SUBMITTED setelah request gagal");
   assert.equal(unchangedClaim.amount, defaultClaimAmount, "Nominal klaim harus tetap utuh setelah request gagal");
 
-  // Admin Ops approves claim -> directly sets status to PAID (disetujui & lunas) -> 200 OK
+  // Approval records authorization; payment requires a separate proof-bearing action.
   const okApproveClaim = await api("POST", `/api/claims/${activeClaimId}/action`, {
-    token: adminOpsToken,
-    body: { action: "approve", note: "Disetujui & Dibayarkan Admin Operasional" }
+    token: adminOpsToken, body: { action: "approve", note: "Disetujui untuk dibayar" }
   });
   assert.equal(okApproveClaim.status, 200);
-  assert.equal(okApproveClaim.data.status, "PAID");
-  assert.ok(okApproveClaim.data.paid_at, "paid_at harus terisi saat klaim disetujui/PAID");
-  assert.equal(okApproveClaim.data.paid_by, "RINA KARTIKA SARI", "paid_by harus mencatat user yang menyetujui");
+  assert.equal(okApproveClaim.data.status, "APPROVED");
+  assert.ok(okApproveClaim.data.approved_at);
+  assert.ok(!okApproveClaim.data.paid_at, "Persetujuan tidak boleh mencatat pembayaran");
+  const noProof = await api("POST", `/api/claims/${activeClaimId}/pay`, { token: adminOpsToken, body: {} });
+  assert.equal(noProof.status, 400);
+  const paymentForm = new FormData();
+  paymentForm.append("file", new Blob([validAppPdfBytes], { type: "application/pdf" }), "payment-proof.pdf");
+  const paidClaim = await api("POST", `/api/claims/${activeClaimId}/pay`, { token: adminOpsToken, body: paymentForm, isForm: true });
+  assert.equal(paidClaim.status, 200);
+  assert.equal(paidClaim.data.status, "PAID");
+  assert.ok(paidClaim.data.paid_at);
 
   // Attempting to approve or pay already PAID claim -> 400/409 rejected
   const dupApproveClaim = await api("POST", `/api/claims/${activeClaimId}/action`, {

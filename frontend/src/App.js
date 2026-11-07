@@ -9,6 +9,7 @@ import { isAdmin } from "./lib/format";
 import { isStandalonePwa } from "./lib/api";
 import { Logo } from "./components/brand/Logo";
 import FilePreviewModal from "./components/pwa/FilePreviewModal";
+import PasswordChangeGate from "./components/auth/PasswordChangeGate";
 
 const ForgotPassword = lazy(() => import("./pages/ForgotPassword"));
 const ResetPassword = lazy(() => import("./pages/ResetPassword"));
@@ -53,6 +54,7 @@ function Protected({ admin, children }) {
   const { user } = useAuth();
   if (user === null) return <Splash />;
   if (!user) return <Navigate to="/login" replace />;
+  if (user.must_change_password) return <PasswordChangeGate />;
   if (admin && !isAdmin(user)) return <Navigate to="/dashboard" replace />;
   return children;
 }

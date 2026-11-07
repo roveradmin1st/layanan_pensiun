@@ -62,6 +62,7 @@ function NavItems({ user, onNavigate }) {
 
 function RoleSwitcher({ user, onSwitch }) {
   const isExplicitDemo =
+    import.meta.env.DEV &&
     typeof window !== "undefined" &&
     new URLSearchParams(window.location.search).get("demo") === "1";
 

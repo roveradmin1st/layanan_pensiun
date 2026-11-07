@@ -167,7 +167,7 @@ function UserDialog({ open, onOpenChange, editing, onSaved, me, allUsers = [] })
             </div>
           )}
 
-          {field("password", editing ? "Kata sandi baru (opsional)" : "Kata sandi awal (min. 8)", { type: "password", required: !editing, minLength: 8 })}
+          {field("password", editing ? "Kata sandi baru (opsional)" : "Kata sandi awal (min. 12)", { type: "password", required: !editing, minLength: 12 })}
           {editing && <label className="flex items-center gap-3 text-sm"><Switch checked={v.active} onCheckedChange={(c) => setV({ ...v, active: c })} data-testid="user-form-active" />Akun aktif</label>}
           <DialogFooter><Button type="submit" className="bg-[#351080] hover:bg-[#2a0c66]" data-testid="user-form-submit">Simpan</Button></DialogFooter>
         </form>

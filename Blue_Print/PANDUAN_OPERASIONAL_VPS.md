@@ -1,4 +1,6 @@
 # Panduan Operasional & Prosedur Kerja Aman di VPS (Manual Deployment & Anti-Gagal)
+
+> Dokumen ini adalah arsip prosedur UAT lama. Untuk produksi mulai 9 November 2026, gunakan [SOP aktif](../docs/SOP.md), [runbook](../docs/RUNBOOK.md) dan [status](../docs/STATUS.md). Jangan menjalankan instruksi backup/restore/root atau mengganti release dari arsip ini pada database produksi yang sudah memakai format baru.
 **Sistem Aplikasi Layanan Pensiunan**  
 *Versi Dokumen: 2.1 — Standar Keamanan & Operasional Produksi*
 

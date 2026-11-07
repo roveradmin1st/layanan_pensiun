@@ -1001,13 +1001,14 @@ function ChangePassword() {
     <form onSubmit={submit} className="lp-card space-y-4 p-6" data-testid="change-password-form">
       <h2 className="font-display font-bold">Ubah Kata Sandi</h2>
       <div className="space-y-1.5"><Label htmlFor="cp1">Kata sandi saat ini</Label><Input id="cp1" type="password" required value={v.current_password} onChange={(e) => setV({ ...v, current_password: e.target.value })} data-testid="current-password-input" /></div>
-      <div className="space-y-1.5"><Label htmlFor="cp2">Kata sandi baru (min. 8)</Label><Input id="cp2" type="password" required minLength={8} value={v.new_password} onChange={(e) => setV({ ...v, new_password: e.target.value })} data-testid="new-password-input" /></div>
+      <div className="space-y-1.5"><Label htmlFor="cp2">Kata sandi baru (minimal 12 karakter)</Label><Input id="cp2" type="password" required minLength={12} value={v.new_password} onChange={(e) => setV({ ...v, new_password: e.target.value })} data-testid="new-password-input" /></div>
       <Button type="submit" className="bg-[#351080] hover:bg-[#2a0c66]" data-testid="change-password-submit">Simpan</Button>
     </form>
   );
 }
 
 function Backup() {
+  const { user } = useAuth();
   const ref = useRef();
   const restore = async (file) => {
     if (!file) return;
@@ -1021,11 +1022,11 @@ function Backup() {
   return (
     <section className="lp-card space-y-4 p-6" data-testid="backup-panel">
       <h2 className="font-display font-bold">Backup &amp; Pemulihan</h2>
-      <p className="text-sm text-slate-500">Unduh salinan JSON seluruh leads, aktivitas, simulasi, parameter mitra, dan audit log. Pemulihan menggabungkan data berdasarkan ID.</p>
+      <p className="text-sm text-slate-500">Unduh salinan JSON seluruh leads, aktivitas, simulasi, parameter mitra, dan audit log. Pemulihan mengganti koleksi data dan dilakukan pengelola sistem saat maintenance.</p>
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" onClick={() => downloadFile("/backup", "backup.json")} data-testid="backup-download-button"><Download className="mr-2 h-4 w-4" />Unduh Backup</Button>
         <input ref={ref} type="file" accept=".json" className="hidden" onChange={(e) => restore(e.target.files[0])} data-testid="restore-file-input" />
-        <Button variant="outline" onClick={() => ref.current.click()} data-testid="restore-button"><Upload className="mr-2 h-4 w-4" />Pulihkan dari File</Button>
+        <Button variant="outline" disabled={user.capabilities?.web_restore === false} onClick={() => ref.current.click()} data-testid="restore-button"><Upload className="mr-2 h-4 w-4" />Pulihkan dari File</Button>
       </div>
     </section>
   );

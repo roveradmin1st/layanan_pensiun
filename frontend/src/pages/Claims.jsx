@@ -79,7 +79,7 @@ function ClaimDetail({ claim, onClose, onChanged }) {
       });
       toast.success(
         action === "approve"
-          ? "Klaim berhasil disetujui & dicatat lunas (PAID)"
+          ? "Klaim disetujui (APPROVED). Lanjutkan pembayaran dengan bukti transfer."
           : action === "reject"
           ? "Klaim telah ditolak (REJECTED)"
           : action === "revision"
@@ -221,14 +221,14 @@ function ClaimDetail({ claim, onClose, onChanged }) {
               {/* Super Admin & Admin Operasional */}
               {isSuperOrOps && (
                 <>
-                  {["DRAFT", "SUBMITTED", "REVIEW", "REVISION", "APPROVED"].includes(s) && (
+                  {["DRAFT", "SUBMITTED", "REVIEW", "REVISION"].includes(s) && (
                     <Button
                       className="bg-[#078D67] text-white hover:bg-[#067253] font-semibold"
                       disabled={busy}
                       onClick={() => act("approve")}
                       data-testid="claim-approve"
                     >
-                      Setujui & Bayar (PAID)
+                      Setujui Klaim
                     </Button>
                   )}
                   {["DRAFT", "SUBMITTED", "REVIEW", "REVISION", "APPROVED"].includes(s) && (

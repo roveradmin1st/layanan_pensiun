@@ -12,7 +12,7 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         PORT: process.env.PORT || 4000,
-        HOST: process.env.HOST || "0.0.0.0",
+        HOST: process.env.HOST || "127.0.0.1",
         JWT_SECRET: process.env.JWT_SECRET
       }
     }

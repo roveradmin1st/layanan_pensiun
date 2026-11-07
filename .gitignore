@@ -73,3 +73,11 @@ Blue_Print/Paket_BSI_Pensiun_Validasi/
 *nominatif*
 *(Responses)*
 *(responses)*
+
+# Operations outputs and private production preparation
+/artifacts/
+/.ops-private/
+**/credentials.private.json
+**/policy.private.json
+__pycache__/
+*.py[cod]
