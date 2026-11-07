@@ -59,7 +59,7 @@ sudo systemctl start lp-backup.service
 sudo python3 -I /usr/local/lib/layanan-pensiunan/ops/server_export.py
 ```
 
-GPG meminta passphrase dua kali tanpa menampilkan ketikan. Gunakan passphrase panjang yang unik dan simpan di pengelola kata sandi, terpisah dari file backup. Jangan masukkan passphrase ke argumen perintah/chat. Skrip mengambil snapshot terbaru yang sudah lolos checksum dan berumur maksimal 90 menit, mengenkripsi AES256 di folder root privat, lalu menyerahkan **file terenkripsi saja** ke `~/lp-backup-downloads/` milik operator. Ia menampilkan path, SHA256 file terenkripsi dan SHA256 database untuk uji pemulihan. Tidak ada password aplikasi atau dokumen dicetak.
+GPG meminta passphrase tanpa menampilkan ketikan; mode loopback dapat meminta sekali saat enkripsi. Uji dekripsi terpisah meminta kata sandi kembali. Gunakan passphrase panjang yang unik dan simpan di pengelola kata sandi, terpisah dari file backup. Jangan masukkan passphrase ke argumen perintah/chat. Skrip mengambil snapshot terbaru yang sudah lolos checksum dan berumur maksimal 90 menit, mengenkripsi AES256 di folder root privat, lalu menyerahkan **file terenkripsi saja** ke `~/lp-backup-downloads/` milik operator. Ia menampilkan path, SHA256 file terenkripsi dan SHA256 database untuk uji pemulihan. Tidak ada password aplikasi atau dokumen dicetak.
 
 Di Explorer Antigravity buka `lp-backup-downloads`, klik kanan file `.sqlite.gpg` → Download ke folder backup laptop. Pada PowerShell lokal laptop:
 
