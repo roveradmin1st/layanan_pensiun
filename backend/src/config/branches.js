@@ -58,6 +58,15 @@ const BRANCH_ALIASES = {
   "PEMATANG SIANTAR": "PEMATANGSIANTAR",
   "SIANTAR": "PEMATANGSIANTAR",
   "SIMALUNGUN": "PEMATANGSIANTAR",
+  "KEMENAG SIMALUNGUN": "PEMATANGSIANTAR",
+  "HUMBAHAS": "PEMATANGSIANTAR",
+  "KEMENAG HUMBAHAS": "PEMATANGSIANTAR",
+  "HUMBANG HASUNDUTAN": "PEMATANGSIANTAR",
+  "INDRAPURA": "PEMATANGSIANTAR",
+  "BATU BARA": "PEMATANGSIANTAR",
+  "BATUBARA": "PEMATANGSIANTAR",
+  "SUTOMO": "PEMATANGSIANTAR",
+  "PERINTIS": "PEMATANGSIANTAR",
   "TOBA": "PEMATANGSIANTAR",
   "TAPANULI": "PEMATANGSIANTAR",
   "ASAHAN": "PEMATANGSIANTAR",
@@ -258,9 +267,22 @@ export function normalizeBranch(rawBranch) {
     return BRANCH_ALIASES[cleaned];
   }
 
-  // Cek jika mengandung kata kunci cabang utama
+  // 1. Cek kecocokan langsung atau mengandung nama cabang kanonikal
   for (const master of MASTER_BRANCHES) {
-    if (cleaned === master || cleaned.startsWith(master + " ") || cleaned.endsWith(" " + master)) {
+    if (
+      cleaned === master ||
+      cleaned.startsWith(master + " ") ||
+      cleaned.endsWith(" " + master) ||
+      cleaned.includes(" " + master + " ") ||
+      cleaned.includes(master)
+    ) {
+      return master;
+    }
+  }
+
+  // 2. Cek kecocokan parsial terhadap alias daerah/outlet
+  for (const [alias, master] of Object.entries(BRANCH_ALIASES)) {
+    if (cleaned.includes(alias)) {
       return master;
     }
   }
@@ -283,7 +305,7 @@ export function resolveBranchFromCityOrText(city = "", branchHint = "", explicit
 
   if (branchHint) {
     const norm = normalizeBranch(branchHint);
-    if (norm) return norm;
+    if (norm && MASTER_BRANCHES.includes(norm)) return norm;
   }
 
   if (city) {

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { Search, Loader2, Check, FileUp, FileText, AlertTriangle, AlertCircle } from "lucide-react";
-import { api, errMsg, openFile } from "../lib/api";
+import { Search, Loader2, Check, FileUp, FileText, AlertTriangle, AlertCircle, Archive } from "lucide-react";
+import { api, errMsg, openFile, downloadFile } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { fmtDate, fmtDateTime, isAdmin, rp } from "../lib/format";
 import { PageHeader, Pager, Empty, DesktopTable, MobileList, ListCard, FilterBar } from "../components/common";
@@ -105,9 +105,17 @@ function DocChecklist({ app, admin, canUpload, onChanged }) {
   const ref = useRef();
   const [target, setTarget] = useState(null);
   const [viewed, setViewed] = useState({});
+  const [downloadingZip, setDownloadingZip] = useState(false);
+
   const viewDocument = async (doc) => {
     try {
-      const proof = await openFile(`/applications/${app.id}/documents/${doc.key}`);
+      const proof = await openFile(`/applications/${app.id}/documents/${doc.key}`, {
+        title: `${doc.label} (${doc.group})`,
+        reviewActions: admin && doc.filename && !app.rejected && app.stage !== "booking_live" ? {
+          onAccept: () => review(doc.key, "diterima"),
+          onReject: () => review(doc.key, "ditolak")
+        } : null
+      });
       if (proof.version !== Math.max(1, doc.versions || 1)) {
         onChanged();
         toast.info("Versi dokumen sudah berubah. Buka kembali berkas terbaru setelah daftar diperbarui.");
@@ -116,6 +124,7 @@ function DocChecklist({ app, admin, canUpload, onChanged }) {
       setViewed((old) => ({ ...old, [doc.key]: proof }));
     } catch (e) { toast.error(errMsg(e)); }
   };
+
   const upload = async (file) => {
     if (!file) return;
     if (!file.name.toLowerCase().endsWith(".pdf")) { toast.error("Format dokumen harus PDF"); return; }
@@ -123,6 +132,7 @@ function DocChecklist({ app, admin, canUpload, onChanged }) {
     fd.append("file", file);
     try { await api.post(`/applications/${app.id}/documents/${target}`, fd); toast.success("Dokumen diunggah"); onChanged(); } catch (e) { toast.error(errMsg(e)); } finally { ref.current.value = ""; }
   };
+
   const review = async (key, status) => {
     const note = status === "ditolak" ? window.prompt("Catatan revisi dokumen (wajib):") : "";
     if (status === "ditolak" && !note) return;
@@ -131,17 +141,50 @@ function DocChecklist({ app, admin, canUpload, onChanged }) {
     if (status === "diterima" && (!proof?.sha256 || proof.version !== Math.max(1, doc?.versions || 1))) return toast.error("Buka dan periksa berkas terbaru sebelum menyetujui.");
     try { await api.post(`/applications/${app.id}/documents/${key}/review`, { status, note, expected_version: proof?.version || Math.max(1, doc?.versions || 1), expected_sha256: proof?.sha256 }); toast.success(status === "ditolak" ? "Dokumen ditandai perlu revisi" : "Dokumen diterima"); onChanged(); } catch (e) { toast.error(errMsg(e)); }
   };
+
+  const downloadAllZip = async () => {
+    setDownloadingZip(true);
+    try {
+      const cleanLeadName = (app.lead_name || "NASABAH").replace(/[^a-zA-Z0-9_-]/g, "_");
+      const cleanAppNo = (app.app_no || "APP").replace(/[^a-zA-Z0-9_-]/g, "_");
+      const zipName = `Dokumen_Pengajuan_${cleanLeadName}_${cleanAppNo}.zip`;
+      await downloadFile(`/applications/${app.id}/documents-zip`, zipName);
+      toast.success("Dokumen pengajuan berhasil diunduh (.zip)");
+    } catch (e) {
+      toast.error(errMsg(e, "Gagal mengunduh berkas ZIP dokumen."));
+    } finally {
+      setDownloadingZip(false);
+    }
+  };
+
   const totalDocs = app.checklist.length;
   const uploadedDocs = app.checklist.filter((d) => Boolean(d.filename)).length;
   const acceptedDocs = app.checklist.filter((d) => d.status === "diterima").length;
   const rejectedDocs = app.checklist.filter((d) => d.status === "ditolak").length;
+
   return (
     <div data-testid="doc-checklist">
       <input ref={ref} type="file" accept="application/pdf,.pdf" className="hidden" onChange={(e) => upload(e.target.files[0])} data-testid="app-doc-file-input" />
-      <p className="mb-2 text-xs text-slate-500" data-testid="doc-progress">
-        Kelengkapan Berkas: <b className="font-semibold text-slate-800">{uploadedDocs}/{totalDocs}</b> Diunggah • <b className="font-semibold text-[#078D67]">{acceptedDocs}/{totalDocs}</b> Diterima
-        {rejectedDocs > 0 && <span className="ml-2 font-semibold text-red-600">• {rejectedDocs} Perlu Revisi</span>}
-      </p>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-slate-500" data-testid="doc-progress">
+          Kelengkapan Berkas: <b className="font-semibold text-slate-800">{uploadedDocs}/{totalDocs}</b> Diunggah • <b className="font-semibold text-[#078D67]">{acceptedDocs}/{totalDocs}</b> Diterima
+          {rejectedDocs > 0 && <span className="ml-2 font-semibold text-red-600">• {rejectedDocs} Perlu Revisi</span>}
+        </p>
+        {admin && uploadedDocs > 0 && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={downloadingZip}
+            onClick={downloadAllZip}
+            data-testid="download-all-zip"
+            className="h-8 gap-1.5 border-slate-300 font-semibold text-[#351080] hover:bg-[#351080]/5 text-xs"
+          >
+            {downloadingZip ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Archive className="h-3.5 w-3.5" />}
+            <span>Unduh Semua (.zip)</span>
+          </Button>
+        )}
+      </div>
+
       <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white">
         {app.checklist.map((d) => (
           <li key={d.key} className="flex flex-col gap-2 p-3 text-sm sm:flex-row sm:items-center sm:justify-between" data-testid={`doc-row-${d.key}`}>
@@ -402,7 +445,7 @@ function AppDetail({ appId, onClose, onChanged }) {
                         ? "bg-emerald-100 text-emerald-800"
                         : "bg-purple-100 text-purple-800"
                     }`}>
-                      {app.claim.status === "PAID" ? "LUNAS (PAID)" : app.claim.status} • {rp(app.claim.amount)}
+                      {app.claim.status === "PAID" ? "LUNAS (PAID)" : app.claim.status} • {app.claim.amount_fixed && app.claim.amount != null ? rp(app.claim.amount) : "Menunggu penetapan Admin"}
                     </span>
                   </div>
                 )}
@@ -651,4 +694,3 @@ export default function Progress() {
     </div>
   );
 }
-

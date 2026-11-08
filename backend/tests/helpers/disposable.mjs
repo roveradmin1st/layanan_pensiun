@@ -13,7 +13,8 @@ export function disposableBackend() {
   fs.mkdirSync(cwd);
   fs.cpSync(path.join(backend, 'src'), path.join(cwd, 'src'), { recursive: true });
   fs.writeFileSync(path.join(cwd, 'package.json'), '{"type":"module"}');
-  fs.symlinkSync(path.join(backend, 'node_modules'), path.join(cwd, 'node_modules'), 'dir');
+  const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+  fs.symlinkSync(path.join(backend, 'node_modules'), path.join(cwd, 'node_modules'), linkType);
   fs.mkdirSync(path.join(root, 'frontend/dist'), { recursive: true });
   fs.writeFileSync(path.join(root, 'frontend/dist/index.html'), '<!doctype html><title>Disposable test</title>');
   return { root, cwd, database: path.join(cwd, 'data/enterprise.sqlite'),

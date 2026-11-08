@@ -66,6 +66,25 @@ function ClaimDetail({ claim, onClose, onChanged }) {
   const admin = isAdmin(user);
   const s = c.status;
 
+  const setClaimAmount = async () => {
+    if (!amount || Number(amount) <= 0) return toast.error("Masukkan nominal insentif yang valid.");
+    setBusy(true);
+    try {
+      await api.post(`/claims/${c.id}/action`, {
+        action: "set_amount",
+        amount: Number(amount),
+        note: note || undefined
+      });
+      toast.success("Nominal insentif berhasil ditetapkan.");
+      setAmount("");
+      onChanged();
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const act = async (action) => {
     if ((action === "revision" || action === "reject") && !note.trim()) {
       return toast.error("Catatan alasan penolakan/revisi wajib diisi.");
@@ -136,7 +155,16 @@ function ClaimDetail({ claim, onClose, onChanged }) {
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-h-[92vh] max-w-2xl overflow-y-auto" data-testid="claim-detail-dialog">
         <DialogHeader><DialogTitle className="font-display">{c.claim_no} — {c.lead_name}</DialogTitle></DialogHeader>
-        <div className="flex items-center gap-2"><Badge s={s} />{c.amount != null && <span className="text-sm font-semibold">{rp(c.amount)}</span>}</div>
+        <div className="flex items-center gap-2">
+          <Badge s={s} />
+          {c.amount != null ? (
+            <span className="text-sm font-bold text-[#17223B] lp-num">{rp(c.amount)}</span>
+          ) : (
+            <span className="rounded bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 border border-amber-200">
+              Menunggu penetapan nominal Admin
+            </span>
+          )}
+        </div>
         <div className="grid grid-cols-2 gap-2 rounded-lg bg-[#F5F6FA] p-3 text-xs">
           <span>Pengajuan: <b>{c.app_no}</b></span><span>Bank: <b>{c.bank_name}</b></span><span>Marketing: <b>{c.marketing_name}</b></span><span>Cabang: <b>{c.branch}</b></span>
           <span>Tgl booking: <b>{fmtDate(c.booking_date)}</b></span><span>No. kredit: <b>{c.credit_no || "-"}</b></span>
@@ -162,17 +190,33 @@ function ClaimDetail({ claim, onClose, onChanged }) {
 
             {/* Input nominal insentif jika Super Admin / Admin Ops */}
             {isSuperOrOps && (
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 rounded-lg border border-slate-200 bg-slate-50/50 p-3">
                 <Label className="text-xs font-semibold text-slate-700">
-                  Nominal insentif (input berwenang)
+                  Penetapan Nominal Insentif (Admin Berwenang)
                 </Label>
-                <Input
-                  inputMode="numeric"
-                  value={amount}
-                  placeholder={`Default saat ini: ${rp(c.amount)}`}
-                  onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))}
-                  data-testid="claim-amount-input"
-                />
+                <div className="flex gap-2">
+                  <Input
+                    inputMode="numeric"
+                    value={amount}
+                    placeholder={c.amount != null ? `Nominal saat ini: ${rp(c.amount)}` : "Ketik nominal insentif fix..."}
+                    onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))}
+                    data-testid="claim-amount-input"
+                    className="bg-white"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={busy || !amount}
+                    onClick={setClaimAmount}
+                    className="shrink-0 border-[#351080] text-[#351080] hover:bg-[#351080]/10 font-semibold"
+                    data-testid="claim-set-amount-button"
+                  >
+                    Tetapkan Nominal
+                  </Button>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Nominal ini yang akan tampil di akun Marketing dan Sales Manager setelah ditetapkan.
+                </p>
               </div>
             )}
 
@@ -408,7 +452,13 @@ export default function Claims() {
                   <TableCell>{c.marketing_name}</TableCell>
                   <TableCell>{c.branch}</TableCell>
                   <TableCell className="lp-num">{fmtDate(c.booking_date)}</TableCell>
-                  <TableCell className="lp-num">{c.amount != null ? rp(c.amount) : "-"}</TableCell>
+                  <TableCell className="lp-num">
+                    {c.amount != null ? (
+                      rp(c.amount)
+                    ) : (
+                      <span className="text-xs text-amber-700 italic">Menunggu penetapan</span>
+                    )}
+                  </TableCell>
                   <TableCell><Badge s={c.status} /></TableCell>
                 </TableRow>
               ))}
@@ -446,4 +496,3 @@ export default function Claims() {
     </div>
   );
 }
-

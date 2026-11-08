@@ -77,23 +77,32 @@ export async function downloadFile(path, fallbackName) {
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
-export async function openFile(path) {
+export async function openFile(path, options = {}) {
   const res = await api.get(path, { responseType: "blob" });
   const cd = res.headers["content-disposition"] || "";
   const m = cd.match(/filename="([^"]+)"/);
   const filename = m ? m[1] : (path.split("/").pop() || "dokumen");
-  const mimeType = res.data?.type || res.headers["content-type"] || "application/octet-stream";
-  const url = URL.createObjectURL(res.data);
+  const rawMime = res.data?.type || res.headers["content-type"] || "application/octet-stream";
+  const isPdf = filename.toLowerCase().endsWith(".pdf") || rawMime.includes("pdf");
+  const mimeType = isPdf ? "application/pdf" : rawMime;
+
+  let blob = res.data;
+  if (isPdf && blob.type !== "application/pdf") {
+    blob = new Blob([res.data], { type: "application/pdf" });
+  }
+
+  const blobSize = blob.size;
+  const url = URL.createObjectURL(blob);
   const document = { version: Number(res.headers["x-document-version"]), sha256: res.headers["x-document-sha256"] };
 
-  // Di mode PWA Standalone / layar HP, tampilkan modal preview in-app agar user tidak terjebak di layar penuh tanpa tombol kembali
-  if (typeof window !== "undefined" && (isStandalonePwa() || window.innerWidth < 1024)) {
+  // Selalu prioritaskan preview in-app modal (popup animasi ringan) agar admin/petugas tidak perlu buka tab baru
+  if (typeof window !== "undefined" && !options?.forceNewTab) {
     const ev = new CustomEvent("lp:preview-file", {
       cancelable: true,
-      detail: { url, filename, mimeType }
+      detail: { url, filename, mimeType, blobSize, document, ...options }
     });
-    const unhandled = window.dispatchEvent(ev);
-    if (!unhandled) return document;
+    const cancelled = !window.dispatchEvent(ev);
+    if (cancelled) return document;
   }
 
   window.open(url, "_blank", "noopener");

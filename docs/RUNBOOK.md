@@ -1,8 +1,26 @@
-# Runbook persiapan produksi
+# Runbook Operasional dan Riwayat Persiapan Produksi
 
-Mulai dari `STATUS.md` dan `SOP.md`. Perintah berikut untuk **salinan arsip di folder privat operator**, bukan shared/data live. Gunakan Python 3.12 dan Node versi `.node-version`.
+Mulai selalu dari [STATUS.md](STATUS.md), [SOP.md](SOP.md), dan instruksi aktif di [`Blue_Print/command.md`](../Blue_Print/command.md).
 
-## Inventory dan kandidat
+## Status Operasional Penting (Acuan Audit 8 November 2026)
+
+1. **Rilis Produksi Sudah Aktif (`c76e823`):**
+   - Symlink `/srv/layanan-pensiunan/current` dan proses aktif (`lpapp`, 1 instance *fork* pada `127.0.0.1:4000`, Node `24.22.2`) telah menjalankan `/srv/layanan-pensiunan/releases/layanan-pensiunan-c76e823-production` (commit `c76e823db5a047807bea77ad6c03f2985e62560b`) dengan database `/srv/layanan-pensiunan/shared/data/enterprise.sqlite` (+ `-wal`, `-shm`).
+2. **Alur Update Berikutnya (Baku):**
+   - **`pengembangan → pengujian → GitHub → CI berhasil → deployment saat diminta pemilik → verifikasi → catat versi`**
+   - Setiap update wajib mempertahankan seluruh data, akun, password, role, status aktif, relasi SM–Marketing, wilayah, cakupan bank, parameter bank, dan dokumen BLOB yang sudah ada.
+3. **Batas Prosedur yang Terbukti vs. Rencana Otomasi / Alat Historis:**
+   - **Sudah Terbukti Bekerja:** Validasi lokal/CI (`python3 ops/ci.py` pada database sementara), pemeriksaan kandidat/rilis pada salinan sementara (`ops/check_candidate.py`, `ops/check_staged_release.py`), snapshot backup SQLite konsisten sebagai `lpapp`, enkripsi GPG ke laptop, dan aktivasi rilis manual terkendali.
+   - **Ditunda / Jangan Dijalankan Ulang untuk Update Rutin:**
+     - `ops/production_cutover.py`: Pernah gagal saat aktivasi transisi UAT→produksi (aktivasi kemudian diselesaikan secara manual atas izin pemilik). Pemilik menunda riset/perbaikan alat ini. **Jangan menjalankan ulang `production_cutover.py` atau skrip aktivasi historis untuk update rutin.**
+     - `/srv/layanan-pensiunan/deploy.sh`: Ada di VPS, namun isi dan kesesuaiannya belum dinilai dalam audit 8 November 2026. **Jangan menganggap file ini sebagai perintah update resmi.**
+     - **Deployment rutin satu tombol:** Baru merupakan sasaran perbaikan berikutnya dan belum tersedia/tervalidasi untuk produksi. Setiap `git push` tidak otomatis memperbarui VPS.
+
+---
+
+## Inventory dan kandidat (Catatan Prosedur Transisi Awal UAT → Produksi)
+
+> Perintah di bawah ini adalah dokumentasi prosedur satu kali saat menyiapkan kandidat awal dari arsip UAT di folder privat operator (bukan `shared/data` live, dan bukan langkah update rutin setelah produksi berjalan). Gunakan Python 3.12 dan Node versi `.node-version`.
 
 ```bash
 umask 077
@@ -12,7 +30,7 @@ python3 ops/production.py prepare --database /path/arsip-uat.sqlite --plan /path
 python3 ops/production.py verify --database /path/calon-produksi-baru/production.sqlite
 ```
 
-Template policy; isi dengan selector tepat yang dikonfirmasi pemilik, simpan600 di folder700:
+Template policy; isi dengan selector tepat yang dikonfirmasi pemilik, simpan 600 di folder 700:
 
 ```json
 {
@@ -38,7 +56,7 @@ Dari checkout persiapan yang dipin ke commit hasil review, dengan dependency bac
 nice -n 10 python3 -I ops/check_candidate.py --candidate /path/folder-privat/candidate
 ```
 
-Perintah ini tidak memerlukan sudo. Skrip membuat salinan fisik database di folder privat sementara milik operator, menjalankan dua proses Node secara berurutan hanya pada 127.0.0.1 dengan port acak, lalu menghentikan proses dan menghapus folder sementara. Ia tidak memakai PM2, runtime.env, port4000, shared/data atau Nginx. Tidak menerima URL API eksternal. Jalankan satu pemeriksaan pada satu waktu; scrypt memakai RAM/CPU sehingga prioritas diturunkan dengan nice.
+Perintah ini tidak memerlukan sudo. Skrip membuat salinan fisik database di folder privat sementara milik operator, menjalankan dua proses Node secara berurutan hanya pada 127.0.0.1 dengan port acak, lalu menghentikan proses dan menghapus folder sementara. Ia tidak memakai PM2, runtime.env, port 4000, shared/data atau Nginx. Tidak menerima URL API eksternal. Jalankan satu pemeriksaan pada satu waktu; scrypt memakai RAM/CPU sehingga prioritas diturunkan dengan nice.
 
 Semua password sementara dibaca secara privat untuk menguji akun aktif; tidak ditampilkan atau diganti pada kandidat asli. Perubahan password/revokasi sesi hanya dicoba pada salinan yang dibuang. Hasil `UJI KANDIDAT BERHASIL` memerlukan checksum kandidat dan kredensial asli identik, data bisnis tetap kosong, master bank sama, gerbang ganti password bekerja, cookie Secure/HttpOnly dan restore produksi ditolak. Metadata saja disimpan pada `candidate-check.json` di folder induk kandidat. Hasil ini belum membuktikan permission lpapp, Nginx/TLS, reboot VPS atau penerimaan angka perhitungan oleh klien.
 
@@ -55,13 +73,13 @@ sudo python3 -I /usr/local/lib/layanan-pensiunan/ops/check_staged_release.py \
   --commit c76e823db5a047807bea77ad6c03f2985e62560b
 ```
 
-Rilis wajib belum aktif, root-owned, sesuai DEPLOYMENT.json dan belum mempunyai backend/data. Database kandidat serta candidate-check.json harus cocok dengan commit dan checksum yang telah diuji. Alat menahan .deploy.lock, membuat salinan fisik kandidat di folder privat sementara, memasang link data hanya dalam rilis yang belum aktif, lalu menjalankan dua startup Node sebagai UID/GID lpapp dengan secret uji acak di environment. Port acak hanya127.0.0.1. HTML harus sama, API anonim401 dan quick-role403. Proses dihentikan sebelum link/data uji dihapus, termasuk saat HTTP check gagal.
+Rilis wajib belum aktif, root-owned, sesuai DEPLOYMENT.json dan belum mempunyai backend/data. Database kandidat serta candidate-check.json harus cocok dengan commit dan checksum yang telah diuji. Alat menahan .deploy.lock, membuat salinan fisik kandidat di folder privat sementara, memasang link data hanya dalam rilis yang belum aktif, lalu menjalankan dua startup Node sebagai UID/GID lpapp dengan secret uji acak di environment. Port acak hanya 127.0.0.1. HTML harus sama, API anonim 401 dan quick-role 403. Proses dihentikan sebelum link/data uji dihapus, termasuk saat HTTP check gagal.
 
 Hasil UJI LPAPP BERHASIL disimpan pada LPAPP-CHECK.json root-owned dalam rilis. candidate_unchanged/temporary_processes_stopped/temporary_data_removed harus true, live_release_changed/live_database_modified/release_data_link_present harus false. Tidak ada password dibaca/dicetak, runtime.env dimuat, shared/data dibuka, PM2 dipanggil atau Nginx diubah. Pemeriksaan ini belum membuktikan reboot aktual maupun penerimaan perhitungan bank oleh klien. Jangan membuat link ke shared/data atau menyalakan rilis baru sebelum rencana cutover selesai.
 
 ## Pemeriksaan server dan backup
 
-Skrip serta unit backup dipasang root-owned setelah review. Backup berjalan dengan SQLite worker lpapp dan hasil disimpan root700/600. Pengujian lokal bukan bukti timer/HTTPS/reboot aktual pada VPS. Catat hasil server dan tujuan offsite sebelum menyatakan siap.
+Skrip serta unit backup dipasang root-owned setelah review. Backup berjalan dengan SQLite worker lpapp dan hasil disimpan root 700/600. Pengujian lokal bukan bukti timer/HTTPS/reboot aktual pada VPS. Catat hasil server dan tujuan offsite sebelum menyatakan siap.
 
 Pemilik memilih **laptop pribadi dahulu** sebagai lokasi offsite. Urutan install berikut dilakukan dari checkout commit yang sudah direview pada VPS, bukan dari folder kode yang sedang berjalan. Ini hanya memasang alat operasi dan penjadwalan backup, tidak mengaktifkan patch aplikasi atau mengganti database. Jangan gunakan controller deploy draft lama `enterprise-state-v1` untuk database BSI products v2/format produksi baru.
 
@@ -112,7 +130,9 @@ Sebelum trafik dibuka dan tanpa penulisan baru, operator dapat mengembalikan pas
 
 Jangan membagikan runtime.env, token, pm2 jlist/env, kredensial sementara atau isi dokumen. Log operasional yang dibagikan cukup status, commit, checksum, waktu dan jumlah record.
 
-## Persiapan dan aktivasi UAT menjadi produksi
+## Arsip Historis: Persiapan dan Aktivasi UAT Menjadi Produksi (`production_cutover.py` — Ditunda)
+
+> **PERINGATAN (8 November 2026):** Aktivasi memakai `production_cutover.py` pernah gagal, lalu aktivasi ke rilis produksi `c76e823` diselesaikan melalui langkah manual yang diizinkan pemilik. Pemilik menunda riset/perbaikan alat ini. **Jangan menjalankan ulang `production_cutover.py` untuk update rutin.** Dokumentasi di bawah ini dipertahankan hanya sebagai arsip referensi historis.
 
 `production_cutover.py` adalah alat bootstrap produksi pertama untuk state BSI products v2 yang belum mempunyai production_format. Ia tidak dipakai untuk update kode rutin atau mengosongkan database produksi yang sudah berjalan. Kode aplikasi tetap c76e823; alat operasi diambil dari commit yang direview dan dipasang root-owned secara terpisah. Verifikasi SHA256 file sebelum install.
 
@@ -127,7 +147,7 @@ sudo python3 -I /usr/local/lib/layanan-pensiunan/ops/production_cutover.py prepa
 
 Prepare memeriksa manifest/checksum dan bukti lpapp, Node, process/current, saved list tepat satu fork, serta doctor (format/password UAT memang belum lolos). Ia membuat snapshot konsisten sebagai lpapp menggunakan worker backup terpasang, kemudian menghitung fingerprint state dan seluruh BLOB dengan format yang sama dengan plan awal. Jika fingerprint berbeda, ia berhenti tanpa maintenance/pergantian dan menyimpan snapshot untuk review. Perubahan audit/login pun dapat menyebabkan penolakan ini; jangan mengubah checksum supaya lolos.
 
-Jika cocok, kandidat dibekukan sebagai salinan root600 di folder root700 bersama snapshot, Nginx, runtime.env dan saved list privat. Master/parameter serta riwayat migrasi wajib identik, password aktif harus scrypt, target bisnis/BLOB kosong, source belum format produksi. Rencana aktivasi mengikat SHA256 kandidat, kode, alat operasi, ENV, Nginx, saved list dan bukti lpapp. `RENCANA AKTIVASI SIAP` hanya mencetak metadata/jumlah data serta path/checksum plan; belum mengaktifkan apa pun. Jangan membagikan isi folder privat tersebut.
+Jika cocok, kandidat dibekukan sebagai salinan root 600 di folder root 700 bersama snapshot, Nginx, runtime.env dan saved list privat. Master/parameter serta riwayat migrasi wajib identik, password aktif harus scrypt, target bisnis/BLOB kosong, source belum format produksi. Rencana aktivasi mengikat SHA256 kandidat, kode, alat operasi, ENV, Nginx, saved list dan bukti lpapp. `RENCANA AKTIVASI SIAP` hanya mencetak metadata/jumlah data serta path/checksum plan; belum mengaktifkan apa pun. Jangan membagikan isi folder privat tersebut.
 
 Setelah hasil konkret ditinjau dan waktu maintenance disepakati, jalankan apply melalui unit systemd agar tidak bergantung pada koneksi SSH. Gunakan path/checksum keluaran prepare yang sebenarnya, bukan placeholder berikut:
 
@@ -140,7 +160,7 @@ sudo systemd-run --unit=lp-production-cutover --wait --collect \
   --confirm-clean-reviewed-uat
 ```
 
-Apply memverifikasi ulang seluruh ikatan dan fingerprint sebelum maintenance. Ia menutup proxy aplikasi dengan503 sambil mempertahankan ACME/HTTPS, memastikan status publik503, menghentikan satu proses, membuat backup terakhir dan memeriksa fingerprint lagi. Data baru yang sempat committed sebelum stop membatalkan pergantian tanpa menghilangkan input itu. Setelah tidak ada handle database lain, seluruh direktori data lama termasuk WAL/SHM diarsipkan, kemudian direktori kandidat dipasang. Kode/current/data dijalankan sebagai pasangan baru, satu fork lpapp, HTML/API/fingerprint diverifikasi, saved list disimpan, backup produksi awal dibuat dan doctor diperiksa sebelum akses dibuka.
+Apply memverifikasi ulang seluruh ikatan dan fingerprint sebelum maintenance. Ia menutup proxy aplikasi dengan 503 sambil mempertahankan ACME/HTTPS, memastikan status publik 503, menghentikan satu proses, membuat backup terakhir dan memeriksa fingerprint lagi. Data baru yang sempat committed sebelum stop membatalkan pergantian tanpa menghilangkan input itu. Setelah tidak ada handle database lain, seluruh direktori data lama termasuk WAL/SHM diarsipkan, kemudian direktori kandidat dipasang. Kode/current/data dijalankan sebagai pasangan baru, satu fork lpapp, HTML/API/fingerprint diverifikasi, saved list disimpan, backup produksi awal dibuat dan doctor diperiksa sebelum akses dibuka.
 
 Jika gagal sebelum pembukaan, alat mengembalikan direktori data asli bersama kode/saved list lama; data baru yang gagal disimpan untuk pemeriksaan. Ia tidak memulihkan snapshot lama di atas input baru. Jika pembukaan mungkin sudah dicoba, rollback otomatis dilarang: data terbaru tetap, penutupan publik diupayakan dan status keberhasilannya dicatat. Periksa status/journal privat; jangan mengulang apply atau melakukan reset/restore. Plan yang sudah dipakai tidak dapat diterapkan ulang. Gangguan daya/kill yang tidak bisa ditangani memerlukan pemeriksaan manual journal dan direktori pasangan.
 

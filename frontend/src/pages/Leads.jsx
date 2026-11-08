@@ -522,8 +522,8 @@ export default function Leads() {
 
   const [activeTab, setActiveTab] = useState("leads"); // "leads" | "requests"
   const [sp] = useSearchParams();
-  const [meta, setMeta] = useState({ branches: [], marketers: [] });
-  const [f, setF] = useState({ q: "", status: "", branch: "", assigned: "", follow_up: sp.get("follow_up") || "" });
+  const [meta, setMeta] = useState({ branches: [], marketers: [], sales_managers: [] });
+  const [f, setF] = useState({ q: "", status: "", branch: "", assigned: "", manager_id: "", follow_up: sp.get("follow_up") || "" });
   const [page, setPage] = useState(1);
   const [data, setData] = useState(null);
   const [selected, setSelected] = useState([]);
@@ -547,7 +547,7 @@ export default function Leads() {
   }, [f, page, loadRequests]);
 
   useEffect(() => {
-    api.get("/leads/meta").then((r) => setMeta(r.data));
+    api.get("/leads/meta").then((r) => setMeta(r.data)).catch(() => {});
     loadRequests();
   }, [loadRequests]);
 
@@ -618,53 +618,44 @@ export default function Leads() {
       {isMarketing && requestMeta?.pending_request && (
         <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900 shadow-xs" data-testid="pending-request-banner">
           <div className="flex items-center gap-2.5">
-            <Clock className="h-4 w-4 shrink-0 text-amber-600" />
+            <Clock className="h-4 w-4 text-amber-600 shrink-0" />
             <div>
-              <p className="font-bold text-amber-800">Permohonan Data Sedang Ditinjau Admin Operasional</p>
-              <p className="text-[11px] text-amber-700">
-                Permohonan <b>{requestMeta.pending_request.request_no}</b> ({requestMeta.pending_request.requested_count} data) diajukan pada {fmtDateTime(requestMeta.pending_request.created_at)}. Data akan otomatis masuk ke daftar kerja Anda begitu disetujui.
+              <span className="font-bold">Permohonan Data Aktif: {requestMeta.pending_request.request_no}</span>
+              <p className="mt-0.5 text-amber-800">
+                Meminta {requestMeta.pending_request.requested_count} data prospek. Sedang menunggu persetujuan Admin Operasional.
               </p>
             </div>
           </div>
-          <Button size="sm" variant="outline" className="border-amber-300 bg-white text-xs" onClick={() => setHistoryModalOpen(true)}>
-            Lihat Tiket
-          </Button>
+          <span className="rounded-full bg-amber-200/80 px-2.5 py-0.5 text-[10px] font-bold text-amber-900">
+            PENDING
+          </span>
         </div>
       )}
 
-      {isMarketing && !requestMeta?.pending_request && requestMeta?.today_approved_count > 0 && !requestMeta?.can_request_today && (
-        <div className="flex items-center gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50 p-3.5 text-xs text-emerald-900 shadow-xs">
-          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
-          <p>
-            <b>Kuota Harian Hari Ini Terpenuhi:</b> Anda telah menerima <b>{requestMeta.today_approved_count} data prospek</b> hari ini. Silakan maksimalkan follow up prospek Anda; permohonan kuota berikutnya dapat diajukan kembali <b>besok hari</b>.
-          </p>
-        </div>
-      )}
-
-      {/* Admin Tab Switcher: Leads Table vs Permintaan Data Marketing */}
+      {/* Tab Switcher for Admin Central */}
       {isCentral && (
         <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
           <button
-            type="button"
             onClick={() => setActiveTab("leads")}
-            data-testid="tab-leads-database"
-            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-bold transition ${
+            data-testid="tab-leads"
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition ${
               activeTab === "leads"
                 ? "bg-[#351080] text-white shadow-xs"
-                : "bg-white text-slate-600 hover:bg-slate-100 border border-slate-200"
+                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
             }`}
           >
-            <FileSpreadsheet className="h-4 w-4" />
-            <span>Database Leads Calon Debitur</span>
+            <span>Daftar Seluruh Leads</span>
+            <span className="rounded-full bg-white/20 px-1.5 py-0.2 text-[10px]">
+              {data?.total || 0}
+            </span>
           </button>
           <button
-            type="button"
             onClick={() => setActiveTab("requests")}
-            data-testid="tab-leads-requests"
-            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-bold transition ${
+            data-testid="tab-requests"
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition ${
               activeTab === "requests"
                 ? "bg-[#351080] text-white shadow-xs"
-                : "bg-white text-slate-600 hover:bg-slate-100 border border-slate-200"
+                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
             }`}
           >
             <Send className="h-4 w-4" />
@@ -720,6 +711,15 @@ export default function Leads() {
                     { value: "unassigned", label: "Belum ditugaskan" },
                     ...meta.marketers.map((m) => ({ value: m.id, label: m.name })),
                   ]}
+                />
+              )}
+              {admin && (meta.sales_managers || []).length > 0 && (
+                <FilterSelect
+                  value={f.manager_id}
+                  onChange={(v) => setFilter("manager_id", v)}
+                  placeholder="Semua Sales Manager"
+                  testid="filter-sales-manager"
+                  options={meta.sales_managers.map((sm) => ({ value: sm.id, label: `${sm.name} (${sm.branch})` }))}
                 />
               )}
             </div>
@@ -782,9 +782,14 @@ export default function Leads() {
                       <TableCell><span className="text-xs text-slate-600">{l.branch || "-"}</span></TableCell>
                       {admin && (
                         <TableCell>
-                          <span className="text-xs font-medium text-slate-700">
-                            {l.assigned_name || <i className="text-slate-400">Belum ditugaskan</i>}
+                          <span className="text-xs font-semibold text-slate-800">
+                            {l.assigned_name || <i className="text-slate-400 font-normal">Belum ditugaskan</i>}
                           </span>
+                          {l.sales_manager_name && (
+                            <span className="block text-[10px] font-medium text-purple-700" title={`SM: ${l.sales_manager_name}`}>
+                              SM: {l.sales_manager_name}
+                            </span>
+                          )}
                         </TableCell>
                       )}
                       <TableCell className="text-xs text-slate-600">{fmtDate(l.follow_up_date)}</TableCell>
@@ -809,7 +814,7 @@ export default function Leads() {
                 subtitle={`${l.phone} • ${l.city || l.branch || "-"}`}
                 badge={<StatusBadge status={l.status} />}
                 meta={[
-                  admin ? ["Marketing", l.assigned_name || "Belum ditugaskan"] : null,
+                  admin ? ["Marketing", l.assigned_name ? `${l.assigned_name}${l.sales_manager_name ? ` (SM: ${l.sales_manager_name})` : ""}` : "Belum ditugaskan"] : null,
                   ["Follow-up", fmtDate(l.follow_up_date)],
                   ["Sumber", l.source],
                   ["Gaji Pensiun", l.pension_salary ? rp(l.pension_salary) : null],

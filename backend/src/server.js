@@ -44,6 +44,8 @@ import crypto from "node:crypto";
 import { hashPassword, verifyPassword, passwordProblem, isDefaultPassword, PasswordServiceBusy } from "./security/passwords.js";
 import { LoginLimiter } from "./security/login-limiter.js";
 import { documentVersion, documentHash, documentFileId, documentAccepted } from "./security/application-documents.js";
+import { buildZipBuffer, sanitizeSafeFilename } from "./utils/zip-builder.js";
+import { parseImportFile } from "./utils/lead-import-parser.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4000);
@@ -84,7 +86,7 @@ const app = express();
 app.set("trust proxy", 1);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 12 * 1024 * 1024, files: 1, fields: 24, fieldSize: 64 * 1024, parts: 26 } });
 
-app.use(cors({ origin: IS_PROD ? false : true, credentials: true, exposedHeaders: ["X-Document-Version", "X-Document-SHA256"] }));
+app.use(cors({ origin: IS_PROD ? false : true, credentials: true, exposedHeaders: ["X-Document-Version", "X-Document-SHA256", "Content-Disposition"] }));
 app.use("/api/auth", express.json({ limit: "8kb" }));
 app.use(express.json({ limit: "10mb" }));
 app.use(cookieParser());
@@ -266,8 +268,11 @@ export function detectSafeDocumentType(buffer, originalFilename = "") {
 function canAccessLead(user, lead) {
   if (!user || !lead) return false;
   if (user.role === "super_admin" || user.role === "admin_ops") return true;
-  if (user.role === "admin_branch" || user.role === "sales_manager") {
+  if (user.role === "admin_branch") {
     return canAccessBranch(user, lead.branch);
+  }
+  if (user.role === "sales_manager") {
+    return canAccessBranch(user, lead.branch) || lead.sales_manager_id === user.id;
   }
   return lead.assigned_to === user.id;
 }
@@ -327,10 +332,42 @@ function validateNonNegativeFields(body, fieldNames) {
 
 function scopeLeads(store, user) {
   if (user.role === "super_admin" || user.role === "admin_ops") return store.leads;
-  if (user.role === "admin_branch" || user.role === "sales_manager") {
+  if (user.role === "admin_branch") {
     return store.leads.filter((l) => canAccessBranch(user, l.branch));
   }
+  if (user.role === "sales_manager") {
+    return store.leads.filter(
+      (l) =>
+        canAccessBranch(user, l.branch) ||
+        l.sales_manager_id === user.id ||
+        (l.assigned_to && store.users.some((u) => u.id === l.assigned_to && u.manager_id === user.id))
+    );
+  }
   return store.leads.filter((l) => l.assigned_to === user.id);
+}
+
+function isClaimAmountFixed(claim) {
+  if (!claim) return false;
+  if (claim.amount_fixed === true) return true;
+  if (claim.amount_fixed === false) return false;
+  return ["APPROVED", "PAID"].includes(claim.status) && Number(claim.amount) > 0;
+}
+
+function serializeClaimForUser(claim, user) {
+  if (!claim) return null;
+  const fixed = isClaimAmountFixed(claim);
+  const isSuperOrOps = Boolean(user && ["super_admin", "admin_ops"].includes(user.role));
+  if (isSuperOrOps) {
+    return {
+      ...claim,
+      amount_fixed: fixed
+    };
+  }
+  return {
+    ...claim,
+    amount: fixed ? claim.amount : null,
+    amount_fixed: fixed
+  };
 }
 
 // ============================================================================
@@ -1646,13 +1683,16 @@ app.get("/api/leads/meta", requireAuth, (req, res) => {
   const marketers = store.users
     .filter((u) => u.role === "marketing" && u.active !== false && canAccessBranch(req.user, u.branch))
     .map((u) => ({ id: u.id, name: u.name, branch: normalizeBranch(u.branch) }));
-  res.json({ branches, marketers, master_branches: MASTER_BRANCHES, kanwil_branches: KANWIL_BRANCHES });
+  const sales_managers = store.users
+    .filter((u) => u.role === "sales_manager" && u.active !== false && canAccessBranch(req.user, u.branch))
+    .map((u) => ({ id: u.id, name: u.name, branch: normalizeBranch(u.branch) }));
+  res.json({ branches, marketers, sales_managers, master_branches: MASTER_BRANCHES, kanwil_branches: KANWIL_BRANCHES });
 });
 
 app.get("/api/leads", requireAuth, (req, res) => {
   const store = getStore();
   let list = scopeLeads(store, req.user);
-  const { q, status, branch, assigned, follow_up } = req.query;
+  const { q, status, branch, assigned, follow_up, manager_id } = req.query;
   const page = Math.max(1, Number(req.query.page || 1));
   const pageSize = Math.max(1, Number(req.query.page_size || 10));
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -1665,6 +1705,9 @@ app.get("/api/leads", requireAuth, (req, res) => {
       String(l.nopen || "").toLowerCase().includes(sq) ||
       String(l.city || "").toLowerCase().includes(sq)
     );
+  }
+  if (manager_id) {
+    list = list.filter((l) => l.sales_manager_id === manager_id || (l.assigned_to && store.users.some((u) => u.id === l.assigned_to && u.manager_id === manager_id)));
   }
   if (status) list = list.filter((l) => l.status === status);
   if (branch) list = list.filter((l) => l.branch === branch);
@@ -1757,8 +1800,20 @@ app.post("/api/leads/assign", requireAuth, requireRoles("super_admin", "admin_op
     for (const id of lead_ids) {
       const lead = store.leads.find((l) => l.id === id);
       if (lead) {
-        lead.assigned_to = marketer ? marketer.id : null;
-        lead.assigned_name = marketer ? marketer.name : null;
+        if (marketer) {
+          lead.assigned_to = marketer.id;
+          lead.assigned_name = marketer.name;
+          if (marketer.manager_id) {
+            lead.sales_manager_id = marketer.manager_id;
+            lead.sales_manager_name = marketer.manager_name;
+          } else if (req.user.role === "sales_manager") {
+            lead.sales_manager_id = req.user.id;
+            lead.sales_manager_name = req.user.name;
+          }
+        } else {
+          lead.assigned_to = null;
+          lead.assigned_name = null;
+        }
         lead.updated_at = new Date().toISOString();
         if (!lead.activities) lead.activities = [];
         lead.activities.unshift({
@@ -2332,122 +2387,195 @@ app.get("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "a
 });
 
 app.get("/api/imports/template", requireAuth, requireRoles("super_admin", "admin_ops", "admin_branch", "sales_manager"), (req, res) => {
-  const csv = "Nama,Telepon,Kota,Cabang,Sumber,NOPEN,NIP,Gaji Pensiun,Tanggal Lahir\nH. AHMAD SUBAGJA,081234567890,Kota Bandung,BANDUNG,Data Taspen,195201011977031001,195201011977031001,4650000,1952-01-01\n";
+  const csv = "Nama,Telepon,Kota,Cabang,Sumber,NOPEN,NIP,Gaji Pensiun,Tanggal Lahir,Sales Manager,Marketing\nH. AHMAD SUBAGJA,081234567890,Kota Bandung,BANDUNG,Data Taspen,195201011977031001,195201011977031001,4650000,1952-01-01,,\n";
   res.setHeader("Content-Type", "text/csv");
   res.setHeader("Content-Disposition", 'attachment; filename="template_impor_leads.csv"');
   res.send(csv);
 });
 
-app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "admin_branch"), upload.single("file"), (req, res) => {
-  if (!req.file) return res.status(400).json({ detail: "Pilih file terlebih dahulu" });
+app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "admin_branch", "sales_manager"), upload.single("file"), (req, res) => {
+  if (!req.file) return res.status(400).json({ detail: "Pilih file terlebih dahulu (.xlsx atau .csv)" });
   const store = getStore();
-  const text = req.file.buffer.toString("utf8");
-  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
-  const dataLines = lines.slice(1);
+
+  let parsed;
+  try {
+    parsed = parseImportFile(req.file.buffer, req.file.originalname);
+  } catch (err) {
+    return res.status(400).json({ detail: err.message || "Gagal membaca berkas impor." });
+  }
 
   // Tentukan target cabang eksplisit jika dipilih oleh user
-  const requestedBranch = req.body?.target_branch ? normalizeBranch(req.body.target_branch) : null;
+  const requestedBranch = req.body?.target_branch && req.body.target_branch !== "auto"
+    ? normalizeBranch(req.body.target_branch)
+    : null;
   const forcedBranch = !isGlobalBranchScope(req.user) ? normalizeBranch(req.user.branch) : null;
   const explicitBranch = forcedBranch || requestedBranch || null;
 
-  // Deteksi delimiter CSV (koma, titik koma, atau tab)
-  const firstDataLine = dataLines[0] || "";
-  let delimiter = ",";
-  if (firstDataLine.includes(";") && !firstDataLine.includes(",")) delimiter = ";";
-  else if (firstDataLine.includes("\t") && !firstDataLine.includes(",")) delimiter = "\t";
+  // Tentukan target Sales Manager jika dipilih atau jika user adalah Sales Manager
+  const requestedManagerId = req.body?.target_manager_id && req.body.target_manager_id !== "auto"
+    ? req.body.target_manager_id
+    : null;
+  const forcedManagerId = req.user.role === "sales_manager" ? req.user.id : null;
+  const explicitManagerId = forcedManagerId || requestedManagerId || null;
+
+  const distributionMode = req.body?.distribution_mode || "auto_round_robin"; // auto_round_robin | sm_queue | branch_pool
 
   const batch = withTransaction(() => {
     let inserted = 0;
     let skipped_duplicates = 0;
     let assignedCount = 0;
+    let smQueueCount = 0;
     let unassignedCount = 0;
-    const errors = [];
+    const errors = [...(parsed.errors || [])];
     const branchPointers = {};
     const branchBreakdown = {};
     const batchPhones = new Set();
+    const todayIso = new Date().toISOString().slice(0, 10);
 
-    for (let i = 0; i < dataLines.length; i++) {
-      const cols = dataLines[i]
-        .split(delimiter)
-        .map((c) => c.trim().replace(/^["']|["']$/g, ""));
-      const [name, phone, city, branch, source, nopen, nip, salary, birth] = cols;
-      if (!name || !phone) {
-        errors.push(`Baris ${i + 2}: Nama & Telepon wajib diisi`);
-        continue;
-      }
-      const parsedSalary = salary ? Number(salary) : 4500000;
-      if (!Number.isFinite(parsedSalary) || parsedSalary < 0) {
-        errors.push(`Baris ${i + 2}: Gaji Pensiun tidak valid`);
-        continue;
-      }
+    for (let i = 0; i < parsed.rows.length; i++) {
+      const row = parsed.rows[i];
+      const { name, phone, city, branch_hint, source, nopen, nip, salary, birth_date, age, sales_manager_hint, marketing_hint } = row;
 
-      // Cegah duplikasi data di database maupun antar baris dalam file yang sama
-      if (store.leads.some((l) => l.phone === phone) || batchPhones.has(phone)) {
+      // Cegah duplikasi data di database maupun antar baris dalam batch
+      if (
+        store.leads.some((l) => (phone && l.phone === phone) || (nopen && l.nopen && l.nopen === nopen)) ||
+        (phone && batchPhones.has(phone))
+      ) {
         skipped_duplicates++;
         continue;
       }
-      batchPhones.add(phone);
+      if (phone) batchPhones.add(phone);
 
-      // Resolusi Cabang Kanonikal (Master Cabang Nasional)
-      const targetBranch = explicitBranch || resolveBranchFromCityOrText(city, branch, "") || "BANDUNG";
+      // Resolusi Cabang Kanonikal
+      const targetBranch = explicitBranch || resolveBranchFromCityOrText(city, branch_hint, "") || "BANDUNG";
 
-      // Ambil daftar Marketing Aktif pada cabang tujuan
-      const branchMarketers = store.users.filter(
-        (u) => u.role === "marketing" && u.active !== false && normalizeBranch(u.branch) === targetBranch
-      );
+      // Resolusi Sales Manager
+      let smUser = null;
+      if (explicitManagerId) {
+        smUser = store.users.find((u) => u.id === explicitManagerId && u.role === "sales_manager" && u.active !== false);
+      } else if (sales_manager_hint) {
+        const smLower = sales_manager_hint.toLowerCase();
+        smUser = store.users.find(
+          (u) =>
+            u.role === "sales_manager" &&
+            u.active !== false &&
+            normalizeBranch(u.branch) === targetBranch &&
+            (u.name.toLowerCase().includes(smLower) || u.email.toLowerCase().includes(smLower))
+        );
+      }
+      if (!smUser) {
+        smUser = store.users.find(
+          (u) => u.role === "sales_manager" && u.active !== false && normalizeBranch(u.branch) === targetBranch
+        );
+      }
 
       let assignedTo = null;
       let assignedName = null;
+      let salesManagerId = smUser ? smUser.id : null;
+      let salesManagerName = smUser ? smUser.name : null;
 
-      // Distribusi Otomatis Adil (Round-Robin) antar Marketing di Cabang Terkait
-      if (branchMarketers.length > 0) {
-        if (branchPointers[targetBranch] === undefined) {
-          branchPointers[targetBranch] = 0;
+      // Ambil daftar Marketing Aktif pada cabang tujuan
+      let branchMarketers = store.users.filter(
+        (u) => u.role === "marketing" && u.active !== false && normalizeBranch(u.branch) === targetBranch
+      );
+
+      // Jika ada penunjukan marketing spesifik via kolom file
+      if (marketing_hint) {
+        const mktLower = marketing_hint.toLowerCase();
+        const specificMkt = branchMarketers.find(
+          (u) => u.name.toLowerCase().includes(mktLower) || u.email.toLowerCase().includes(mktLower)
+        );
+        if (specificMkt) {
+          assignedTo = specificMkt.id;
+          assignedName = specificMkt.name;
+          if (specificMkt.manager_id) {
+            salesManagerId = specificMkt.manager_id;
+            salesManagerName = specificMkt.manager_name;
+          }
+          assignedCount++;
         }
-        const marketer = branchMarketers[branchPointers[targetBranch] % branchMarketers.length];
-        branchPointers[targetBranch]++;
-        assignedTo = marketer.id;
-        assignedName = marketer.name;
-        assignedCount++;
-      } else {
-        // Zero-Marketer Fallback Guard:
-        // Jika cabang belum memiliki marketing aktif, data aman tersimpan di Pool Cadangan Cabang
-        unassignedCount++;
       }
 
-      // Catat statistik distribusi per cabang
+      if (!assignedTo) {
+        if (distributionMode === "branch_pool") {
+          // Masuk ke Pool Cadangan Cabang
+          unassignedCount++;
+        } else if (distributionMode === "sm_queue") {
+          // Masuk ke antrean Sales Manager (belum ditugaskan ke marketing)
+          if (salesManagerId) {
+            smQueueCount++;
+          } else {
+            unassignedCount++;
+          }
+        } else {
+          // Default: auto_round_robin
+          // Jika ada SM terpilih, prioritaskan tim marketing di bawah SM tersebut jika ada
+          let candidateMarketers = branchMarketers;
+          if (smUser) {
+            const smTeam = branchMarketers.filter((u) => u.manager_id === smUser.id);
+            if (smTeam.length > 0) {
+              candidateMarketers = smTeam;
+            }
+          }
+
+          if (candidateMarketers.length > 0) {
+            if (branchPointers[targetBranch] === undefined) {
+              branchPointers[targetBranch] = 0;
+            }
+            const marketer = candidateMarketers[branchPointers[targetBranch] % candidateMarketers.length];
+            branchPointers[targetBranch]++;
+            assignedTo = marketer.id;
+            assignedName = marketer.name;
+            if (marketer.manager_id) {
+              salesManagerId = marketer.manager_id;
+              salesManagerName = marketer.manager_name;
+            }
+            assignedCount++;
+          } else if (salesManagerId) {
+            // Belum ada marketing aktif di cabang, tapi ada Sales Manager -> Masuk antrean SM
+            smQueueCount++;
+          } else {
+            // Zero-Marketer & Zero-SM Fallback -> Pool Cadangan Cabang
+            unassignedCount++;
+          }
+        }
+      }
+
+      // Statistik per cabang
       if (!branchBreakdown[targetBranch]) {
         branchBreakdown[targetBranch] = {
           total: 0,
           assigned: 0,
+          sm_queue: 0,
           pool: 0,
-          marketers: branchMarketers.map((m) => m.name)
+          marketers: branchMarketers.map((m) => m.name),
+          sales_managers: smUser ? [smUser.name] : []
         };
       }
       branchBreakdown[targetBranch].total++;
       if (assignedTo) {
         branchBreakdown[targetBranch].assigned++;
+      } else if (salesManagerId) {
+        branchBreakdown[targetBranch].sm_queue++;
       } else {
         branchBreakdown[targetBranch].pool++;
       }
 
-      const initialActivities = assignedTo
-        ? [
-            {
-              id: `act-${Date.now()}-${i}`,
-              type: "system",
-              notes: `Dialokasikan otomatis ke Marketing ${assignedName} via Distribusi Cabang ${targetBranch}`,
-              created_at: new Date().toISOString()
-            }
-          ]
-        : [
-            {
-              id: `act-${Date.now()}-${i}`,
-              type: "system",
-              notes: `Disimpan di Pool Cadangan Cabang ${targetBranch} (menunggu penempatan Marketing)`,
-              created_at: new Date().toISOString()
-            }
-          ];
+      let noteAction = `Disimpan di Pool Cadangan Cabang ${targetBranch}`;
+      if (assignedTo) {
+        noteAction = `Dialokasikan otomatis ke Marketing ${assignedName}${salesManagerName ? ` (SM: ${salesManagerName})` : ""} via Distribusi Cabang ${targetBranch}`;
+      } else if (salesManagerId) {
+        noteAction = `Dialokasikan ke Jalur Antrean Sales Manager ${salesManagerName} (${targetBranch})`;
+      }
+
+      const initialActivities = [
+        {
+          id: `act-${Date.now()}-${i}`,
+          type: "system",
+          notes: noteAction,
+          created_at: new Date().toISOString()
+        }
+      ];
 
       store.leads.unshift({
         id: `lead-${Date.now()}-${i}`,
@@ -2455,15 +2583,18 @@ app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "
         phone,
         city: city || "Kota Bandung",
         branch: targetBranch,
-        source: source || "Impor CSV",
+        source: source || "Impor Database",
         nopen: nopen || "",
         nip: nip || nopen || "",
-        pension_salary: parsedSalary,
-        birth_date: birth || "1954-05-10",
+        pension_salary: salary,
+        birth_date: birth_date || "1954-05-10",
+        age: age || 65,
         status: "baru",
-        follow_up_date: new Date().toISOString().slice(0, 10),
+        follow_up_date: todayIso,
         assigned_to: assignedTo,
         assigned_name: assignedName,
+        sales_manager_id: salesManagerId,
+        sales_manager_name: salesManagerName,
         notes: "",
         activities: initialActivities,
         documents: [],
@@ -2477,10 +2608,11 @@ app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "
       id: `imp-${Date.now()}`,
       filename: req.file.originalname,
       user_name: req.user.name,
-      total_rows: dataLines.length,
+      total_rows: parsed.rows.length + (parsed.errors?.length || 0),
       inserted,
       skipped_duplicates,
       assigned_count: assignedCount,
+      sm_queue_count: smQueueCount,
       unassigned_count: unassignedCount,
       branch_breakdown: branchBreakdown,
       error_count: errors.length,
@@ -2492,7 +2624,7 @@ app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "
       req.user,
       "import_leads",
       createdBatch.filename,
-      `Impor ${inserted} leads baru (${assignedCount} terdistribusi otomatis, ${unassignedCount} pool cadangan) dari ${createdBatch.filename}`,
+      `Impor ${inserted} leads baru (${assignedCount} marketing, ${smQueueCount} antrean SM, ${unassignedCount} pool) dari ${createdBatch.filename}`,
       req.ip
     );
     return createdBatch;
@@ -2540,12 +2672,14 @@ app.get("/api/applications", requireAuth, (req, res) => {
     if (c.application_id) {
       const existing = claimMap.get(c.application_id);
       if (!existing || c.status === "PAID" || (existing.status !== "PAID" && c.status !== "REJECTED")) {
+        const sc = serializeClaimForUser(c, req.user);
         claimMap.set(c.application_id, {
-          id: c.id,
-          claim_no: c.claim_no,
-          status: c.status,
-          amount: c.amount,
-          paid_at: c.paid_at
+          id: sc.id,
+          claim_no: sc.claim_no,
+          status: sc.status,
+          amount: sc.amount,
+          amount_fixed: sc.amount_fixed,
+          paid_at: sc.paid_at
         });
       }
     }
@@ -2570,10 +2704,64 @@ app.get("/api/applications/:id", requireAuth, (req, res) => {
     store.claims.find((c) => c.application_id === appItem.id && c.status === "PAID") ||
     store.claims.find((c) => c.application_id === appItem.id && c.status !== "REJECTED") ||
     store.claims.find((c) => c.application_id === appItem.id);
+  const sc = serializeClaimForUser(claim, req.user);
   res.json({
     ...appItem,
-    claim: claim ? { id: claim.id, claim_no: claim.claim_no, status: claim.status, amount: claim.amount, paid_at: claim.paid_at } : null
+    claim: sc ? { id: sc.id, claim_no: sc.claim_no, status: sc.status, amount: sc.amount, amount_fixed: sc.amount_fixed, paid_at: sc.paid_at } : null
   });
+});
+
+app.get("/api/applications/:id/documents-zip", requireAuth, requireRoles("super_admin", "admin_ops", "admin_branch"), (req, res) => {
+  const store = getStore();
+  const appItem = store.applications.find((a) => a.id === req.params.id);
+  if (!appItem) return res.status(404).json({ detail: "Pengajuan tidak ditemukan" });
+  if (!canAccessApplication(req.user, appItem)) {
+    return res.status(403).json({ detail: "Anda tidak memiliki akses untuk mengunduh berkas pengajuan ini." });
+  }
+
+  const entries = [];
+  (appItem.checklist || []).forEach((doc, idx) => {
+    if (!doc.filename) return;
+    const fileId = documentFileId(appItem, doc);
+    const stored = fileId && getUploadedFile(fileId);
+    let fileBuf = null;
+    let fileName = doc.filename;
+    let fileDate = doc.uploaded_at ? new Date(doc.uploaded_at) : new Date();
+
+    if (stored) {
+      fileBuf = Buffer.from(stored.data);
+      fileName = stored.filename || doc.filename;
+    } else if (!IS_PROD && doc.filename) {
+      const sim = store.simulations.find((s) => s.id === appItem.sim_id) || store.simulations[0];
+      fileBuf = generateSimulationPdfBuffer(sim);
+    }
+
+    if (fileBuf && fileBuf.length > 0) {
+      const numPrefix = String(idx + 1).padStart(2, "0");
+      const safeEntryName = `${numPrefix}_${doc.key}_${sanitizeSafeFilename(fileName, `${doc.key}.pdf`)}`;
+      entries.push({
+        name: safeEntryName,
+        data: fileBuf,
+        date: fileDate
+      });
+    }
+  });
+
+  if (!entries.length) {
+    return res.status(400).json({ detail: "Belum ada berkas dokumen yang diunggah pada pengajuan ini." });
+  }
+
+  const zipBuf = buildZipBuffer(entries);
+  const cleanLeadName = sanitizeSafeFilename(appItem.lead_name || "NASABAH", "NASABAH");
+  const cleanAppNo = sanitizeSafeFilename(appItem.app_no || "APP", "APP");
+  const zipFilename = `Dokumen_Pengajuan_${cleanLeadName}_${cleanAppNo}.zip`;
+
+  addAuditLog(req.user, "download_documents_zip", appItem.app_no, `Mengunduh ${entries.length} dokumen (${zipFilename})`, req.ip);
+
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader("Content-Disposition", `attachment; filename="${zipFilename}"`);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.send(zipBuf);
 });
 
 app.post("/api/applications/:id/documents/:key", requireAuth, upload.single("file"), (req, res) => {
@@ -2648,7 +2836,9 @@ app.get("/api/applications/:id/documents/:key", requireAuth, (req, res) => {
   }
   const fileId = documentFileId(appItem, doc);
   const stored = fileId && getUploadedFile(fileId);
-  if (stored) {
+  const isCorruptOrDummy = stored && (!stored.data || stored.data.length < 15);
+
+  if (stored && !isCorruptOrDummy) {
     res.setHeader("Content-Type", stored.mime_type || "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="${stored.filename}"`);
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -2667,6 +2857,11 @@ app.get("/api/applications/:id/documents/:key", requireAuth, (req, res) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
     return res.send(pdfBuf);
+  }
+  if (isCorruptOrDummy) {
+    return res.status(422).json({
+      detail: `Berkas dokumen '${doc.filename}' rusak atau tidak lengkap (${stored.data?.length || 0} bytes). Silakan unggah ulang berkas dokumen asli.`
+    });
   }
   return res.status(404).json({ detail: "Berkas dokumen tidak ditemukan." });
 });
@@ -2907,7 +3102,7 @@ app.get("/api/claims", requireAuth, (req, res) => {
   }
   if (status) list = list.filter((c) => c.status === status);
   const total = list.length;
-  const items = list.slice((page - 1) * pageSize, page * pageSize);
+  const items = list.slice((page - 1) * pageSize, page * pageSize).map((c) => serializeClaimForUser(c, req.user));
   res.json({ items, total, page, page_size: pageSize });
 });
 
@@ -2953,6 +3148,7 @@ app.post("/api/claims", requireAuth, upload.single("file"), (req, res) => {
     uploadedMime = detected.mime;
   }
 
+  const isFixed = Boolean(["super_admin", "admin_ops"].includes(req.user.role) && req.body?.amount !== undefined && req.body?.amount !== null && String(req.body.amount).trim() !== "");
   const claim = withTransaction(() => {
     const seq = String(store.claims.length + 1).padStart(4, "0");
     const ym = new Date().toISOString().slice(0, 7).replace("-", "");
@@ -2975,6 +3171,7 @@ app.post("/api/claims", requireAuth, upload.single("file"), (req, res) => {
       booking_date: appItem.booking?.date || new Date().toISOString().slice(0, 10),
       credit_no: req.body?.credit_no || appItem.booking?.credit_no || "",
       amount: claimAmount,
+      amount_fixed: isFixed,
       status: "DRAFT",
       notes: req.body?.notes || "",
       booking_proof: req.file ? req.file.originalname : "bukti_akad.pdf",
@@ -2988,7 +3185,7 @@ app.post("/api/claims", requireAuth, upload.single("file"), (req, res) => {
     addAuditLog(req.user, "create_claim", createdClaim.claim_no, `Membuat klaim insentif ${createdClaim.claim_no} (${createdClaim.app_no})`, req.ip);
     return createdClaim;
   });
-  res.json(claim);
+  res.json(serializeClaimForUser(claim, req.user));
 });
 
 app.get("/api/claims/:id", requireAuth, (req, res) => {
@@ -2998,7 +3195,7 @@ app.get("/api/claims/:id", requireAuth, (req, res) => {
   if (!canAccessClaim(req.user, claim)) {
     return res.status(403).json({ detail: "Anda tidak memiliki akses pada klaim ini." });
   }
-  res.json(claim);
+  res.json(serializeClaimForUser(claim, req.user));
 });
 
 app.post("/api/claims/:id/action", requireAuth, (req, res) => {
@@ -3009,10 +3206,16 @@ app.post("/api/claims/:id/action", requireAuth, (req, res) => {
     return res.status(403).json({ detail: "Anda tidak memiliki akses pada klaim ini." });
   }
   const { action, note, amount } = req.body || {};
-  const map = { submit: "SUBMITTED", review: "REVIEW", revision: "REVISION", approve: "APPROVED", reject: "REJECTED" };
+  const map = { submit: "SUBMITTED", review: "REVIEW", revision: "REVISION", approve: "APPROVED", reject: "REJECTED", set_amount: claim.status };
   const nextStatus = map[action];
   if (!nextStatus) {
     return res.status(400).json({ detail: "Aksi klaim tidak valid." });
+  }
+
+  if (action === "set_amount") {
+    if (!["super_admin", "admin_ops"].includes(req.user.role)) {
+      return res.status(403).json({ detail: "Hanya Admin Operasional atau Super Admin yang berwenang menetapkan nominal insentif." });
+    }
   }
 
   if (action === "approve" && !["super_admin", "admin_ops"].includes(req.user.role)) {
@@ -3036,6 +3239,10 @@ app.post("/api/claims/:id/action", requireAuth, (req, res) => {
     if (!["super_admin", "admin_ops"].includes(req.user.role)) {
       return res.status(403).json({ detail: "Hanya Admin Operasional atau Super Admin yang berwenang mengubah nominal klaim." });
     }
+  }
+
+  if (action === "set_amount" && parsedAmount === null) {
+    return res.status(400).json({ detail: "Nominal insentif wajib diisi." });
   }
 
   if (action === "submit") {
@@ -3084,24 +3291,30 @@ app.post("/api/claims/:id/action", requireAuth, (req, res) => {
 
   withTransaction(() => {
     claim.status = nextStatus;
-    if (parsedAmount !== null) claim.amount = Math.round(parsedAmount);
-    if (action === "revision") claim.revision_note = note;
-    if (action === "reject") claim.reject_reason = note;
+    if (parsedAmount !== null) {
+      claim.amount = Math.round(parsedAmount);
+      claim.amount_fixed = true;
+    }
     if (action === "approve") {
       claim.approved_at = new Date().toISOString();
       claim.approved_by_id = req.user.id;
       claim.approved_by = req.user.name;
+      if (claim.amount > 0) {
+        claim.amount_fixed = true;
+      }
     }
+    if (action === "revision") claim.revision_note = note;
+    if (action === "reject") claim.reject_reason = note;
     claim.history.push({
       id: `ch-${Date.now()}`,
-      action: claim.status,
-      note: note || (action === "approve" ? "Klaim disetujui (APPROVED); menunggu pembayaran" : ""),
+      action: action === "set_amount" ? "SET_AMOUNT" : claim.status,
+      note: note || (action === "set_amount" ? `Nominal insentif ditetapkan Admin menjadi Rp${claim.amount.toLocaleString("id-ID")}` : (action === "approve" ? "Klaim disetujui (APPROVED); menunggu pembayaran" : "")),
       user_name: req.user.name,
       at: new Date().toISOString()
     });
     addAuditLog(req.user, `claim_${action}`, claim.claim_no, `Aksi ${action} (${claim.status}) pada klaim ${claim.claim_no}`, req.ip);
   });
-  res.json(claim);
+  res.json(serializeClaimForUser(claim, req.user));
 });
 
 app.post("/api/claims/:id/pay", requireAuth, requireRoles("super_admin", "admin_ops"), upload.single("file"), (req, res) => {
@@ -3152,7 +3365,7 @@ app.post("/api/claims/:id/pay", requireAuth, requireRoles("super_admin", "admin_
     claim.history.push({ id: `ch-${Date.now()}`, action: "PAID", note: claim.payment_note, user_name: req.user.name, at: claim.paid_at });
     addAuditLog(req.user, "pay_claim", claim.claim_no, `Membayar klaim ${claim.claim_no} sebesar Rp${claim.amount.toLocaleString("id-ID")}`, req.ip);
   });
-  res.json(claim);
+  res.json(serializeClaimForUser(claim, req.user));
 });
 
 app.post("/api/claims/:id/proof", requireAuth, upload.single("file"), (req, res) => {
@@ -3179,7 +3392,7 @@ app.post("/api/claims/:id/proof", requireAuth, upload.single("file"), (req, res)
     saveUploadedFile(`${claim.id}-booking`, req.file.originalname, detected.mime, req.file.buffer);
     claim.booking_proof = req.file.originalname;
   });
-  res.json(claim);
+  res.json(serializeClaimForUser(claim, req.user));
 });
 
 app.get("/api/claims/:id/file/:type", requireAuth, (req, res) => {
