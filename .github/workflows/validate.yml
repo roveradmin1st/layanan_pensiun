@@ -4,9 +4,7 @@ on:
   pull_request:
   push:
     branches:
-      - main
-      - fix/production-readiness-20261109
-      - fix/bsi-product-parameters
+      - "**"
   workflow_dispatch:
 
 permissions:

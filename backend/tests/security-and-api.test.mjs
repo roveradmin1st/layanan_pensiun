@@ -814,7 +814,8 @@ try {
   });
   assert.equal(validClaimRes.status, 200);
   const claimId = validClaimRes.data.id;
-  const defaultClaimAmount = validClaimRes.data.amount;
+  assert.equal(validClaimRes.data.amount, null, "Nominal referensi belum boleh ditampilkan ke Marketing");
+  assert.equal(validClaimRes.data.amount_fixed, false);
 
   // Duplicate claim on the same application -> 409 Conflict
   const dupClaimRes = await api("POST", "/api/claims", {
@@ -845,6 +846,29 @@ try {
   });
   assert.equal(activeClaimRes.status, 200);
   const activeClaimId = activeClaimRes.data.id;
+  const adminClaimBefore = await api("GET", `/api/claims/${activeClaimId}`, { token: adminOpsToken });
+  assert.equal(adminClaimBefore.status, 200);
+  const defaultClaimAmount = adminClaimBefore.data.amount;
+  assert.ok(Number.isFinite(defaultClaimAmount) && defaultClaimAmount > 0, "Admin tetap melihat nominal referensi yang tersimpan");
+  assert.equal(adminClaimBefore.data.amount_fixed, false);
+
+  // Exercise real endpoints: the browser-facing mask must not alter stored data.
+  for (const token of [marketingToken, managerToken]) {
+    const detail = await api("GET", `/api/claims/${activeClaimId}`, { token });
+    assert.equal(detail.status, 200);
+    assert.equal(detail.data.amount, null);
+    assert.equal(detail.data.amount_fixed, false);
+    const list = await api("GET", "/api/claims", { token });
+    assert.equal(list.status, 200);
+    assert.equal(list.data.items.find((c) => c.id === activeClaimId)?.amount, null);
+    const application = await api("GET", `/api/applications/${createdApp.id}`, { token });
+    assert.equal(application.status, 200);
+    assert.equal(application.data.claim?.amount, null);
+    const setAmount = await api("POST", `/api/claims/${activeClaimId}/action`, {
+      token, body: { action: "set_amount", amount: 50000000 }
+    });
+    assert.equal(setAmount.status, 403, "Marketing/SM tidak berwenang menetapkan nominal insentif");
+  }
 
   // Super Admin can directly approve a DRAFT claim
   // But let's first test Marketing submit (DRAFT -> SUBMITTED) -> 200 OK
@@ -888,6 +912,22 @@ try {
   const unchangedClaim = checkClaimsList.data.items.find((c) => c.id === activeClaimId);
   assert.equal(unchangedClaim.status, "SUBMITTED", "Status klaim harus tetap SUBMITTED setelah request gagal");
   assert.equal(unchangedClaim.amount, defaultClaimAmount, "Nominal klaim harus tetap utuh setelah request gagal");
+  assert.equal(unchangedClaim.amount_fixed, false, "Permintaan yang ditolak tidak boleh menetapkan nominal");
+
+  const fixedAmount = defaultClaimAmount + 125000;
+  const setAmount = await api("POST", `/api/claims/${activeClaimId}/action`, {
+    token: adminOpsToken, body: { action: "set_amount", amount: fixedAmount }
+  });
+  assert.equal(setAmount.status, 200);
+  assert.equal(setAmount.data.status, "SUBMITTED", "Penetapan nominal tidak menyetujui atau membayar klaim");
+  assert.equal(setAmount.data.amount, fixedAmount);
+  assert.equal(setAmount.data.amount_fixed, true);
+  for (const token of [marketingToken, managerToken]) {
+    const detail = await api("GET", `/api/claims/${activeClaimId}`, { token });
+    assert.equal(detail.status, 200);
+    assert.equal(detail.data.amount, fixedAmount, "Nominal yang sudah ditetapkan terlihat oleh Marketing/SM");
+    assert.equal(detail.data.amount_fixed, true);
+  }
 
   // Approval records authorization; payment requires a separate proof-bearing action.
   const okApproveClaim = await api("POST", `/api/claims/${activeClaimId}/action`, {
@@ -905,6 +945,12 @@ try {
   assert.equal(paidClaim.status, 200);
   assert.equal(paidClaim.data.status, "PAID");
   assert.ok(paidClaim.data.paid_at);
+  assert.equal(paidClaim.data.amount, fixedAmount);
+
+  const changePaidAmount = await api("POST", `/api/claims/${activeClaimId}/action`, {
+    token: adminOpsToken, body: { action: "set_amount", amount: fixedAmount + 1 }
+  });
+  assert.equal(changePaidAmount.status, 400, "Nominal klaim PAID bersifat final");
 
   // Attempting to approve or pay already PAID claim -> 400/409 rejected
   const dupApproveClaim = await api("POST", `/api/claims/${activeClaimId}/action`, {
