@@ -504,7 +504,10 @@ def inspect_archive(archive_path: Path) -> dict:
     with tarfile.open(archive_path, "r:gz") as tar:
         manifest_member = None
         for member in tar.getmembers():
-            norm = member.name.replace("\\", "/").lstrip("./")
+            norm = member.name.replace("\\", "/")
+            while norm.startswith("./"):
+                norm = norm[2:]
+            norm = norm.lstrip("/")
             if member.name.startswith("/") or ".." in member.name.replace("\\", "/").split("/"):
                 raise ValueError(f"INVALID_ARTIFACT: Path traversal detected in archive member: {member.name}")
             if member.issym() or member.islnk() or member.ischr() or member.isblk() or member.isfifo() or member.isdev():
@@ -893,7 +896,10 @@ def execute_apply(
         manifest = inspect_archive(archive_path)
         with tarfile.open(archive_path, "r:gz") as tar:
             for member in tar.getmembers():
-                norm = member.name.replace("\\", "/").lstrip("./")
+                norm = member.name.replace("\\", "/")
+                while norm.startswith("./"):
+                    norm = norm[2:]
+                norm = norm.lstrip("/")
                 if not norm:
                     continue
                 dest_path = (staging_dir / norm).resolve()
