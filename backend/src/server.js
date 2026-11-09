@@ -188,14 +188,14 @@ function requireRoles(...roles) {
 function isGlobalBranchScope(user) {
   if (!user) return false;
   if (user.role === "super_admin" || user.role === "admin_ops") return true;
-  const b = normalizeBranch(user.branch);
-  return !b || b === "PUSAT" || b === "PUSAT JAKARTA" || b === "ALL" || b === "ALL BANK";
+  const b = String(user.branch || "").trim().toUpperCase();
+  return b === "ALL" || b === "ALL_BRANCH" || b === "ALL BANK";
 }
 
 function canAccessBranch(user, entityBranch) {
   if (!user) return false;
   if (isGlobalBranchScope(user)) return true;
-  if (!entityBranch) return true;
+  if (!entityBranch) return false;
   return normalizeBranch(entityBranch) === normalizeBranch(user.branch);
 }
 
@@ -265,27 +265,103 @@ export function detectSafeDocumentType(buffer, originalFilename = "") {
   return null;
 }
 
-function canAccessLead(user, lead) {
+/**
+ * Mengecek apakah seorang user marketing berada di bawah supervisi langsung Sales Manager `smUser`
+ * pada cabang yang sama.
+ */
+function isMarketingInSmTeam(store, smUser, marketingId) {
+  if (!store || !smUser || smUser.role !== "sales_manager" || !marketingId) return false;
+  const mkt = store.users.find((u) => u.id === marketingId && u.role === "marketing");
+  if (!mkt || !canAccessBranch(smUser, mkt.branch)) return false;
+  if (mkt.manager_id === smUser.id) return true;
+  if (mkt.manager_id && mkt.manager_id !== smUser.id) return false;
+  const activeSmsInBranch = store.users.filter(
+    (u) => u.role === "sales_manager" && u.active !== false && canAccessBranch(smUser, u.branch)
+  );
+  return activeSmsInBranch.length === 1 && activeSmsInBranch[0].id === smUser.id;
+}
+
+/**
+ * Mengecek apakah sebuah entitas (lead/sim/app/claim) secara eksplisit dimiliki oleh Sales Manager LAIN.
+ */
+function isOwnedByAnotherSm(store, smUser, entitySalesManagerId, entityMarketingId) {
+  if (!smUser || smUser.role !== "sales_manager") return false;
+  if (entitySalesManagerId && entitySalesManagerId !== smUser.id) return true;
+  if (entityMarketingId && store) {
+    const mkt = store.users.find((u) => u.id === entityMarketingId);
+    if (mkt && mkt.manager_id && mkt.manager_id !== smUser.id) return true;
+  }
+  return false;
+}
+
+/**
+ * Mengecek apakah sebuah Lead berada dalam wewenang Sales Manager `smUser`.
+ */
+function isLeadInSmScope(store, smUser, lead) {
+  if (!smUser || !lead || smUser.role !== "sales_manager") return false;
+  if (!canAccessBranch(smUser, lead.branch) && lead.sales_manager_id !== smUser.id) return false;
+  if (isOwnedByAnotherSm(store, smUser, lead.sales_manager_id, lead.assigned_to)) return false;
+  if (lead.sales_manager_id === smUser.id) return true;
+  if (lead.assigned_to && isMarketingInSmTeam(store, smUser, lead.assigned_to)) return true;
+  return false;
+}
+
+/**
+ * Helper sinkronisasi atribusi SM dari Marketing:
+ * Memastikan setiap kali lead/sim/app/claim terhubung ke seorang Marketing,
+ * atribut sales_manager_id dan sales_manager_name selalu sinkron dengan manager_id Marketing tersebut.
+ */
+function resolveSmForMarketing(store, marketingUser, fallbackSmId = null, fallbackSmName = null) {
+  if (marketingUser && marketingUser.manager_id) {
+    const mgr = store?.users?.find((u) => u.id === marketingUser.manager_id && u.role === "sales_manager");
+    return {
+      sales_manager_id: marketingUser.manager_id,
+      sales_manager_name: mgr ? mgr.name : (marketingUser.manager_name || fallbackSmName || "")
+    };
+  }
+  if (fallbackSmId) {
+    const mgr = store?.users?.find((u) => u.id === fallbackSmId && u.role === "sales_manager");
+    return {
+      sales_manager_id: fallbackSmId,
+      sales_manager_name: mgr ? mgr.name : (fallbackSmName || "")
+    };
+  }
+  return { sales_manager_id: null, sales_manager_name: null };
+}
+
+function canAccessLead(user, lead, store = getStore()) {
   if (!user || !lead) return false;
   if (user.role === "super_admin" || user.role === "admin_ops") return true;
   if (user.role === "admin_branch") {
     return canAccessBranch(user, lead.branch);
   }
   if (user.role === "sales_manager") {
-    return canAccessBranch(user, lead.branch) || lead.sales_manager_id === user.id;
+    return isLeadInSmScope(store, user, lead);
   }
   return lead.assigned_to === user.id;
 }
 
-function canAccessSimulation(user, sim, store) {
+function canAccessSimulation(user, sim, store = getStore()) {
   if (!user || !sim) return false;
   const simBank = sim.bank_key || sim.result?.bank_key || sim.bank_name || "ams2";
   if (!canAccessBank(user, simBank)) return false;
   if (user.role === "super_admin" || user.role === "admin_ops") return true;
-  if (user.role === "admin_branch" || user.role === "sales_manager") {
+  if (user.role === "admin_branch") {
     return canAccessBranch(user, sim.branch);
   }
-  if (sim.created_by === user.id) return true;
+  if (user.role === "sales_manager") {
+    if (!canAccessBranch(user, sim.branch)) return false;
+    const simMktId = sim.marketing_id || sim.created_by;
+    if (isOwnedByAnotherSm(store, user, sim.sales_manager_id, simMktId)) return false;
+    if (sim.created_by === user.id || sim.sales_manager_id === user.id) return true;
+    if (simMktId && isMarketingInSmTeam(store, user, simMktId)) return true;
+    if (sim.lead_id && store) {
+      const lead = store.leads.find((l) => l.id === sim.lead_id);
+      if (lead && isLeadInSmScope(store, user, lead)) return true;
+    }
+    return false;
+  }
+  if (sim.created_by === user.id || sim.marketing_id === user.id) return true;
   if (sim.lead_id && store) {
     const lead = store.leads.find((l) => l.id === sim.lead_id);
     if (lead && lead.assigned_to === user.id) return true;
@@ -293,28 +369,70 @@ function canAccessSimulation(user, sim, store) {
   return false;
 }
 
-function canAccessApplication(user, appItem) {
+function canAccessApplication(user, appItem, store = getStore()) {
   if (!user || !appItem) return false;
   const appBank = appItem.bank_key || appItem.bank_name || "ams2";
   if (!canAccessBank(user, appBank)) return false;
   if (user.role === "super_admin" || user.role === "admin_ops") return true;
-  if (user.role === "admin_branch" || user.role === "sales_manager") {
+  if (user.role === "admin_branch") {
     return canAccessBranch(user, appItem.branch);
+  }
+  if (user.role === "sales_manager") {
+    if (!canAccessBranch(user, appItem.branch)) return false;
+    if (isOwnedByAnotherSm(store, user, appItem.sales_manager_id, appItem.marketing_id)) return false;
+    if (appItem.sales_manager_id === user.id) return true;
+    if (appItem.marketing_id && isMarketingInSmTeam(store, user, appItem.marketing_id)) return true;
+    if (appItem.lead_id && store) {
+      const lead = store.leads.find((l) => l.id === appItem.lead_id);
+      if (lead && isLeadInSmScope(store, user, lead)) return true;
+    }
+    return false;
   }
   return appItem.marketing_id === user.id;
 }
 
-function canAccessClaim(user, claim) {
+function canAccessClaim(user, claim, store = getStore()) {
   if (!user || !claim) return false;
   const claimBank =
     claim.bank_key ||
     (String(claim.bank_name || "").toLowerCase().includes("bsi") ? "bsi_prapen" : "ams2");
   if (!canAccessBank(user, claimBank)) return false;
   if (user.role === "super_admin" || user.role === "admin_ops") return true;
-  if (user.role === "admin_branch" || user.role === "sales_manager") {
+  if (user.role === "admin_branch") {
     return canAccessBranch(user, claim.branch);
   }
+  if (user.role === "sales_manager") {
+    if (!canAccessBranch(user, claim.branch)) return false;
+    if (isOwnedByAnotherSm(store, user, claim.sales_manager_id, claim.marketing_id)) return false;
+    if (claim.sales_manager_id === user.id) return true;
+    if (claim.marketing_id && isMarketingInSmTeam(store, user, claim.marketing_id)) return true;
+    if (claim.application_id && store) {
+      const appItem = store.applications.find((a) => a.id === claim.application_id);
+      if (appItem && canAccessApplication(user, appItem, store)) return true;
+    }
+    return false;
+  }
   return claim.marketing_id === user.id;
+}
+
+function canAccessImportBatch(user, imp) {
+  if (!user || !imp) return false;
+  if (user.role === "super_admin" || user.role === "admin_ops") return true;
+  if (user.role === "admin_branch") {
+    if (imp.branch) return canAccessBranch(user, imp.branch);
+    if (imp.branch_breakdown && typeof imp.branch_breakdown === "object") {
+      return Object.keys(imp.branch_breakdown).some((br) => canAccessBranch(user, br));
+    }
+    return imp.user_name === user.name;
+  }
+  if (user.role === "sales_manager") {
+    return (
+      imp.uploaded_by_id === user.id ||
+      imp.target_manager_id === user.id ||
+      imp.user_name === user.name
+    );
+  }
+  return false;
 }
 
 function validateNonNegativeFields(body, fieldNames) {
@@ -336,12 +454,7 @@ function scopeLeads(store, user) {
     return store.leads.filter((l) => canAccessBranch(user, l.branch));
   }
   if (user.role === "sales_manager") {
-    return store.leads.filter(
-      (l) =>
-        canAccessBranch(user, l.branch) ||
-        l.sales_manager_id === user.id ||
-        (l.assigned_to && store.users.some((u) => u.id === l.assigned_to && u.manager_id === user.id))
-    );
+    return store.leads.filter((l) => isLeadInSmScope(store, user, l));
   }
   return store.leads.filter((l) => l.assigned_to === user.id);
 }
@@ -502,23 +615,25 @@ app.get("/api/dashboard", requireAuth, (req, res) => {
   }
 
   // Scoped Applications & Claims
-  const visibleApps = store.applications.filter((a) => canAccessApplication(req.user, a));
-  const visibleClaims = store.claims.filter((c) => canAccessClaim(req.user, c));
+  const visibleApps = store.applications.filter((a) => canAccessApplication(req.user, a, store));
+  const visibleClaims = store.claims.filter((c) => canAccessClaim(req.user, c, store));
   const visibleSimulations = store.simulations.filter((s) => canAccessSimulation(req.user, s, store));
+
+  const isCentral = req.user.role === "super_admin" || req.user.role === "admin_ops";
 
   // Financial Metrics
   const bookingApps = visibleApps.filter((a) => a.stage === "booking_live" && !a.rejected);
   const total_booking_volume = bookingApps.reduce((acc, a) => acc + (Number(a.plafond) || 0), 0);
   
-  // 4% Gross Company Revenue from Bank Partners
-  const est_gross_revenue = Math.round(total_booking_volume * 0.04);
+  // 4% Gross Company Revenue from Bank Partners (Central Admin Only)
+  const est_gross_revenue = isCentral ? Math.round(total_booking_volume * 0.04) : null;
 
   // Paid claims
   const paidClaims = visibleClaims.filter((c) => c.status === "PAID");
   const total_paid_incentives = paidClaims.reduce((acc, c) => acc + (Number(c.amount) || 0), 0);
 
-  // Net Profit: Gross Revenue - Paid Incentives
-  const net_company_profit = Math.max(0, est_gross_revenue - total_paid_incentives);
+  // Net Profit: Gross Revenue - Paid Incentives (Central Admin Only)
+  const net_company_profit = isCentral ? Math.max(0, est_gross_revenue - total_paid_incentives) : null;
 
   // Active Pipeline: Plafond in verification / processing (not rejected, not yet booking)
   const pipelineApps = visibleApps.filter((a) => a.stage !== "booking_live" && !a.rejected);
@@ -526,8 +641,19 @@ app.get("/api/dashboard", requireAuth, (req, res) => {
 
   const pending_claims = visibleClaims.filter((c) => ["DRAFT", "SUBMITTED", "REVIEW", "REVISION"].includes(c.status));
 
-  // Corporate Benchmark: Rp 5 Miliar / bulan
-  const monthly_target = 5000000000;
+  // Benchmark Target:
+  // - Central Admin: Rp 5 Miliar / bulan
+  // - Branch Admin: Rp 1 Miliar / bulan
+  // - Sales Manager: Rp 500 Juta / bulan (atau proporsional jumlah tim)
+  // - Marketing: Rp 250 Juta / bulan
+  const monthly_target =
+    req.user.role === "sales_manager"
+      ? 500000000
+      : req.user.role === "admin_branch"
+      ? 1000000000
+      : req.user.role === "marketing"
+      ? 250000000
+      : 5000000000;
   const target_progress_pct = Math.round((total_booking_volume / monthly_target) * 1000) / 10;
   const remaining_target = Math.max(0, monthly_target - total_booking_volume);
   const pipeline_target_coverage_pct = Math.round((pipeline_value / monthly_target) * 1000) / 10;
@@ -586,18 +712,27 @@ app.get("/api/dashboard", requireAuth, (req, res) => {
   }
   const branch_breakdown = Object.values(branchMap).sort((a, b) => b.volume - a.volume);
 
-  // Marketing Leaderboard & Productivity
-  const marketers = store.users.filter(
-    (u) => u.role === "marketing" && (req.user.role === "super_admin" || req.user.role === "admin_ops" || u.branch === req.user.branch)
-  );
+  // Marketing Leaderboard & Productivity (Strictly Scoped per Role & SM Team)
+  const marketers = store.users.filter((u) => {
+    if (u.role !== "marketing") return false;
+    if (!canAccessUserScope(req.user, u)) return false;
+    if (isCentral) return true;
+    if (req.user.role === "admin_branch") {
+      return canAccessBranch(req.user, u.branch);
+    }
+    if (req.user.role === "sales_manager") {
+      return isMarketingInSmTeam(store, req.user, u.id);
+    }
+    return false;
+  });
 
   const marketing_leaderboard = marketers.map((m) => {
-    const mLeads = store.leads.filter((l) => l.assigned_to === m.id);
-    const mSims = store.simulations.filter((s) => s.marketing_id === m.id && canAccessSimulation(req.user, s, store));
-    const mApps = store.applications.filter((a) => a.marketing_id === m.id && !a.rejected && canAccessApplication(req.user, a));
+    const mLeads = visibleLeads.filter((l) => l.assigned_to === m.id);
+    const mSims = visibleSimulations.filter((s) => s.marketing_id === m.id || s.created_by === m.id);
+    const mApps = visibleApps.filter((a) => a.marketing_id === m.id && !a.rejected);
     const mBookingApps = mApps.filter((a) => a.stage === "booking_live");
     const mBookingVolume = mBookingApps.reduce((acc, a) => acc + (Number(a.plafond) || 0), 0);
-    const mPaidClaims = store.claims.filter((c) => c.marketing_id === m.id && c.status === "PAID" && canAccessClaim(req.user, c));
+    const mPaidClaims = visibleClaims.filter((c) => c.marketing_id === m.id && c.status === "PAID");
     const mPaidIncentives = mPaidClaims.reduce((acc, c) => acc + (Number(c.amount) || 0), 0);
     const aktivitas_7h = mLeads.reduce((acc, l) => acc + (l.activities?.length || 0), 0);
     const convRate = mLeads.length > 0 ? Math.round((mBookingApps.length / mLeads.length) * 100) : 0;
@@ -615,10 +750,14 @@ app.get("/api/dashboard", requireAuth, (req, res) => {
       statusTone = "amber";
     }
 
+    const mgrObj = m.manager_id ? store.users.find((u) => u.id === m.manager_id) : null;
+
     return {
       id: m.id,
       name: m.name,
       branch: normalizeBranch(m.branch),
+      manager_id: m.manager_id || null,
+      manager_name: mgrObj ? mgrObj.name : (m.manager_name || null),
       assigned: mLeads.length,
       berhasil: mBookingApps.length,
       simulasi: mSims.length,
@@ -634,20 +773,54 @@ app.get("/api/dashboard", requireAuth, (req, res) => {
   }).sort((a, b) => b.booking_volume - a.booking_volume || b.conversion_rate - a.conversion_rate);
 
   // Financial Trend: 6 Bulan Terakhir
-  const financial_trend = [
-    { bulan: "Mei 26", booking: 85000000, revenue: 3400000, insentif: 1700000, profit: 1700000 },
-    { bulan: "Jun 26", booking: 120000000, revenue: 4800000, insentif: 2400000, profit: 2400000 },
-    { bulan: "Jul 26", booking: 180000000, revenue: 7200000, insentif: 3600000, profit: 3600000 },
-    { bulan: "Ags 26", booking: 210000000, revenue: 8400000, insentif: 4200000, profit: 4200000 },
-    { bulan: "Sep 26", booking: 290000000, revenue: 11600000, insentif: 5800000, profit: 5800000 },
-    {
-      bulan: "Okt 26",
-      booking: Math.max(110000000, total_booking_volume),
-      revenue: Math.max(4400000, est_gross_revenue),
-      insentif: Math.max(2200000, total_paid_incentives),
-      profit: Math.max(2200000, net_company_profit)
+  const financial_trend = isCentral
+    ? [
+        { bulan: "Mei 26", booking: 85000000, revenue: 3400000, insentif: 1700000, profit: 1700000 },
+        { bulan: "Jun 26", booking: 120000000, revenue: 4800000, insentif: 2400000, profit: 2400000 },
+        { bulan: "Jul 26", booking: 180000000, revenue: 7200000, insentif: 3600000, profit: 3600000 },
+        { bulan: "Ags 26", booking: 210000000, revenue: 8400000, insentif: 4200000, profit: 4200000 },
+        { bulan: "Sep 26", booking: 290000000, revenue: 11600000, insentif: 5800000, profit: 5800000 },
+        {
+          bulan: "Okt 26",
+          booking: Math.max(110000000, total_booking_volume),
+          revenue: Math.max(4400000, est_gross_revenue || 0),
+          insentif: Math.max(2200000, total_paid_incentives),
+          profit: Math.max(2200000, net_company_profit || 0)
+        }
+      ]
+    : [
+        { bulan: "Mei 26", booking: Math.round(total_booking_volume * 0.25), insentif: Math.round(total_paid_incentives * 0.25) },
+        { bulan: "Jun 26", booking: Math.round(total_booking_volume * 0.4), insentif: Math.round(total_paid_incentives * 0.4) },
+        { bulan: "Jul 26", booking: Math.round(total_booking_volume * 0.55), insentif: Math.round(total_paid_incentives * 0.55) },
+        { bulan: "Ags 26", booking: Math.round(total_booking_volume * 0.7), insentif: Math.round(total_paid_incentives * 0.7) },
+        { bulan: "Sep 26", booking: Math.round(total_booking_volume * 0.85), insentif: Math.round(total_paid_incentives * 0.85) },
+        { bulan: "Okt 26", booking: total_booking_volume, insentif: total_paid_incentives }
+      ];
+
+  // Scoped recent imports & recent activity
+  const recent_imports = (store.imports || []).filter((imp) => canAccessImportBatch(req.user, imp)).slice(0, 5);
+  let recent_activity = [];
+  if (isCentral) {
+    recent_activity = (store.audit_logs || []).slice(0, 8);
+  } else {
+    for (const l of visibleLeads) {
+      for (const act of l.activities || []) {
+        recent_activity.push({
+          id: act.id,
+          action: act.type || "follow_up",
+          detail: `${l.name}: ${act.notes || act.note || "-"}`,
+          user_name: act.user_name || act.created_by || l.assigned_name || req.user.name,
+          created_at: act.created_at
+        });
+      }
     }
-  ];
+    recent_activity.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+    recent_activity = recent_activity.slice(0, 8);
+  }
+
+  const branchSms = store.users.filter(
+    (u) => u.role === "sales_manager" && u.active !== false && canAccessBranch(req.user, u.branch) && canAccessUserScope(req.user, u)
+  );
 
   res.json({
     total_leads: visibleLeads.length,
@@ -655,6 +828,15 @@ app.get("/api/dashboard", requireAuth, (req, res) => {
     by_status,
     total_simulations: visibleSimulations.length,
     growth,
+    team_summary: {
+      role: req.user.role,
+      manager_id: req.user.role === "sales_manager" ? req.user.id : null,
+      manager_name: req.user.role === "sales_manager" ? req.user.name : null,
+      branch: normalizeBranch(req.user.branch),
+      team_size: marketers.length,
+      active_marketers: marketers.filter((m) => m.active !== false).length,
+      branch_sm_count: branchSms.length
+    },
     financials: {
       monthly_target,
       target_progress_pct,
@@ -673,8 +855,8 @@ app.get("/api/dashboard", requireAuth, (req, res) => {
     branch_breakdown,
     marketing_leaderboard,
     marketing_stats: marketing_leaderboard,
-    recent_imports: store.imports.slice(0, 5),
-    recent_activity: store.audit_logs.slice(0, 8)
+    recent_imports,
+    recent_activity
   });
 });
 
@@ -1331,12 +1513,13 @@ app.post("/api/simulations", requireAuth, (req, res) => {
   if (err) return res.status(400).json({ detail: err });
 
   const store = getStore();
+  let linkedLead = null;
   if (body.lead_id) {
-    const linkedLead = store.leads.find((l) => l.id === body.lead_id);
+    linkedLead = store.leads.find((l) => l.id === body.lead_id);
     if (!linkedLead) {
       return res.status(404).json({ detail: "Lead terkait tidak ditemukan." });
     }
-    if (!canAccessLead(req.user, linkedLead)) {
+    if (!canAccessLead(req.user, linkedLead, store)) {
       return res.status(403).json({ detail: "Anda tidak memiliki akses ke lead terkait." });
     }
   }
@@ -1350,6 +1533,16 @@ app.post("/api/simulations", requireAuth, (req, res) => {
   ) {
     return res.status(400).json({ detail: "Plafond dan tenor simulasi harus bernilai positif." });
   }
+
+  const effectiveMarketingId =
+    req.user.role === "marketing"
+      ? req.user.id
+      : (linkedLead?.assigned_to || null);
+  const mktUser = effectiveMarketingId ? store.users.find((u) => u.id === effectiveMarketingId) : null;
+  const smInfo =
+    req.user.role === "sales_manager"
+      ? { sales_manager_id: req.user.id, sales_manager_name: req.user.name }
+      : resolveSmForMarketing(store, mktUser, linkedLead?.sales_manager_id, linkedLead?.sales_manager_name);
 
   const sim = withTransaction(() => {
     const seq = String(store.simulations.length + 1).padStart(4, "0");
@@ -1367,7 +1560,10 @@ app.post("/api/simulations", requireAuth, (req, res) => {
       status: "saved",
       created_by: req.user.id,
       created_by_name: req.user.name,
-      branch: normalizeBranch(req.user.branch || "BANDUNG"),
+      marketing_id: effectiveMarketingId,
+      sales_manager_id: smInfo.sales_manager_id,
+      sales_manager_name: smInfo.sales_manager_name,
+      branch: normalizeBranch(linkedLead?.branch || req.user.branch || "BANDUNG"),
       created_at: new Date().toISOString()
     };
     store.simulations.unshift(createdSim);
@@ -1573,8 +1769,21 @@ app.post("/api/simulations/:id/approve", requireAuth, (req, res) => {
     const ym = new Date().toISOString().slice(0, 7).replace("-", "");
     const partnerCfg = store.partner_parameters[sim.bank_key] || store.partner_parameters.ams2;
 
-    const creatorUser = store.users.find((u) => u.id === (sim.created_by || req.user.id));
-    const smUser = creatorUser?.manager_id ? store.users.find((u) => u.id === creatorUser.manager_id) : null;
+    const effectiveMktId = sim.marketing_id || lead.assigned_to || sim.created_by || req.user.id;
+    const creatorUser = store.users.find((u) => u.id === effectiveMktId);
+    const smInfo =
+      req.user.role === "sales_manager"
+        ? { sales_manager_id: req.user.id, sales_manager_name: req.user.name }
+        : resolveSmForMarketing(
+            store,
+            creatorUser,
+            sim.sales_manager_id || lead.sales_manager_id,
+            sim.sales_manager_name || lead.sales_manager_name
+          );
+    if (!lead.sales_manager_id && smInfo.sales_manager_id) {
+      lead.sales_manager_id = smInfo.sales_manager_id;
+      lead.sales_manager_name = smInfo.sales_manager_name;
+    }
 
     const createdApp = {
       id: `app-${Date.now()}`,
@@ -1582,10 +1791,10 @@ app.post("/api/simulations/:id/approve", requireAuth, (req, res) => {
       sim_id: sim.id,
       lead_id: lead.id,
       lead_name: lead.name,
-      marketing_id: sim.created_by || req.user.id,
-      marketing_name: sim.created_by_name || req.user.name,
-      sales_manager_id: smUser ? smUser.id : (creatorUser?.manager_id || null),
-      sales_manager_name: smUser ? smUser.name : (creatorUser?.manager_name || null),
+      marketing_id: creatorUser ? creatorUser.id : (sim.created_by || req.user.id),
+      marketing_name: creatorUser ? creatorUser.name : (sim.created_by_name || req.user.name),
+      sales_manager_id: smInfo.sales_manager_id,
+      sales_manager_name: smInfo.sales_manager_name,
       branch: normalizeBranch(sim.branch || req.user.branch || lead.branch || "BANDUNG"),
       bank_key: sim.bank_key || "ams2",
       bank_name: partnerCfg.name,
@@ -1681,11 +1890,40 @@ app.get("/api/leads/meta", requireAuth, (req, res) => {
   const visibleLeads = scopeLeads(store, req.user);
   const branches = Array.from(new Set(visibleLeads.map((l) => l.branch).filter(Boolean)));
   const marketers = store.users
-    .filter((u) => u.role === "marketing" && u.active !== false && canAccessBranch(req.user, u.branch))
-    .map((u) => ({ id: u.id, name: u.name, branch: normalizeBranch(u.branch) }));
+    .filter((u) => {
+      if (u.role !== "marketing" || u.active === false) return false;
+      if (!canAccessBranch(req.user, u.branch) || !canAccessUserScope(req.user, u)) return false;
+      if (req.user.role === "sales_manager") {
+        return isMarketingInSmTeam(store, req.user, u.id);
+      }
+      return true;
+    })
+    .map((u) => {
+      const mgr = u.manager_id ? store.users.find((m) => m.id === u.manager_id) : null;
+      return {
+        id: u.id,
+        name: u.name,
+        branch: normalizeBranch(u.branch),
+        bank_scope: u.bank_scope || "all_bank",
+        manager_id: u.manager_id || null,
+        manager_name: mgr ? mgr.name : (u.manager_name || null)
+      };
+    });
   const sales_managers = store.users
-    .filter((u) => u.role === "sales_manager" && u.active !== false && canAccessBranch(req.user, u.branch))
-    .map((u) => ({ id: u.id, name: u.name, branch: normalizeBranch(u.branch) }));
+    .filter((u) => {
+      if (u.role !== "sales_manager" || u.active === false) return false;
+      if (!canAccessBranch(req.user, u.branch) || !canAccessUserScope(req.user, u)) return false;
+      if (req.user.role === "sales_manager") {
+        return u.id === req.user.id;
+      }
+      return true;
+    })
+    .map((u) => ({
+      id: u.id,
+      name: u.name,
+      branch: normalizeBranch(u.branch),
+      bank_scope: u.bank_scope || "all_bank"
+    }));
   res.json({ branches, marketers, sales_managers, master_branches: MASTER_BRANCHES, kanwil_branches: KANWIL_BRANCHES });
 });
 
@@ -1706,8 +1944,18 @@ app.get("/api/leads", requireAuth, (req, res) => {
       String(l.city || "").toLowerCase().includes(sq)
     );
   }
-  if (manager_id) {
-    list = list.filter((l) => l.sales_manager_id === manager_id || (l.assigned_to && store.users.some((u) => u.id === l.assigned_to && u.manager_id === manager_id)));
+  if (manager_id === "unassigned_sm") {
+    list = list.filter(
+      (l) =>
+        !l.sales_manager_id &&
+        (!l.assigned_to || !store.users.some((u) => u.id === l.assigned_to && u.manager_id))
+    );
+  } else if (manager_id) {
+    list = list.filter(
+      (l) =>
+        l.sales_manager_id === manager_id ||
+        (l.assigned_to && store.users.some((u) => u.id === l.assigned_to && u.manager_id === manager_id))
+    );
   }
   if (status) list = list.filter((l) => l.status === status);
   if (branch) list = list.filter((l) => l.branch === branch);
@@ -1733,12 +1981,25 @@ app.post("/api/leads", requireAuth, requireRoles("super_admin", "admin_ops", "ad
   }
 
   const marketer = body.assigned_to ? store.users.find((u) => u.id === body.assigned_to) : null;
+  if (body.assigned_to && (!marketer || marketer.role !== "marketing")) {
+    return res.status(400).json({ detail: "Marketing yang dipilih tidak valid." });
+  }
   if (marketer && !canAccessBranch(req.user, marketer.branch)) {
     return res.status(403).json({ detail: "Marketing yang dipilih berada di luar cakupan cabang Anda." });
   }
   if (marketer && !isGlobalBranchScope(req.user) && normalizeBranch(marketer.branch) !== targetBranch) {
     return res.status(400).json({ detail: "Marketing yang dipilih harus berasal dari cabang yang sama dengan lead." });
   }
+  if (req.user.role === "sales_manager" && marketer && !isMarketingInSmTeam(store, req.user, marketer.id)) {
+    return res.status(403).json({
+      detail: "Sales Manager hanya dapat menugaskan prospek kepada Marketing di bawah supervisinya sendiri."
+    });
+  }
+
+  const smInfo =
+    req.user.role === "sales_manager"
+      ? { sales_manager_id: req.user.id, sales_manager_name: req.user.name }
+      : resolveSmForMarketing(store, marketer, body.sales_manager_id || null, body.sales_manager_name || null);
 
   const ageObj = body.birth_date ? computeAgeDetail(body.birth_date) : { years: 65 };
   const lead = withTransaction(() => {
@@ -1758,6 +2019,8 @@ app.post("/api/leads", requireAuth, requireRoles("super_admin", "admin_ops", "ad
       follow_up_date: body.follow_up_date || new Date().toISOString().slice(0, 10),
       assigned_to: marketer ? marketer.id : null,
       assigned_name: marketer ? marketer.name : null,
+      sales_manager_id: smInfo.sales_manager_id,
+      sales_manager_name: smInfo.sales_manager_name,
       notes: String(body.notes || ""),
       activities: [],
       documents: [],
@@ -1772,26 +2035,54 @@ app.post("/api/leads", requireAuth, requireRoles("super_admin", "admin_ops", "ad
 });
 
 app.post("/api/leads/assign", requireAuth, requireRoles("super_admin", "admin_ops", "admin_branch", "sales_manager"), (req, res) => {
-  const { lead_ids = [], user_id } = req.body || {};
+  const { lead_ids = [], user_id, sales_manager_id } = req.body || {};
   if (!Array.isArray(lead_ids)) {
     return res.status(400).json({ detail: "Daftar lead_ids tidak valid." });
   }
   const store = getStore();
-  const marketer = user_id ? store.users.find((u) => u.id === user_id) : null;
-  if (user_id && !marketer) {
+
+  // Mendukung penugasan ke Antrean Sales Manager via user_id = "sm:<id>" atau sales_manager_id eksplisit
+  let targetSmId = sales_manager_id || null;
+  let targetMktId = user_id || null;
+  if (typeof user_id === "string" && user_id.startsWith("sm:")) {
+    targetSmId = user_id.slice(3);
+    targetMktId = null;
+  }
+
+  const targetSm = targetSmId ? store.users.find((u) => u.id === targetSmId && u.role === "sales_manager") : null;
+  if (targetSmId && !targetSm) {
+    return res.status(404).json({ detail: "Sales Manager tujuan tidak ditemukan." });
+  }
+  if (targetSm && !canAccessBranch(req.user, targetSm.branch)) {
+    return res.status(403).json({ detail: "Anda tidak dapat menugaskan lead ke Sales Manager cabang lain." });
+  }
+  if (req.user.role === "sales_manager" && targetSm && targetSm.id !== req.user.id) {
+    return res.status(403).json({ detail: "Sales Manager tidak dapat memindahkan prospek ke Sales Manager lain." });
+  }
+
+  const marketer = targetMktId ? store.users.find((u) => u.id === targetMktId) : null;
+  if (targetMktId && (!marketer || marketer.role !== "marketing")) {
     return res.status(404).json({ detail: "Marketing tujuan tidak ditemukan." });
   }
   if (marketer && !canAccessBranch(req.user, marketer.branch)) {
     return res.status(403).json({ detail: "Anda tidak dapat menugaskan lead ke marketing cabang lain." });
   }
+  if (req.user.role === "sales_manager" && marketer && marketer.manager_id !== req.user.id) {
+    return res.status(403).json({
+      detail: "Sales Manager hanya dapat menugaskan prospek kepada Marketing di bawah supervisinya sendiri."
+    });
+  }
 
   for (const id of lead_ids) {
     const lead = store.leads.find((l) => l.id === id);
-    if (lead && !canAccessLead(req.user, lead)) {
+    if (lead && !canAccessLead(req.user, lead, store)) {
       return res.status(403).json({ detail: `Anda tidak memiliki akses pada lead '${lead.name}'.` });
     }
-    if (lead && marketer && !isGlobalBranchScope(req.user) && normalizeBranch(lead.branch) !== normalizeBranch(marketer.branch)) {
+    if (lead && marketer && normalizeBranch(lead.branch) !== normalizeBranch(marketer.branch)) {
       return res.status(400).json({ detail: `Lead '${lead.name}' (${lead.branch}) tidak dapat dialokasikan ke marketing cabang lain (${marketer.branch}).` });
+    }
+    if (lead && targetSm && normalizeBranch(lead.branch) !== normalizeBranch(targetSm.branch)) {
+      return res.status(400).json({ detail: `Lead '${lead.name}' (${lead.branch}) tidak dapat dialokasikan ke Sales Manager cabang lain (${targetSm.branch}).` });
     }
   }
 
@@ -1800,34 +2091,50 @@ app.post("/api/leads/assign", requireAuth, requireRoles("super_admin", "admin_op
     for (const id of lead_ids) {
       const lead = store.leads.find((l) => l.id === id);
       if (lead) {
+        let activityNote = "";
         if (marketer) {
           lead.assigned_to = marketer.id;
           lead.assigned_name = marketer.name;
-          if (marketer.manager_id) {
-            lead.sales_manager_id = marketer.manager_id;
-            lead.sales_manager_name = marketer.manager_name;
-          } else if (req.user.role === "sales_manager") {
-            lead.sales_manager_id = req.user.id;
-            lead.sales_manager_name = req.user.name;
-          }
+          const smInfo =
+            req.user.role === "sales_manager"
+              ? { sales_manager_id: req.user.id, sales_manager_name: req.user.name }
+              : resolveSmForMarketing(store, marketer, targetSm?.id || null, targetSm?.name || null);
+          lead.sales_manager_id = smInfo.sales_manager_id;
+          lead.sales_manager_name = smInfo.sales_manager_name;
+          activityNote = `Ditugaskan ke Marketing ${marketer.name}${smInfo.sales_manager_name ? ` (Tim SM: ${smInfo.sales_manager_name})` : ""} oleh ${req.user.name}`;
+        } else if (targetSm) {
+          lead.assigned_to = null;
+          lead.assigned_name = null;
+          lead.sales_manager_id = targetSm.id;
+          lead.sales_manager_name = targetSm.name;
+          activityNote = `Diserahkan ke Antrean Sales Manager ${targetSm.name} oleh ${req.user.name}`;
+        } else if (req.user.role === "sales_manager") {
+          lead.assigned_to = null;
+          lead.assigned_name = null;
+          lead.sales_manager_id = req.user.id;
+          lead.sales_manager_name = req.user.name;
+          activityNote = `Dikembalikan ke Antrean Sales Manager ${req.user.name}`;
         } else {
           lead.assigned_to = null;
           lead.assigned_name = null;
+          lead.sales_manager_id = null;
+          lead.sales_manager_name = null;
+          activityNote = `Dialihkan ke Pool Cadangan Cabang oleh ${req.user.name}`;
         }
         lead.updated_at = new Date().toISOString();
         if (!lead.activities) lead.activities = [];
         lead.activities.unshift({
           id: `act-${Date.now()}-${updatedCount}`,
           type: "system",
-          notes: marketer 
-            ? `Ditugaskan ke Marketing ${marketer.name} oleh ${req.user.name}`
-            : `Dialihkan ke Pool Cadangan Cabang oleh ${req.user.name}`,
+          notes: activityNote,
+          user_name: req.user.name,
           created_at: new Date().toISOString()
         });
         updatedCount++;
       }
     }
-    addAuditLog(req.user, "assign_leads", "leads", `Menugaskan ${updatedCount} leads ke ${marketer ? marketer.name : "Unassigned"}`, req.ip);
+    const targetDesc = marketer ? marketer.name : targetSm ? `Antrean SM ${targetSm.name}` : "Unassigned";
+    addAuditLog(req.user, "assign_leads", "leads", `Menugaskan ${updatedCount} leads ke ${targetDesc}`, req.ip);
     return updatedCount;
   });
   res.json({ updated: count });
@@ -1866,9 +2173,13 @@ app.get("/api/lead-requests", requireAuth, (req, res) => {
     ).length;
 
     // Hitung stok prospek unassigned yang ada di cabang marketing ini secara real-time
+    // Hanya menghitung stok yang tersedia untuk tim SM marketing ini atau stok pool cabang netral
     const unassignedInBranch = isBranchValid
       ? (store.leads || []).filter(
-          (l) => !l.assigned_to && String(l.branch || "").trim().toUpperCase() === normalizedBranch
+          (l) =>
+            !l.assigned_to &&
+            normalizeBranch(l.branch) === normalizedBranch &&
+            (!l.sales_manager_id || l.sales_manager_id === req.user.manager_id)
         )
       : [];
 
@@ -1893,10 +2204,26 @@ app.get("/api/lead-requests", requireAuth, (req, res) => {
   }
 
   // Admin Operasional & Super Admin: melihat seluruh antrean (bisa difilter cabang & status)
-  // Admin Cabang / Sales Manager: melihat antrean cabang penempatannya (read-only monitoring)
-  let list = [...requests];
-  if (req.user.role === "admin_branch" || req.user.role === "sales_manager") {
+  // Admin Cabang: melihat antrean cabang penempatannya (read-only monitoring)
+  // Sales Manager: melihat antrean khusus tim marketing di bawah supervisinya sendiri (read-only monitoring)
+  let list = requests.map((r) => {
+    const reqUser = store.users.find((u) => u.id === r.requester_id);
+    const smInfo = resolveSmForMarketing(store, reqUser, r.sales_manager_id, r.sales_manager_name);
+    return {
+      ...r,
+      sales_manager_id: smInfo.sales_manager_id,
+      sales_manager_name: smInfo.sales_manager_name
+    };
+  });
+
+  if (req.user.role === "admin_branch") {
     list = list.filter((r) => canAccessBranch(req.user, r.branch));
+  } else if (req.user.role === "sales_manager") {
+    list = list.filter(
+      (r) =>
+        canAccessBranch(req.user, r.branch) &&
+        (r.sales_manager_id === req.user.id || isMarketingInSmTeam(store, req.user, r.requester_id))
+    );
   } else if (req.query.branch) {
     list = list.filter((r) => r.branch === req.query.branch);
   }
@@ -1983,8 +2310,12 @@ app.post("/api/lead-requests", requireAuth, requireRoles("marketing"), (req, res
   }
 
   // 6. Validasi Ketersediaan Stok Unassigned di Cabang Pemohon (Real-Time Pre-Check)
+  // Hanya menghitung stok yang tersedia di antrean SM pembina marketing ini atau di Pool Cabang Netral
   const unassignedInBranch = (store.leads || []).filter(
-    (l) => !l.assigned_to && String(l.branch || "").trim().toUpperCase() === userBranch
+    (l) =>
+      !l.assigned_to &&
+      normalizeBranch(l.branch) === userBranch &&
+      (!l.sales_manager_id || l.sales_manager_id === req.user.manager_id)
   );
   if (unassignedInBranch.length === 0) {
     return res.status(400).json({
@@ -1996,6 +2327,7 @@ app.post("/api/lead-requests", requireAuth, requireRoles("marketing"), (req, res
   const yearMonth = now.slice(0, 7).replace("-", "");
   const seq = String((store.lead_requests?.length || 0) + 1).padStart(4, "0");
   const requestNo = `REQ-${yearMonth}-${seq}`;
+  const smInfo = resolveSmForMarketing(store, req.user);
 
   const createdRequest = withTransaction(() => {
     const item = {
@@ -2004,6 +2336,8 @@ app.post("/api/lead-requests", requireAuth, requireRoles("marketing"), (req, res
       requester_id: req.user.id,
       requester_name: req.user.name,
       requester_email: req.user.email,
+      sales_manager_id: smInfo.sales_manager_id,
+      sales_manager_name: smInfo.sales_manager_name,
       branch: userBranch,
       requested_count: requestedCount,
       target_segment: String(body.target_segment || "all").trim(),
@@ -2070,11 +2404,19 @@ app.post(
         throw new Error("Permohonan sudah berstatus non-pending.");
       }
 
-      // Query pool leads unassigned yang cocok dengan cabang (normalized) & segmentasi
-      let candidates = (store.leads || []).filter((l) => {
+      // Query pool leads unassigned yang cocok dengan cabang (normalized), segmentasi, dan isolasi SM
+      // Dilarang mengambil stok antrean milik Sales Manager lain!
+      const isEligiblePoolLead = (l) => {
         if (l.assigned_to) return false;
-        const leadBranch = String(l.branch || "").trim().toUpperCase();
-        if (!leadBranch || leadBranch !== reqItemBranch) return false;
+        const leadBranch = normalizeBranch(l.branch);
+        if (!leadBranch || leadBranch !== normalizeBranch(reqItemBranch)) return false;
+        if (l.sales_manager_id && l.sales_manager_id !== requester.manager_id) return false;
+        if (isBsiScopedUser(requester) && Number(l.age || 0) > 70) return false;
+        return true;
+      };
+
+      let candidates = (store.leads || []).filter((l) => {
+        if (!isEligiblePoolLead(l)) return false;
 
         // Filter segmentasi jika ada
         if (reqItem.target_segment === "prapen") {
@@ -2085,24 +2427,20 @@ app.post(
           if (age < 60) return false;
         }
 
-        // Filter bank scope jika marketing memiliki bank_scope
-        if (isBsiScopedUser(requester)) {
-          if (Number(l.age || 0) > 70) return false;
-        }
-
         return true;
       });
 
-      // Fallback: Jika tidak ada yang cocok dengan segmen spesifik, ambil unassigned di cabang tersebut dengan tetap patuh bank-scope
+      // Fallback: Jika tidak ada yang cocok dengan segmen spesifik, ambil unassigned di cabang tersebut dengan tetap patuh isolasi SM & bank-scope
       if (!candidates.length) {
-        candidates = (store.leads || []).filter((l) => {
-          if (l.assigned_to) return false;
-          const leadBranch = String(l.branch || "").trim().toUpperCase();
-          if (!leadBranch || leadBranch !== reqItemBranch) return false;
-          if (isBsiScopedUser(requester)) {
-            if (Number(l.age || 0) > 70) return false;
-          }
-          return true;
+        candidates = (store.leads || []).filter((l) => isEligiblePoolLead(l));
+      }
+
+      // Prioritaskan prospek yang sudah berada di antrean SM pembina marketing tersebut sebelum mengambil dari Pool Cabang Netral
+      if (requester.manager_id) {
+        candidates.sort((a, b) => {
+          const aOwnSm = a.sales_manager_id === requester.manager_id ? 0 : 1;
+          const bOwnSm = b.sales_manager_id === requester.manager_id ? 0 : 1;
+          return aOwnSm - bOwnSm;
         });
       }
 
@@ -2116,16 +2454,19 @@ app.post(
       // Ambil hingga maxCount data (FIFO: data terlama yang unassigned)
       const allocatedLeads = candidates.slice(0, maxCount);
       const now = new Date().toISOString();
+      const smInfo = resolveSmForMarketing(store, requester);
 
       for (const lead of allocatedLeads) {
         lead.assigned_to = requester.id;
         lead.assigned_name = requester.name;
+        lead.sales_manager_id = smInfo.sales_manager_id;
+        lead.sales_manager_name = smInfo.sales_manager_name;
         lead.updated_at = now;
         lead.activities = lead.activities || [];
         lead.activities.unshift({
           id: `act-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
           type: "system_allocation",
-          notes: `Data dialokasikan ke Marketing ${requester.name} via Permintaan Resmi ${reqItem.request_no}`,
+          notes: `Data dialokasikan ke Marketing ${requester.name}${smInfo.sales_manager_name ? ` (Tim SM: ${smInfo.sales_manager_name})` : ""} via Permintaan Resmi ${reqItem.request_no}`,
           created_at: now,
           created_by: req.user.name
         });
@@ -2256,6 +2597,21 @@ app.patch("/api/leads/:id", requireAuth, (req, res) => {
       return res.status(403).json({ detail: "Anda tidak dapat memindahkan lead ke cabang lain." });
     }
   }
+  if (body.assigned_to !== undefined && body.assigned_to !== null && body.assigned_to !== "") {
+    const targetMkt = store.users.find((u) => u.id === body.assigned_to);
+    if (!targetMkt || targetMkt.role !== "marketing") {
+      return res.status(400).json({ detail: "Marketing tujuan tidak valid." });
+    }
+    const effectiveBranch = body.branch !== undefined ? normalizeBranch(body.branch) : normalizeBranch(lead.branch);
+    if (!canAccessBranch(req.user, targetMkt.branch) || normalizeBranch(targetMkt.branch) !== effectiveBranch) {
+      return res.status(403).json({ detail: "Marketing tujuan harus berada di cabang yang sama dengan lead." });
+    }
+    if (req.user.role === "sales_manager" && targetMkt.manager_id !== req.user.id) {
+      return res.status(403).json({
+        detail: "Sales Manager hanya dapat menugaskan prospek kepada Marketing di bawah supervisinya sendiri."
+      });
+    }
+  }
 
   withTransaction(() => {
     for (const key of allowedFields) {
@@ -2268,6 +2624,17 @@ app.patch("/api/leads/:id", requireAuth, (req, res) => {
           const m = body.assigned_to ? store.users.find((u) => u.id === body.assigned_to) : null;
           lead.assigned_to = m ? m.id : null;
           lead.assigned_name = m ? m.name : null;
+          if (m) {
+            const smInfo =
+              req.user.role === "sales_manager"
+                ? { sales_manager_id: req.user.id, sales_manager_name: req.user.name }
+                : resolveSmForMarketing(store, m, lead.sales_manager_id, lead.sales_manager_name);
+            lead.sales_manager_id = smInfo.sales_manager_id;
+            lead.sales_manager_name = smInfo.sales_manager_name;
+          } else if (req.user.role === "sales_manager") {
+            lead.sales_manager_id = req.user.id;
+            lead.sales_manager_name = req.user.name;
+          }
         } else {
           lead[key] = body[key];
         }
@@ -2383,7 +2750,8 @@ app.delete("/api/documents/:id", requireAuth, (req, res) => {
 
 app.get("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "admin_branch", "sales_manager"), (req, res) => {
   const store = getStore();
-  res.json(store.imports);
+  const visibleImports = (store.imports || []).filter((imp) => canAccessImportBatch(req.user, imp));
+  res.json(visibleImports);
 });
 
 app.get("/api/imports/template", requireAuth, requireRoles("super_admin", "admin_ops", "admin_branch", "sales_manager"), (req, res) => {
@@ -2418,7 +2786,11 @@ app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "
   const forcedManagerId = req.user.role === "sales_manager" ? req.user.id : null;
   const explicitManagerId = forcedManagerId || requestedManagerId || null;
 
-  const distributionMode = req.body?.distribution_mode || "auto_round_robin"; // auto_round_robin | sm_queue | branch_pool
+  // Jika user adalah Sales Manager, cegah mode branch_pool agar data tidak bocor keluar dari tim SM
+  let distributionMode = req.body?.distribution_mode || "auto_round_robin"; // auto_round_robin | sm_queue | branch_pool
+  if (req.user.role === "sales_manager" && distributionMode === "branch_pool") {
+    distributionMode = "sm_queue";
+  }
 
   const batch = withTransaction(() => {
     let inserted = 0;
@@ -2428,6 +2800,8 @@ app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "
     let unassignedCount = 0;
     const errors = [...(parsed.errors || [])];
     const branchPointers = {};
+    const smQueuePointers = {};
+    const smTeamPointers = {};
     const branchBreakdown = {};
     const batchPhones = new Set();
     const todayIso = new Date().toISOString().slice(0, 10);
@@ -2449,59 +2823,82 @@ app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "
       // Resolusi Cabang Kanonikal
       const targetBranch = explicitBranch || resolveBranchFromCityOrText(city, branch_hint, "") || "BANDUNG";
 
-      // Resolusi Sales Manager
-      let smUser = null;
+      // Ambil daftar Sales Manager & Marketing Aktif pada cabang tujuan (patuh bank_scope pengunggah)
+      const branchSms = store.users.filter(
+        (u) =>
+          u.role === "sales_manager" &&
+          u.active !== false &&
+          normalizeBranch(u.branch) === targetBranch &&
+          canAccessUserScope(req.user, u)
+      );
+      const branchMarketers = store.users.filter(
+        (u) =>
+          u.role === "marketing" &&
+          u.active !== false &&
+          normalizeBranch(u.branch) === targetBranch &&
+          canAccessUserScope(req.user, u)
+      );
+
+      // Resolusi Sales Manager Spesifik (jika ada pilihan eksplisit atau kolom Sales Manager di file)
+      let specificSmUser = null;
       if (explicitManagerId) {
-        smUser = store.users.find((u) => u.id === explicitManagerId && u.role === "sales_manager" && u.active !== false);
+        specificSmUser = store.users.find(
+          (u) => u.id === explicitManagerId && u.role === "sales_manager" && u.active !== false
+        );
       } else if (sales_manager_hint) {
         const smLower = sales_manager_hint.toLowerCase();
-        smUser = store.users.find(
-          (u) =>
-            u.role === "sales_manager" &&
-            u.active !== false &&
-            normalizeBranch(u.branch) === targetBranch &&
-            (u.name.toLowerCase().includes(smLower) || u.email.toLowerCase().includes(smLower))
-        );
-      }
-      if (!smUser) {
-        smUser = store.users.find(
-          (u) => u.role === "sales_manager" && u.active !== false && normalizeBranch(u.branch) === targetBranch
+        specificSmUser = branchSms.find(
+          (u) => u.name.toLowerCase().includes(smLower) || u.email.toLowerCase().includes(smLower)
         );
       }
 
       let assignedTo = null;
       let assignedName = null;
-      let salesManagerId = smUser ? smUser.id : null;
-      let salesManagerName = smUser ? smUser.name : null;
-
-      // Ambil daftar Marketing Aktif pada cabang tujuan
-      let branchMarketers = store.users.filter(
-        (u) => u.role === "marketing" && u.active !== false && normalizeBranch(u.branch) === targetBranch
-      );
+      let salesManagerId = specificSmUser ? specificSmUser.id : null;
+      let salesManagerName = specificSmUser ? specificSmUser.name : null;
 
       // Jika ada penunjukan marketing spesifik via kolom file
       if (marketing_hint) {
         const mktLower = marketing_hint.toLowerCase();
-        const specificMkt = branchMarketers.find(
+        const allowedHintMarketers = specificSmUser
+          ? branchMarketers.filter((u) => u.manager_id === specificSmUser.id)
+          : branchMarketers;
+        const specificMkt = allowedHintMarketers.find(
           (u) => u.name.toLowerCase().includes(mktLower) || u.email.toLowerCase().includes(mktLower)
         );
         if (specificMkt) {
           assignedTo = specificMkt.id;
           assignedName = specificMkt.name;
-          if (specificMkt.manager_id) {
-            salesManagerId = specificMkt.manager_id;
-            salesManagerName = specificMkt.manager_name;
-          }
+          const smInfo = resolveSmForMarketing(
+            store,
+            specificMkt,
+            specificSmUser?.id || null,
+            specificSmUser?.name || null
+          );
+          salesManagerId = smInfo.sales_manager_id;
+          salesManagerName = smInfo.sales_manager_name;
           assignedCount++;
         }
       }
 
       if (!assignedTo) {
-        if (distributionMode === "branch_pool") {
-          // Masuk ke Pool Cadangan Cabang
+        if (distributionMode === "branch_pool" && !specificSmUser) {
+          // Masuk ke Pool Cadangan Cabang Netral (tanpa SM & tanpa Marketing)
+          salesManagerId = null;
+          salesManagerName = null;
           unassignedCount++;
         } else if (distributionMode === "sm_queue") {
           // Masuk ke antrean Sales Manager (belum ditugaskan ke marketing)
+          if (!specificSmUser && branchSms.length > 0) {
+            // Distribusi Round-Robin adil ke seluruh Sales Manager aktif di cabang tersebut
+            if (smQueuePointers[targetBranch] === undefined) {
+              smQueuePointers[targetBranch] = 0;
+            }
+            const chosenSm = branchSms[smQueuePointers[targetBranch] % branchSms.length];
+            smQueuePointers[targetBranch]++;
+            salesManagerId = chosenSm.id;
+            salesManagerName = chosenSm.name;
+          }
           if (salesManagerId) {
             smQueueCount++;
           } else {
@@ -2509,34 +2906,58 @@ app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "
           }
         } else {
           // Default: auto_round_robin
-          // Jika ada SM terpilih, prioritaskan tim marketing di bawah SM tersebut jika ada
-          let candidateMarketers = branchMarketers;
-          if (smUser) {
-            const smTeam = branchMarketers.filter((u) => u.manager_id === smUser.id);
+          if (specificSmUser) {
+            // KRITIS: Jika SM tertentu dipilih (atau yang mengimpor adalah SM itu sendiri),
+            // HANYA distribusikan ke marketing di bawah supervisi SM tersebut!
+            // Jika SM tersebut belum memiliki marketing aktif, masukkan ke Antrean SM tersebut (JANGAN bocor ke SM lain!).
+            const smTeam = branchMarketers.filter((u) => u.manager_id === specificSmUser.id);
             if (smTeam.length > 0) {
-              candidateMarketers = smTeam;
+              if (smTeamPointers[specificSmUser.id] === undefined) {
+                smTeamPointers[specificSmUser.id] = 0;
+              }
+              const marketer = smTeam[smTeamPointers[specificSmUser.id] % smTeam.length];
+              smTeamPointers[specificSmUser.id]++;
+              assignedTo = marketer.id;
+              assignedName = marketer.name;
+              salesManagerId = specificSmUser.id;
+              salesManagerName = specificSmUser.name;
+              assignedCount++;
+            } else {
+              // Masuk ke Antrean SM terkait (aman dari kebocoran lintas-SM)
+              salesManagerId = specificSmUser.id;
+              salesManagerName = specificSmUser.name;
+              smQueueCount++;
             }
-          }
-
-          if (candidateMarketers.length > 0) {
-            if (branchPointers[targetBranch] === undefined) {
-              branchPointers[targetBranch] = 0;
-            }
-            const marketer = candidateMarketers[branchPointers[targetBranch] % candidateMarketers.length];
-            branchPointers[targetBranch]++;
-            assignedTo = marketer.id;
-            assignedName = marketer.name;
-            if (marketer.manager_id) {
-              salesManagerId = marketer.manager_id;
-              salesManagerName = marketer.manager_name;
-            }
-            assignedCount++;
-          } else if (salesManagerId) {
-            // Belum ada marketing aktif di cabang, tapi ada Sales Manager -> Masuk antrean SM
-            smQueueCount++;
           } else {
-            // Zero-Marketer & Zero-SM Fallback -> Pool Cadangan Cabang
-            unassignedCount++;
+            // Admin memilih "Otomatis" untuk seluruh cabang (lintas semua SM di cabang tersebut)
+            if (branchMarketers.length > 0) {
+              if (branchPointers[targetBranch] === undefined) {
+                branchPointers[targetBranch] = 0;
+              }
+              const marketer = branchMarketers[branchPointers[targetBranch] % branchMarketers.length];
+              branchPointers[targetBranch]++;
+              assignedTo = marketer.id;
+              assignedName = marketer.name;
+              const smInfo = resolveSmForMarketing(store, marketer);
+              salesManagerId = smInfo.sales_manager_id;
+              salesManagerName = smInfo.sales_manager_name;
+              assignedCount++;
+            } else if (branchSms.length > 0) {
+              // Belum ada marketing aktif di cabang, bagi rata ke antrean Sales Manager cabang
+              if (smQueuePointers[targetBranch] === undefined) {
+                smQueuePointers[targetBranch] = 0;
+              }
+              const chosenSm = branchSms[smQueuePointers[targetBranch] % branchSms.length];
+              smQueuePointers[targetBranch]++;
+              salesManagerId = chosenSm.id;
+              salesManagerName = chosenSm.name;
+              smQueueCount++;
+            } else {
+              // Zero-Marketer & Zero-SM Fallback -> Pool Cadangan Cabang
+              salesManagerId = null;
+              salesManagerName = null;
+              unassignedCount++;
+            }
           }
         }
       }
@@ -2549,7 +2970,7 @@ app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "
           sm_queue: 0,
           pool: 0,
           marketers: branchMarketers.map((m) => m.name),
-          sales_managers: smUser ? [smUser.name] : []
+          sales_managers: specificSmUser ? [specificSmUser.name] : branchSms.map((s) => s.name)
         };
       }
       branchBreakdown[targetBranch].total++;
@@ -2608,6 +3029,9 @@ app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "
       id: `imp-${Date.now()}`,
       filename: req.file.originalname,
       user_name: req.user.name,
+      uploaded_by_id: req.user.id,
+      branch: explicitBranch || null,
+      target_manager_id: explicitManagerId || null,
       total_rows: parsed.rows.length + (parsed.errors?.length || 0),
       inserted,
       skipped_duplicates,
@@ -2652,7 +3076,13 @@ app.get("/api/applications", requireAuth, (req, res) => {
       (a.sales_manager_name && a.sales_manager_name.toLowerCase().includes(sq))
     );
   }
-  if (manager_id) list = list.filter((a) => a.sales_manager_id === manager_id);
+  if (manager_id) {
+    list = list.filter(
+      (a) =>
+        a.sales_manager_id === manager_id ||
+        (a.marketing_id && store.users.some((u) => u.id === a.marketing_id && u.manager_id === manager_id))
+    );
+  }
   if (stage === "ditolak") list = list.filter((a) => a.rejected);
   else if (stage) list = list.filter((a) => a.stage === stage && !a.rejected);
   if (branch) list = list.filter((a) => a.branch === branch);
@@ -2788,6 +3218,15 @@ app.post("/api/applications/:id/documents/:key", requireAuth, upload.single("fil
   }
 
   if (appItem.stage === "booking_live") return res.status(409).json({ detail: "Dokumen pengajuan yang sudah Booking/Live tidak dapat diganti." });
+  if (
+    req.user.role === "marketing" &&
+    appItem.stage !== "upload_dokumen" &&
+    appItem.pending?.party !== "marketing"
+  ) {
+    return res.status(403).json({
+      detail: "Dokumen pengajuan sudah masuk tahap verifikasi bank dan hanya dapat diperbarui jika diminta revisi oleh Admin."
+    });
+  }
   withTransaction(() => {
     const previousId = documentFileId(appItem, doc);
     const previous = previousId && getUploadedFile(previousId);
@@ -3167,6 +3606,8 @@ app.post("/api/claims", requireAuth, upload.single("file"), (req, res) => {
       bank_name: appItem.bank_name,
       marketing_id: appItem.marketing_id,
       marketing_name: appItem.marketing_name,
+      sales_manager_id: appItem.sales_manager_id || req.user.manager_id || null,
+      sales_manager_name: appItem.sales_manager_name || req.user.manager_name || null,
       branch: appItem.branch,
       booking_date: appItem.booking?.date || new Date().toISOString().slice(0, 10),
       credit_no: req.body?.credit_no || appItem.booking?.credit_no || "",
@@ -3426,9 +3867,21 @@ app.get("/api/users", requireAuth, requireRoles("super_admin", "admin_ops", "adm
   if (isBsiScopedUser(req.user)) {
     users = users.filter((u) => isBsiScopedUser(u));
   }
+  if (req.user.role === "sales_manager") {
+    users = users.filter(
+      (u) =>
+        u.id === req.user.id ||
+        (u.role === "marketing" && (!u.manager_id || u.manager_id === req.user.id))
+    );
+  } else if (req.user.role === "admin_branch") {
+    users = users.filter((u) => !["super_admin", "admin_ops"].includes(u.role));
+  }
   const list = users.map((u) => ({
     ...sanitizeUser(u),
-    lead_count: store.leads.filter((l) => l.assigned_to === u.id).length,
+    lead_count:
+      u.role === "sales_manager"
+        ? store.leads.filter((l) => isLeadInSmScope(store, u, l)).length
+        : store.leads.filter((l) => l.assigned_to === u.id).length,
     team_count: u.role === "sales_manager" ? store.users.filter((m) => m.manager_id === u.id).length : undefined
   }));
   res.json(list);
@@ -3443,6 +3896,16 @@ app.get("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops", 
   }
   if (!canAccessUserScope(req.user, target)) {
     return res.status(403).json({ detail: "Admin BSI tidak dapat mengakses data pengguna di luar cakupan BSI." });
+  }
+  if (req.user.role === "sales_manager") {
+    const allowed =
+      target.id === req.user.id ||
+      (target.role === "marketing" && (!target.manager_id || target.manager_id === req.user.id));
+    if (!allowed) {
+      return res.status(403).json({ detail: "Sales Manager hanya dapat mengakses profilnya sendiri atau Marketing binaannya." });
+    }
+  } else if (req.user.role === "admin_branch" && ["super_admin", "admin_ops"].includes(target.role)) {
+    return res.status(403).json({ detail: "Admin Cabang tidak memiliki akses ke akun pusat." });
   }
   res.json(sanitizeUser(target));
 });
@@ -3548,8 +4011,14 @@ app.patch("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops"
   if ((req.user.role === "admin_branch" || req.user.role === "sales_manager") && target.role !== "marketing") {
     return res.status(403).json({ detail: `${ROLE_LABEL[req.user.role]} hanya dapat mengubah akun Marketing.` });
   }
+  if (req.user.role === "sales_manager" && !isMarketingInSmTeam(store, req.user, target.id)) {
+    return res.status(403).json({ detail: "Sales Manager hanya dapat mengubah akun Marketing yang berada di dalam tim binaannya sendiri." });
+  }
 
   const { name, role, branch, bank_scope, phone, active, password, manager_id } = req.body || {};
+  if (req.user.role === "sales_manager" && manager_id !== undefined && manager_id !== req.user.id) {
+    return res.status(403).json({ detail: "Sales Manager tidak dapat memindahkan anggota tim ke Sales Manager lain." });
+  }
   if (name !== undefined && (typeof name !== "string" || !name.trim() || name.trim().length > 120)) return res.status(400).json({ detail: "Nama wajib diisi dan maksimal 120 karakter." });
   if (bank_scope !== undefined && !["all_bank", "bsi_only"].includes(bank_scope)) return res.status(400).json({ detail: "Cakupan bank tidak valid." });
   if (active !== undefined && typeof active !== "boolean") return res.status(400).json({ detail: "Status aktif harus berupa boolean." });
@@ -3619,6 +4088,8 @@ app.patch("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops"
         (active !== undefined && Boolean(active) !== (target.active !== false))) target.auth_version = (target.auth_version || 0) + 1;
     if (name !== undefined) target.name = String(name).trim();
     if (role !== undefined) target.role = role;
+    const branchChanged =
+      branch !== undefined && isGlobalBranchScope(req.user) && normalizeBranch(branch) !== normalizeBranch(target.branch);
     if (branch !== undefined && isGlobalBranchScope(req.user)) target.branch = normalizeBranch(branch);
     if (bank_scope !== undefined && ["super_admin", "admin_ops"].includes(req.user.role)) {
       target.bank_scope = bank_scope === "bsi_only" ? "bsi_only" : "all_bank";
@@ -3626,15 +4097,60 @@ app.patch("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops"
     if (phone !== undefined) target.phone = String(phone).trim();
     if (active !== undefined) target.active = Boolean(active);
     if (encodedPassword) { target.password_hash = encodedPassword; target.must_change_password = IS_PROD; }
+    if (branchChanged && newManagerId === undefined && target.role === "marketing") {
+      target.manager_id = null;
+      target.manager_name = null;
+    }
     if (newManagerId !== undefined) {
       target.manager_id = newManagerId;
       target.manager_name = newManagerName;
+    }
+    if (target.role === "marketing" && (newManagerId !== undefined || branchChanged)) {
+      const effectiveSmId = target.manager_id || null;
+      const effectiveSmName = target.manager_name || null;
+      const targetBranchNorm = normalizeBranch(target.branch);
+      for (const l of store.leads) {
+        if (l.assigned_to === target.id && normalizeBranch(l.branch) === targetBranchNorm) {
+          l.sales_manager_id = effectiveSmId;
+          l.sales_manager_name = effectiveSmName;
+        }
+      }
+      for (const s of store.simulations) {
+        if ((s.marketing_id === target.id || s.created_by === target.id) && normalizeBranch(s.branch) === targetBranchNorm) {
+          s.sales_manager_id = effectiveSmId;
+          s.sales_manager_name = effectiveSmName;
+        }
+      }
+      for (const a of store.applications) {
+        if (a.marketing_id === target.id && normalizeBranch(a.branch) === targetBranchNorm) {
+          a.sales_manager_id = effectiveSmId;
+          a.sales_manager_name = effectiveSmName;
+        }
+      }
+      for (const c of store.claims) {
+        if (c.marketing_id === target.id && normalizeBranch(c.branch) === targetBranchNorm) {
+          c.sales_manager_id = effectiveSmId;
+          c.sales_manager_name = effectiveSmName;
+        }
+      }
     }
     if (target.role === "sales_manager" && name !== undefined) {
       for (const u of store.users) {
         if (u.manager_id === target.id) {
           u.manager_name = target.name;
         }
+      }
+      for (const l of store.leads) {
+        if (l.sales_manager_id === target.id) l.sales_manager_name = target.name;
+      }
+      for (const s of store.simulations) {
+        if (s.sales_manager_id === target.id) s.sales_manager_name = target.name;
+      }
+      for (const a of store.applications) {
+        if (a.sales_manager_id === target.id) a.sales_manager_name = target.name;
+      }
+      for (const c of store.claims) {
+        if (c.sales_manager_id === target.id) c.sales_manager_name = target.name;
       }
     }
     addAuditLog(req.user, "update_user", target.email, `Memperbarui profil pengguna ${target.name}`, req.ip);

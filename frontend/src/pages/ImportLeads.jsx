@@ -30,6 +30,7 @@ export default function ImportLeads() {
   useEffect(() => { load(); }, []);
 
   const isGlobalScope = !user || ["super_admin", "admin_ops"].includes(user.role);
+  const isSalesManager = user?.role === "sales_manager";
 
   const filteredManagers = targetBranch === "auto"
     ? salesManagers
@@ -42,8 +43,10 @@ export default function ImportLeads() {
     if (isGlobalScope && targetBranch && targetBranch !== "auto") {
       fd.append("target_branch", targetBranch);
     }
-    fd.append("distribution_mode", distributionMode);
-    if (targetManagerId && targetManagerId !== "auto") {
+    fd.append("distribution_mode", isSalesManager && distributionMode === "branch_pool" ? "sm_queue" : distributionMode);
+    if (isSalesManager && user?.id) {
+      fd.append("target_manager_id", user.id);
+    } else if (targetManagerId && targetManagerId !== "auto") {
       fd.append("target_manager_id", targetManagerId);
     }
     setBusy(true);
@@ -85,9 +88,15 @@ export default function ImportLeads() {
                 <SelectValue placeholder="Pilih Jalur Distribusi" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="auto_round_robin">⚡ Otomatis (Round-Robin ke Marketing Cabang)</SelectItem>
-                <SelectItem value="sm_queue">👔 Antrean Sales Manager (Dikelola & Dialokasikan SM)</SelectItem>
-                <SelectItem value="branch_pool">🏢 Pool Cadangan Cabang (Bisa Diminta Marketing)</SelectItem>
+                <SelectItem value="auto_round_robin">
+                  {isSalesManager ? "⚡ Otomatis (Round-Robin ke Tim Marketing Saya)" : "⚡ Otomatis (Round-Robin ke Marketing Cabang)"}
+                </SelectItem>
+                <SelectItem value="sm_queue">
+                  {isSalesManager ? "👔 Antrean Saya (Dikelola & Dialokasikan Mandiri)" : "👔 Antrean Sales Manager (Dikelola & Dialokasikan SM)"}
+                </SelectItem>
+                {!isSalesManager && (
+                  <SelectItem value="branch_pool">🏢 Pool Cadangan Cabang (Bisa Diminta Marketing)</SelectItem>
+                )}
               </SelectContent>
             </Select>
             <p className="text-[11px] text-slate-500">
@@ -139,7 +148,12 @@ export default function ImportLeads() {
           )}
 
           {/* Opsi Target Sales Manager */}
-          {filteredManagers.length > 0 && (
+          {isSalesManager ? (
+            <div className="mb-4 rounded-lg bg-purple-50/70 p-3 text-xs text-purple-900 border border-purple-200">
+              <span className="font-bold text-[#351080]">Tim Sales Manager:</span> {user?.name} ({user?.branch})
+              <p className="mt-0.5 text-[11px] text-purple-700">Leads yang Anda impor khusus masuk ke tim marketing di bawah binaan Anda.</p>
+            </div>
+          ) : filteredManagers.length > 0 && (
             <div className="mb-4 space-y-1.5">
               <Label htmlFor="target-manager-select" className="text-xs font-semibold text-slate-700">
                 Sales Manager Tujuan (Opsional)
@@ -149,7 +163,7 @@ export default function ImportLeads() {
                   <SelectValue placeholder="Pilih Sales Manager" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="auto">⚡ Otomatis / Sesuai Kolom File</SelectItem>
+                  <SelectItem value="auto">⚡ Otomatis / Distribusi Adil Antar SM</SelectItem>
                   {filteredManagers.map((sm) => (
                     <SelectItem key={sm.id} value={sm.id}>
                       {sm.name} ({sm.branch})

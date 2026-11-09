@@ -15,7 +15,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 
 const STAGE_OPTS = [["", "Semua tahap"], ["upload_dokumen", "Upload Dokumen"], ["pengajuan_bank", "Pengajuan ke Bank"], ["verifikasi_bank", "Verifikasi Bank"],
   ["approval_bank", "Approval Bank"], ["penjadwalan_akad", "Penjadwalan Akad"], ["akad_nasabah", "Akad Nasabah"], ["booking_live", "Booking/Live"], ["ditolak", "Ditolak Bank"]];
-const PARTY = { marketing: "Marketing", admin_ops: "Admin Operasional", super_admin: "Super Admin" };
+const PARTY = {
+  marketing: "Marketing",
+  admin_ops: "Admin Operasional",
+  admin_branch: "Admin Cabang/Mitra",
+  sales_manager: "Sales Manager",
+  super_admin: "Super Admin"
+};
 const sel = "h-10 rounded-md border border-input bg-white px-3 text-sm";
 
 export const PendingBadge = ({ app }) => {
@@ -507,6 +513,8 @@ export default function Progress() {
             ? `Pengajuan pembiayaan khusus Bank Syariah Indonesia (BSI) di Cabang ${user.branch || "Anda"}.`
             : user.role === "marketing"
             ? "Progress pengajuan calon debitur milik Anda."
+            : user.role === "sales_manager"
+            ? `Progress pengajuan tim marketing binaan Anda (${user.name}) di Cabang ${user.branch || "Anda"}.`
             : user.role === "admin_branch"
             ? `Pengajuan seluruh mitra bank di Cabang ${user.branch || "Anda"}.`
             : user.role === "admin_ops"
@@ -541,7 +549,7 @@ export default function Progress() {
           <select className={sel} value={f.stage} onChange={(e) => set("stage", e.target.value)} data-testid="progress-stage-filter">
             {STAGE_OPTS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
           </select>
-          {user.role === "super_admin" && (
+          {["super_admin", "admin_ops"].includes(user.role) && (
             <select className={sel} value={f.branch} onChange={(e) => set("branch", e.target.value)} data-testid="progress-branch-filter">
               <option value="">Semua cabang</option>
               {(data?.branches || []).map((b) => <option key={b}>{b}</option>)}

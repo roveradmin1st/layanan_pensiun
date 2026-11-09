@@ -328,7 +328,7 @@ function LeadRequestHistoryDialog({ open, onOpenChange, requests }) {
   );
 }
 
-function AdminRequestsPanel({ requests, onRefresh }) {
+function AdminRequestsPanel({ requests, onRefresh, canApprove }) {
   const [rejectId, setRejectId] = useState(null);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -402,7 +402,10 @@ function AdminRequestsPanel({ requests, onRefresh }) {
                     <TableCell className="whitespace-nowrap text-slate-600">{fmtDateTime(r.created_at)}</TableCell>
                     <TableCell className="font-bold text-slate-900">
                       {r.requester_name}
-                      <span className="block font-normal text-[11px] text-slate-400">{r.requester_email}</span>
+                      <span className="block font-normal text-[11px] text-slate-400">
+                        {r.requester_email}
+                        {r.sales_manager_name ? ` • SM: ${r.sales_manager_name}` : ""}
+                      </span>
                     </TableCell>
                     <TableCell>
                       <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
@@ -438,7 +441,7 @@ function AdminRequestsPanel({ requests, onRefresh }) {
                       </span>
                     </TableCell>
                     <TableCell className="text-right">
-                      {isPending ? (
+                      {isPending && canApprove ? (
                         <div className="flex items-center justify-end gap-1.5">
                           <Button
                             size="sm"
@@ -460,6 +463,10 @@ function AdminRequestsPanel({ requests, onRefresh }) {
                             <X className="mr-1 h-3.5 w-3.5" /> Tolak
                           </Button>
                         </div>
+                      ) : isPending ? (
+                        <span className="text-[11px] font-medium text-amber-700">
+                          Menunggu otorisasi Admin Operasional
+                        </span>
                       ) : (
                         <span className="text-[11px] text-slate-400 italic">
                           {isApproved ? `Disetujui ${fmtDateTime(r.processed_at)}` : `Ditolak: ${r.admin_notes || "-"}`}
@@ -518,6 +525,7 @@ export default function Leads() {
   const { user } = useAuth();
   const admin = isAdmin(user);
   const isCentral = user?.role === "super_admin" || user?.role === "admin_ops";
+  const isSalesManager = user?.role === "sales_manager";
   const isMarketing = user?.role === "marketing";
 
   const [activeTab, setActiveTab] = useState("leads"); // "leads" | "requests"
@@ -632,8 +640,8 @@ export default function Leads() {
         </div>
       )}
 
-      {/* Tab Switcher for Admin Central */}
-      {isCentral && (
+      {/* Tab Switcher for Admin & Sales Manager */}
+      {admin && (
         <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
           <button
             onClick={() => setActiveTab("leads")}
@@ -644,7 +652,7 @@ export default function Leads() {
                 : "bg-slate-100 text-slate-600 hover:bg-slate-200"
             }`}
           >
-            <span>Daftar Seluruh Leads</span>
+            <span>{isSalesManager ? "Daftar Leads Tim Saya" : "Daftar Seluruh Leads"}</span>
             <span className="rounded-full bg-white/20 px-1.5 py-0.2 text-[10px]">
               {data?.total || 0}
             </span>
@@ -659,7 +667,7 @@ export default function Leads() {
             }`}
           >
             <Send className="h-4 w-4" />
-            <span>Permintaan Data Marketing</span>
+            <span>{isSalesManager ? "Permintaan Data Tim Saya" : "Permintaan Data Marketing"}</span>
             {requestMeta?.pending_count > 0 && (
               <span className="rounded-full bg-red-500 px-1.5 py-0.2 text-[10px] font-bold text-white">
                 {requestMeta.pending_count} Baru
@@ -670,8 +678,8 @@ export default function Leads() {
       )}
 
       {/* Render Active Tab Content */}
-      {isCentral && activeTab === "requests" ? (
-        <AdminRequestsPanel requests={requestMeta?.items || []} onRefresh={load} />
+      {admin && activeTab === "requests" ? (
+        <AdminRequestsPanel requests={requestMeta?.items || []} onRefresh={load} canApprove={isCentral} />
       ) : (
         <div className="lp-card overflow-hidden">
           {/* Filter Bar Responsif */}
@@ -694,32 +702,40 @@ export default function Leads() {
                 testid="filter-status"
                 options={Object.entries(STATUS).map(([value, s]) => ({ value, label: s.label }))}
               />
-              <FilterSelect
-                value={f.branch}
-                onChange={(v) => setFilter("branch", v)}
-                placeholder="Semua cabang"
-                testid="filter-branch"
-                options={meta.branches.map((b) => ({ value: b, label: b }))}
-              />
+              {isCentral && (
+                <FilterSelect
+                  value={f.branch}
+                  onChange={(v) => setFilter("branch", v)}
+                  placeholder="Semua cabang"
+                  testid="filter-branch"
+                  options={meta.branches.map((b) => ({ value: b, label: b }))}
+                />
+              )}
               {admin && (
                 <FilterSelect
                   value={f.assigned}
                   onChange={(v) => setFilter("assigned", v)}
-                  placeholder="Semua marketing"
+                  placeholder={isSalesManager ? "Semua marketing tim" : "Semua marketing"}
                   testid="filter-assigned"
                   options={[
                     { value: "unassigned", label: "Belum ditugaskan" },
-                    ...meta.marketers.map((m) => ({ value: m.id, label: m.name })),
+                    ...meta.marketers.map((m) => ({
+                      value: m.id,
+                      label: `${m.name}${!isSalesManager && m.manager_name ? ` (SM: ${m.manager_name})` : ""}`,
+                    })),
                   ]}
                 />
               )}
-              {admin && (meta.sales_managers || []).length > 0 && (
+              {admin && !isSalesManager && (meta.sales_managers || []).length > 0 && (
                 <FilterSelect
                   value={f.manager_id}
                   onChange={(v) => setFilter("manager_id", v)}
                   placeholder="Semua Sales Manager"
                   testid="filter-sales-manager"
-                  options={meta.sales_managers.map((sm) => ({ value: sm.id, label: `${sm.name} (${sm.branch})` }))}
+                  options={[
+                    { value: "unassigned_sm", label: "Pool Cabang (Tanpa SM)" },
+                    ...meta.sales_managers.map((sm) => ({ value: sm.id, label: `${sm.name} (${sm.branch})` })),
+                  ]}
                 />
               )}
             </div>
@@ -838,7 +854,13 @@ export default function Leads() {
       )}
 
       {/* Sheets & Dialogs */}
-      <LeadDetailSheet leadId={openId} onClose={() => setOpenId(null)} onChanged={load} marketers={meta.marketers || []} />
+      <LeadDetailSheet
+        leadId={openId}
+        onClose={() => setOpenId(null)}
+        onChanged={load}
+        marketers={meta.marketers || []}
+        salesManagers={isSalesManager ? [] : (meta.sales_managers || [])}
+      />
       {admin && <LeadFormDialog open={formOpen} onOpenChange={setFormOpen} onSaved={load} />}
       {admin && (
         <AssignDialog
@@ -846,6 +868,7 @@ export default function Leads() {
           onOpenChange={setAssignOpen}
           leadIds={selected}
           marketers={meta.marketers || []}
+          salesManagers={isSalesManager ? [] : (meta.sales_managers || [])}
           onDone={() => { setSelected([]); load(); }}
         />
       )}

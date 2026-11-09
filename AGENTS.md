@@ -23,7 +23,7 @@ Read `docs/STATUS.md`, `docs/SOP.md` and `docs/RUNBOOK.md` before changing or de
 Setiap sesi AI baru wajib memeriksa dokumen berikut pada checkout pengembangan:
 
 1. **`Blue_Print/command.md`** — Tempat instruksi dinamis terkini dari pemilik/ahli (selalu berubah sesuai penugasan aktif; baca ulang setiap kali pemilik mengarahkan ke file ini).
-2. **`docs/STATUS.md`** — Konteks server aktual hasil audit 8 November 2026, peta lokasi `/srv/layanan-pensiunan/` dan `/home/layananpensiunan/`, baseline runtime produksi yang terpasang (`c76e823db5a047807bea77ad6c03f2985e62560b` dari branch `fix/production-readiness-20261109`), serta pembedaan fakta audit vs. riwayat persiapan.
+2. **`docs/STATUS.md`** — Catatan status bertanggal dan receipt verifikasi terbaru (peta lokasi `/srv/layanan-pensiunan/` dan `/home/layananpensiunan/`, riwayat audit bertanggal, status CI GitHub Actions, serta pembedaan antara bukti pemeriksaan server langsung dan laporan lisan). Jangan mengandalkan klaim versi aktif tanpa tanggal; selalu rujuk catatan bertanggal terbaru di `docs/STATUS.md` dan bukti pemeriksaan proses server (`PID`, user `lpapp`, `cwd`/script, manifest rilis, port `4000`, symlink `current`, dan database yang dibuka).
 3. **`docs/SOP.md`** — SOP kerja harian, alur rilis 7 tahap, perlindungan data/akun produksi pada update berikutnya, dan aturan kolaborasi dengan pemilik.
 4. **`docs/RUNBOOK.md`** — Prosedur teknis operasional, backup/enkripsi, serta batas antara prosedur yang sudah terbukti bekerja dan alat historis yang ditunda.
 5. **`Blue_Print/PANDUAN_OPERASIONAL_VPS.md`** — Arsip prosedur UAT lama (hanya referensi historis; jangan gunakan perintah reset/restore/rilis lama dari arsip ini pada produksi).
@@ -38,10 +38,9 @@ Setiap sesi AI baru wajib memeriksa dokumen berikut pada checkout pengembangan:
 ### Prosedur Terbukti vs. Rencana Otomasi / Alat Historis
 
 - **Sudah Terbukti Bekerja:**
-  - Rilis produksi `/srv/layanan-pensiunan/current` → `/srv/layanan-pensiunan/releases/layanan-pensiunan-c76e823-production` (commit `c76e823db5a047807bea77ad6c03f2985e62560b`), berjalan sebagai `lpapp` (1 fork pada `127.0.0.1:4000`, Node `24.22.2`) di balik Nginx HTTPS (`https://139.190.106.136/`), membuka `/srv/layanan-pensiunan/shared/data/enterprise.sqlite` (+ `-wal`, `-shm`).
-  - Aktivasi rilis produksi `c76e823` diselesaikan melalui langkah manual terkendali yang diizinkan pemilik.
-  - Validasi CI (`python3 ops/ci.py` dan GitHub Actions `.github/workflows/validate.yml`) pada database sementara.
+  - Arsitektur runtime produksi: proses PM2 `layanan-pensiunan-api` berjalan sebagai `lpapp` (tepat 1 instance mode `fork` pada `127.0.0.1:4000`, Node sesuai `.node-version`) di balik Nginx HTTPS (`https://139.190.106.136/`), membuka `/srv/layanan-pensiunan/shared/data/enterprise.sqlite` (+ `-wal`, `-shm`) dengan kontrak data `lp-production-20261109-v1`. Untuk versi/commit rilis yang sedang aktif beserta tanggal verifikasinya, lihat catatan bertanggal dan receipt terbaru di `docs/STATUS.md`.
+  - Validasi CI (`python3 ops/ci.py` dan GitHub Actions `.github/workflows/validate.yml`) pada database sementara, termasuk suite API terintegrasi (`backend/tests/security-and-api.test.mjs`).
 - **Belum Tervalidasi / Ditunda (Jangan Diasumsikan Aktif):**
-  - **Deployment rutin satu tombol:** Baru merupakan sasaran perbaikan berikutnya; belum tersedia dan belum tervalidasi aman untuk produksi. Setiap `git push` tidak otomatis memperbarui VPS.
+  - **Deployment rutin satu tombol (`ops/package_release.py`, `ops/server_release.py` / `lp-release`, `.github/workflows/deploy.yml`):** Spesifikasi telah ditetapkan pada `Blue_Print/command.md` (9 November 2026), namun belum diimplementasikan/dipasang di produksi. Setiap `git push` tidak otomatis memperbarui VPS.
   - **`ops/production_cutover.py`:** Alat transisi satu kali UAT→produksi yang pernah gagal saat aktivasi; riset/perbaikannya ditunda pemilik. Jangan dijalankan ulang untuk update rutin.
   - **`/srv/layanan-pensiunan/deploy.sh`:** Belum dinilai kesesuaiannya dalam audit 8 November 2026; jangan dianggap sebagai perintah update resmi.

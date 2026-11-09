@@ -62,11 +62,9 @@ logs/
 .tmp/
 tmp/
 
-# Large simulation audit archives (>100 MB GitHub limit)
-Blue_Print/**/*.zip
-
-# Temporary validation distribution packages
-Blue_Print/Paket_BSI_Pensiun_Validasi/
+# Confidential company blueprint, formulas, and audit instructions (local only, never push to GitHub)
+/Blue_Print/
+Blue_Print/
 
 # Sensitive personal data & nominative survey responses (UU PDP / PII Protection)
 *Nominatif*

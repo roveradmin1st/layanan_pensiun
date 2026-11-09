@@ -147,6 +147,7 @@ function UserDialog({ open, onOpenChange, editing, onSaved, me, allUsers = [] })
               <Label htmlFor="u-manager">Sales Manager Pembina (Opsional)</Label>
               <Select
                 value={v.manager_id || "none"}
+                disabled={me.role === "sales_manager"}
                 onValueChange={(val) => setV({ ...v, manager_id: val === "none" ? null : val })}
               >
                 <SelectTrigger id="u-manager" data-testid="user-form-manager">
@@ -186,23 +187,34 @@ export default function UsersPage() {
   const canEdit = (u) => {
     if (user.role === "super_admin") return true;
     if (user.role === "admin_ops") return ["admin_branch", "sales_manager", "marketing"].includes(u.role);
-    if (user.role === "admin_branch" || user.role === "sales_manager") {
-      const isSameBranch = String(u.branch || "").trim().toUpperCase() === String(user.branch || "").trim().toUpperCase();
+    const isSameBranch = String(u.branch || "").trim().toUpperCase() === String(user.branch || "").trim().toUpperCase();
+    if (user.role === "admin_branch") {
       return u.role === "marketing" && isSameBranch;
+    }
+    if (user.role === "sales_manager") {
+      return u.role === "marketing" && isSameBranch && u.manager_id === user.id;
     }
     return false;
   };
 
   return (
     <div>
-      <PageHeader eyebrow="Administrasi" title="Pengguna & Peran" desc="Tidak ada registrasi publik. Seluruh akun dibuat oleh administrator yang berwenang."
+      <PageHeader
+        eyebrow="Administrasi"
+        title={user.role === "sales_manager" ? "Tim Marketing Saya" : "Pengguna & Peran"}
+        desc={
+          user.role === "sales_manager"
+            ? `Kelola dan pantau anggota tim marketing yang berada di bawah binaan Anda (${user.name}) di Cabang ${user.branch}.`
+            : "Tidak ada registrasi publik. Seluruh akun dibuat oleh administrator yang berwenang."
+        }
         actions={
           ["super_admin", "admin_ops"].includes(user.role) ? (
             <CtaButton onClick={() => { setEditing(null); setOpen(true); }} data-testid="add-user-button">
               <Plus className="mr-2 h-4 w-4" />Tambah Pengguna
             </CtaButton>
           ) : null
-        } />
+        }
+      />
       <div className="lp-card">
         {/* Desktop Table View */}
         <DesktopTable testid="users-table">
@@ -322,4 +334,3 @@ export default function UsersPage() {
     </div>
   );
 }
-

@@ -50,7 +50,7 @@ const Panel = ({ title, subtitle, action, children, className = "", testid }) =>
   </section>
 );
 
-function FinancialTrendChart({ data }) {
+function FinancialTrendChart({ data, showGrossFee = true }) {
   if (!data?.length) return <Empty text="Belum ada data riwayat keuangan" />;
   return (
     <div className="h-[270px] sm:h-[300px] w-full min-w-0">
@@ -69,7 +69,9 @@ function FinancialTrendChart({ data }) {
             contentStyle={{ borderRadius: 12, border: "1px solid #e2e8f0", fontSize: 12, boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)" }}
           />
           <Bar dataKey="booking" name="Realisasi Booking" fill="#078D67" radius={[4, 4, 0, 0]} maxBarSize={30} />
-          <Bar dataKey="revenue" name="Gross Fee Perusahaan (4%)" fill="#5720B8" radius={[4, 4, 0, 0]} maxBarSize={30} />
+          {showGrossFee && (
+            <Bar dataKey="revenue" name="Gross Fee Perusahaan (4%)" fill="#5720B8" radius={[4, 4, 0, 0]} maxBarSize={30} />
+          )}
           <Bar dataKey="insentif" name="Insentif Terbayar (PAID)" fill="#F28A19" radius={[4, 4, 0, 0]} maxBarSize={30} />
         </BarChart>
       </ResponsiveContainer>
@@ -77,7 +79,10 @@ function FinancialTrendChart({ data }) {
   );
 }
 
-function AdminDashboard({ d }) {
+function AdminDashboard({ d, user }) {
+  const isCentral = ["super_admin", "admin_ops"].includes(user?.role);
+  const isSalesManager = user?.role === "sales_manager";
+  const isBranchAdmin = user?.role === "admin_branch";
   const s = d.by_status || { baru: 0, follow_up: 0, proses: 0, berhasil: 0, gagal: 0 };
   const fin = d.financials || {
     monthly_target: 5000000000,
@@ -98,9 +103,27 @@ function AdminDashboard({ d }) {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Command Center Eksekutif"
-        title="Kinerja Finansial & Realisasi Bisnis"
-        desc="Pantau pencapaian omzet bulanan, profitabilitas margin perusahaan, insentif marketing PAID, dan akuntabilitas tim."
+        eyebrow={
+          isSalesManager
+            ? `Command Center Sales Manager • ${user?.branch || ""}`
+            : isBranchAdmin
+              ? `Command Center Cabang • ${user?.branch || ""}`
+              : "Command Center Eksekutif"
+        }
+        title={
+          isSalesManager
+            ? "Dashboard Pencapaian Tim Marketing"
+            : isBranchAdmin
+              ? `Kinerja Operasional Cabang ${user?.branch || ""}`
+              : "Kinerja Finansial & Realisasi Bisnis"
+        }
+        desc={
+          isSalesManager
+            ? `Pantau realisasi booking, pipeline pengajuan bank, rasio konversi, dan produktivitas tim marketing binaan Anda (${user?.name}) di cabang ${user?.branch}.`
+            : isBranchAdmin
+              ? "Pantau realisasi pencairan cabang, pipeline pengajuan di bank, dan produktivitas seluruh tim Sales Manager & Marketing di cabang Anda."
+              : "Pantau pencapaian omzet bulanan, profitabilitas margin perusahaan, insentif marketing PAID, dan akuntabilitas tim."
+        }
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Button asChild variant="outline" className="border-slate-300 text-slate-700 hover:bg-slate-50" data-testid="quick-import-button">
@@ -139,7 +162,7 @@ function AdminDashboard({ d }) {
             <div className="flex flex-wrap items-center gap-2.5">
               <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/20 px-3 py-1 text-xs font-bold text-emerald-300 border border-emerald-500/30">
                 <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                TARGET OMSET BULANAN: {rp(fin.monthly_target || 5000000000)} (Rp 5 Miliar)
+                {isSalesManager ? "PENCAPAIAN TIM MARKETING SAYA" : `TARGET OMSET BULANAN: ${rp(fin.monthly_target || 5000000000)} (Rp 5 Miliar)`}
               </span>
               <span className="text-xs text-slate-300">
                 Bulan Berjalan ({fin.booking_count || 0} Akad Selesai)
@@ -147,7 +170,9 @@ function AdminDashboard({ d }) {
             </div>
 
             <div className="mt-4">
-              <span className="text-xs uppercase tracking-wider text-slate-400 font-medium">Realisasi Pencairan (Booking/Live)</span>
+              <span className="text-xs uppercase tracking-wider text-slate-400 font-medium">
+                {isSalesManager ? "Realisasi Pencairan Tim Saya (Booking/Live)" : "Realisasi Pencairan (Booking/Live)"}
+              </span>
               <div className="mt-1 flex flex-wrap items-baseline gap-3">
                 <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black text-white tracking-tight lp-num" data-testid="hero-booking-volume">
                   {rp(fin.total_booking_volume)}
@@ -177,61 +202,103 @@ function AdminDashboard({ d }) {
           {/* Pipeline Coverage Highlight Badge */}
           <div className="lg:w-80 rounded-xl bg-white/5 border border-white/10 p-4 backdrop-blur-md">
             <div className="flex items-center justify-between text-xs text-slate-300">
-              <span className="font-semibold text-slate-200">Pipeline Sedang Proses Bank</span>
-              <span className="text-emerald-400 font-bold">20,6% Target</span>
+              <span className="font-semibold text-slate-200">
+                {isSalesManager ? "Pipeline Tim Sedang Proses Bank" : "Pipeline Sedang Proses Bank"}
+              </span>
+              <span className="text-emerald-400 font-bold">{fin.pipeline_target_coverage_pct || 0}% Target</span>
             </div>
             <p className="mt-2 text-xl sm:text-2xl font-bold text-white lp-num">
               {rp(fin.pipeline_value)}
             </p>
             <p className="mt-1 text-xs text-slate-400">
-              {s.proses || 5} pengajuan aktif di verifikasi bank mitra. Jika seluruhnya cair, pencapaian target naik signifikan.
+              {s.proses || 0} pengajuan aktif di verifikasi bank mitra.
             </p>
           </div>
         </div>
 
-        {/* 3 Pillar Cards for Financial Breakdown */}
-        <div className="relative z-10 mt-6 pt-6 border-t border-slate-700/60 grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="rounded-xl bg-white/5 border border-white/10 p-4">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-              Gross Revenue (Fee 4%)
-            </span>
-            <p className="mt-1 text-xl font-bold text-white lp-num">
-              {rp(fin.est_gross_revenue)}
-            </p>
-            <p className="mt-1 text-xs text-slate-400">
-              Estimasi imbal jasa bruto dari mitra bank
-            </p>
-          </div>
-
-          <div className="rounded-xl bg-white/5 border border-white/10 p-4">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-300">
-              Insentif Marketing (PAID)
-            </span>
-            <p className="mt-1 text-xl font-bold text-amber-400 lp-num">
-              {rp(fin.total_paid_incentives)}
-            </p>
-            <p className="mt-1 text-xs text-slate-400">
-              Klaim insentif yang telah disetujui & dicairkan
-            </p>
-          </div>
-
-          <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-4">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-emerald-300">
-                Laba Bersih Operasional
+        {/* 3 Pillar Cards: Financial Breakdown for Central vs Team Operational Summary for SM/Branch */}
+        {isCentral ? (
+          <div className="relative z-10 mt-6 pt-6 border-t border-slate-700/60 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="rounded-xl bg-white/5 border border-white/10 p-4">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                Gross Revenue (Fee 4%)
               </span>
-              <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">
-                50% Net Margin
-              </span>
+              <p className="mt-1 text-xl font-bold text-white lp-num">
+                {rp(fin.est_gross_revenue)}
+              </p>
+              <p className="mt-1 text-xs text-slate-400">
+                Estimasi imbal jasa bruto dari mitra bank
+              </p>
             </div>
-            <p className="mt-1 text-xl font-bold text-emerald-400 lp-num">
-              {rp(fin.net_company_profit)}
-            </p>
-            <p className="mt-1 text-xs text-emerald-200/80">
-              Gross Fee dikurangi Insentif Marketing
-            </p>
+
+            <div className="rounded-xl bg-white/5 border border-white/10 p-4">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-300">
+                Insentif Marketing (PAID)
+              </span>
+              <p className="mt-1 text-xl font-bold text-amber-400 lp-num">
+                {rp(fin.total_paid_incentives)}
+              </p>
+              <p className="mt-1 text-xs text-slate-400">
+                Klaim insentif yang telah disetujui & dicairkan
+              </p>
+            </div>
+
+            <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-4">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-emerald-300">
+                  Laba Bersih Operasional
+                </span>
+                <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">
+                  50% Net Margin
+                </span>
+              </div>
+              <p className="mt-1 text-xl font-bold text-emerald-400 lp-num">
+                {rp(fin.net_company_profit)}
+              </p>
+              <p className="mt-1 text-xs text-emerald-200/80">
+                Gross Fee dikurangi Insentif Marketing
+              </p>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="relative z-10 mt-6 pt-6 border-t border-slate-700/60 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="rounded-xl bg-white/5 border border-white/10 p-4">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-300">
+                {isSalesManager ? "Insentif Tim Saya (PAID)" : "Insentif Cabang (PAID)"}
+              </span>
+              <p className="mt-1 text-xl font-bold text-amber-400 lp-num">
+                {rp(fin.total_paid_incentives)}
+              </p>
+              <p className="mt-1 text-xs text-slate-400">
+                Total insentif marketing yang telah dicairkan
+              </p>
+            </div>
+
+            <div className="rounded-xl bg-white/5 border border-white/10 p-4">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-300">
+                {isSalesManager ? "Anggota Tim Marketing Saya" : "Petugas Marketing Cabang"}
+              </span>
+              <p className="mt-1 text-xl font-bold text-white lp-num">
+                {d.team_summary?.marketing_count ?? d.marketing_leaderboard?.length ?? 0} Marketing
+              </p>
+              <p className="mt-1 text-xs text-slate-400">
+                {isSalesManager ? `Di bawah supervisi ${user?.name}` : `Aktif beroperasi di cabang ${user?.branch}`}
+              </p>
+            </div>
+
+            <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-4">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-emerald-300">
+                {isSalesManager ? "Antrean Leads Tim Saya" : "Leads Cabang Belum Ditugaskan"}
+              </span>
+              <p className="mt-1 text-xl font-bold text-emerald-400 lp-num">
+                {d.team_summary?.sm_queue_leads ?? d.unassigned ?? 0} Leads
+              </p>
+              <p className="mt-1 text-xs text-emerald-200/80">
+                Siap didistribusikan kepada anggota tim marketing
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* =========================================================================
@@ -270,7 +337,9 @@ function AdminDashboard({ d }) {
 
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm hover:shadow-md transition">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Database Leads</span>
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+              {isSalesManager ? "Leads Tim Saya" : "Database Leads"}
+            </span>
             <div className="rounded-lg bg-purple-50 p-2 text-[#5720B8]">
               <Users className="h-4 w-4" />
             </div>
@@ -279,7 +348,7 @@ function AdminDashboard({ d }) {
             {d.total_leads} Leads
           </p>
           <p className="mt-1 text-xs text-slate-500">
-            {d.unassigned > 0 ? `${d.unassigned} belum ditugaskan` : "Semua leads telah ditugaskan"}
+            {d.unassigned > 0 ? `${d.unassigned} belum ditugaskan ke marketing` : "Semua leads telah ditugaskan"}
           </p>
         </div>
 
@@ -305,11 +374,15 @@ function AdminDashboard({ d }) {
       <div className="grid gap-6 lg:grid-cols-3">
         <Panel
           title="Tren Realisasi Omzet vs Insentif (6 Bulan)"
-          subtitle="Evaluasi perbandingan pertumbuhan volume pembiayaan, fee kotor perusahaan, dan insentif terbayar."
+          subtitle={
+            isCentral
+              ? "Evaluasi perbandingan pertumbuhan volume pembiayaan, fee kotor perusahaan, dan insentif terbayar."
+              : "Evaluasi perbandingan pertumbuhan realisasi booking dan insentif marketing yang telah terbayar."
+          }
           className="lg:col-span-2"
           testid="financial-trend-chart"
         >
-          <FinancialTrendChart data={d.financial_trend} />
+          <FinancialTrendChart data={d.financial_trend} showGrossFee={isCentral} />
         </Panel>
 
         <Panel
@@ -362,8 +435,16 @@ function AdminDashboard({ d }) {
           TIER 4: LEADERBOARD KINERJA MARKETING ("SIAPA YANG BENERAN KERJA")
       ========================================================================= */}
       <Panel
-        title="Papan Peringkat Akuntabilitas Marketing"
-        subtitle="Evaluasi produktivitas tim marketing berdasarkan omzet booking riil, rasio konversi closing, dan insentif terbayar."
+        title={
+          isSalesManager
+            ? `Papan Peringkat Tim Marketing Saya (${user?.name})`
+            : "Papan Peringkat Akuntabilitas Marketing"
+        }
+        subtitle={
+          isSalesManager
+            ? "Evaluasi eksklusif produktivitas anggota tim marketing di bawah binaan Anda berdasarkan omzet booking riil dan konversi closing."
+            : "Evaluasi produktivitas tim marketing berdasarkan omzet booking riil, rasio konversi closing, dan insentif terbayar."
+        }
         action={
           <Link to="/pengguna" className="text-xs font-semibold text-[#5720B8] hover:underline flex items-center gap-1">
             Lihat Daftar Petugas <ChevronRight className="h-3.5 w-3.5" />
@@ -404,7 +485,10 @@ function AdminDashboard({ d }) {
                           </span>
                           <div>
                             <span className="font-bold text-[#17223B] block">{m.name}</span>
-                            <span className="text-[10px] text-slate-400">{m.aktivitas_7h} aktivitas 7 hari</span>
+                            <span className="text-[10px] text-slate-400">
+                              {m.aktivitas_7h} aktivitas 7 hari
+                              {!isSalesManager && m.manager_name ? ` • SM: ${m.manager_name}` : ""}
+                            </span>
                           </div>
                         </div>
                       </td>
@@ -483,9 +567,11 @@ function AdminDashboard({ d }) {
         <Panel
           title="Aktivitas Terakhir Operasional"
           action={
-            <Link to="/audit" className="text-xs font-semibold text-[#5720B8] hover:underline">
-              Buka Audit Log
-            </Link>
+            isCentral ? (
+              <Link to="/audit" className="text-xs font-semibold text-[#5720B8] hover:underline">
+                Buka Audit Log
+              </Link>
+            ) : null
           }
           testid="recent-activity-panel"
         >
@@ -637,5 +723,5 @@ export default function Dashboard() {
     api.get("/dashboard").then((r) => setD(r.data));
   }, []);
   if (!d) return <DashboardSkeleton />;
-  return isAdmin(user) ? <AdminDashboard d={d} /> : <MarketingDashboard d={d} user={user} />;
+  return isAdmin(user) ? <AdminDashboard d={d} user={user} /> : <MarketingDashboard d={d} user={user} />;
 }

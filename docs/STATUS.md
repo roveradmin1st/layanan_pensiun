@@ -1,13 +1,13 @@
 # Status Server dan Kesiapan Operasional — Layanan Pensiunan
 
-Tanggal acuan konteks server: **8 November 2026** (Peluncuran operasional dengan data nyata dijadwalkan **Senin, 9 November 2026**).
-Dasar fakta server: hasil audit folder, symlink, proses, dan file database yang dibuka oleh proses, dikirim pemilik pada 8 November 2026. Fakta historis persiapan (7 November 2026) dibedakan secara tegas dari hasil audit aktual ini.
+Tanggal acuan konteks server: **8–9 November 2026** (Peluncuran operasional dengan data nyata dijadwalkan **Senin, 9 November 2026**).
+Dasar fakta server: hasil audit folder, symlink, proses, dan file database yang dibuka oleh proses, dikirim pemilik pada 8 November 2026, serta catatan bertanggal perkembangan rilis dan CI pada 8–9 November 2026. Fakta historis persiapan (7 November 2026) dibedakan secara tegas dari hasil audit aktual ini.
 
 ## 1. Kondisi Server Aktual yang Terkonfirmasi oleh Audit (8 November 2026)
 
-- **Symlink Rilis Aktif (`current`):** `/srv/layanan-pensiunan/current` mengarah ke `/srv/layanan-pensiunan/releases/layanan-pensiunan-c76e823-production`.
-- **Proses & Runtime:** Proses yang mendengarkan port aplikasi (`layanan-pensiunan-api` pada PM2) berjalan sebagai user layanan `lpapp` (satu instance mode *fork*, Node `24.22.2`), dengan *working directory* `/srv/layanan-pensiunan/releases/layanan-pensiunan-c76e823-production/backend`.
-- **Baseline Commit Terpasang:** Manifest rilis tersebut mencatat commit `c76e823db5a047807bea77ad6c03f2985e62560b` (branch asal baseline produksi: `fix/production-readiness-20261109` di repository `https://github.com/roveradmin1st/layanan_pensiun.git`). Commit tersebut adalah baseline runtime yang terpasang, bukan klaim HEAD GitHub terbaru.
+- **Symlink Rilis Aktif (`current`):** `/srv/layanan-pensiunan/current` mengarah ke `/srv/layanan-pensiunan/releases/layanan-pensiunan-c76e823-production` (pada saat audit 8 November 2026; lihat pembaruan status aktivasi fitur 8–9 November 2026 di Bagian 5).
+- **Proses & Runtime:** Proses yang mendengarkan port aplikasi (`layanan-pensiunan-api` pada PM2) berjalan sebagai user layanan `lpapp` (satu instance mode *fork*, Node `24.22.2`), dengan *working directory* `/srv/layanan-pensiunan/releases/layanan-pensiunan-c76e823-production/backend` (pada saat audit 8 November 2026).
+- **Baseline Commit Terpasang (Audit 8 November 2026):** Manifest rilis tersebut mencatat commit `c76e823db5a047807bea77ad6c03f2985e62560b` (branch asal baseline produksi: `fix/production-readiness-20261109` di repository `https://github.com/roveradmin1st/layanan_pensiun.git`). Commit tersebut adalah baseline runtime yang terkonfirmasi pada audit 8 November 2026; untuk rilis fitur `fe1025a94ebcb9ca6b078fa57e00287015ff8dc0` (`fix/release-operational-ux-20261108`) pada 9 November 2026, lihat Bagian 5.
 - **Database Produksi Persisten:** Proses membuka `/srv/layanan-pensiunan/shared/data/enterprise.sqlite`, beserta sidecar `enterprise.sqlite-wal` dan `enterprise.sqlite-shm`. Dokumen unggahan disimpan sebagai BLOB di dalam SQLite.
 - **Alamat Listen & Alur Jaringan:** Alamat listen backend yang ditemukan adalah `127.0.0.1:4000`. Alur layanan: Browser pengguna (tanpa VPN) → Nginx HTTPS (`https://139.190.106.136/`) → Node/Express (`127.0.0.1:4000`) → SQLite. Frontend React/Vite hasil build (`frontend/dist`) dilayani oleh aplikasi.
 - **Kapasitas Disk:** Ruang disk tersedia sekitar **51 GB** dari filesystem **58 GB**. Tidak ada kebutuhan mendesak menghapus folder berdasarkan kapasitas ini.
@@ -94,9 +94,9 @@ Alur klaim yang disetujui pemilik: persetujuan dahulu, pembayaran kemudian denga
 
 ---
 
-## 5. Status Pengembangan Fitur Operasional & Validasi Database Nyata (8 November 2026)
+## 5. Status Pengembangan Fitur Operasional & Validasi Database Nyata (8–9 November 2026)
 
-**Branch Tugas:** `feat/operational-ux-and-import-routing` (berbasis commit rilis `c76e823db5a047807bea77ad6c03f2985e62560b`).
+**Branch Tugas:** `feat/operational-ux-and-import-routing` (`2c20fd20c9272968c5da64f5dfb42e05ffad4e36`) dan branch perbaikan CI `fix/release-operational-ux-20261108` (`fe1025a94ebcb9ca6b078fa57e00287015ff8dc0`), berbasis commit rilis `c76e823db5a047807bea77ad6c03f2985e62560b`.
 
 ### Fitur yang Dikembangkan:
 1. **In-App Document Preview Popup (Animasi Ringan):**
@@ -129,10 +129,46 @@ Alur klaim yang disetujui pemilik: persetujuan dahulu, pembayaran kemudian denga
 - **Rangkaian Backend Test Suite:** **58 dari 58 pengujian LULUS 100%** (`tests 58, suites 0, pass 58, fail 0`).
 - **Rangkaian Frontend Build:** `vite build` selesai sukses tanpa error (2599 modul terkompilasi bersih).
 
-### Perbaikan jalur rilis setelah pemeriksaan CI lengkap (8 November 2026)
+### Perbaikan jalur rilis setelah pemeriksaan CI lengkap (8–9 November 2026)
 
-- Pemeriksaan terpisah atas commit fitur `2c20fd2` menjalankan `python3 ops/ci.py --skip-install --browser --system-chromium`. Sebanyak 33 tes operasi, build frontend, dan 58 tes backend lulus, tetapi suite API terintegrasi berhenti pada perbandingan nominal klaim: respons Marketing sudah disamarkan menjadi null, sementara respons Admin tetap berisi nominal tersimpan. Karena itu, hasil 58 tes backend saja belum membuktikan seluruh CI lulus.
-- Tes API diperbarui untuk membandingkan nominal sebelum/sesudah permintaan ditolak melalui sudut pandang Admin yang sama, sekaligus memeriksa penyamaran pada endpoint detail/list/pengajuan, penolakan penetapan nominal oleh Marketing/SM, penetapan nominal oleh Admin tanpa mengubah status pembayaran, dan larangan mengubah nominal setelah PAID. Tidak ada kode runtime aplikasi atau database produksi yang diubah oleh perbaikan ini.
-- Pemicu push workflow validasi mencakup seluruh branch, termasuk branch fitur. Workflow tetap hanya mempunyai izin contents:read dan tidak melakukan deployment.
-- Validasi ulang lokal setelah perbaikan lulus melalui `python3 ops/ci.py --skip-install --browser --system-chromium`: 33 tes operasi Python, 58 tes backend, suite API keamanan/RBAC/aturan bisnis, smoke produksi dan kandidat, build frontend, serta 5 alur browser. Pengujian memakai Node24.22.1 dan Chromium155 pada data sintetis; pin VPS tetap Node24.22.2. Kedua lockfile identik dengan baseline sehingga dependency lokal yang tersedia digunakan kembali. Berkas Excel nyata klien tidak tersedia pada lingkungan pemeriksaan ini dan tidak diuji ulang.
-- Perbaikan ini disiapkan pada branch kerja terpisah; publikasi, hasil CI GitHub, dan aktivasi VPS belum boleh dinyatakan selesai sebelum ada bukti aktual. Akses API GitHub dari workspace menolak permintaan menjalankan workflow manual.
+- Pemeriksaan terpisah atas commit fitur `2c20fd20c9272968c5da64f5dfb42e05ffad4e36` (`origin/feat/operational-ux-and-import-routing`) menjalankan `python3 ops/ci.py --skip-install --browser --system-chromium`. Sebanyak 33 tes operasi, build frontend, dan 58 tes backend lulus, tetapi suite API terintegrasi (`backend/tests/security-and-api.test.mjs`) berhenti pada perbandingan nominal klaim: respons Marketing sudah disamarkan menjadi `null`, sementara respons Admin tetap berisi nominal tersimpan. Karena itu, hasil 58 tes backend saja belum membuktikan seluruh CI lulus.
+- Tes API diperbarui pada commit `fe1025a94ebcb9ca6b078fa57e00287015ff8dc0` (branch `fix/release-operational-ux-20261108`) untuk membandingkan nominal sebelum/sesudah permintaan ditolak melalui sudut pandang Admin yang sama, sekaligus memeriksa penyamaran pada endpoint detail/list/pengajuan, penolakan penetapan nominal oleh Marketing/SM, penetapan nominal oleh Admin tanpa mengubah status pembayaran, dan larangan mengubah nominal setelah PAID. Tidak ada kode runtime aplikasi atau database produksi yang diubah oleh perbaikan ini.
+- Pemicu push workflow validasi (`.github/workflows/validate.yml`) mencakup seluruh branch, termasuk branch fitur. Workflow tetap hanya mempunyai izin `contents:read` dan tidak melakukan deployment.
+- **Bukti CI GitHub Actions (8–9 November 2026):** Commit `fe1025a94ebcb9ca6b078fa57e00287015ff8dc0` pada branch `fix/release-operational-ux-20261108` telah lulus CI GitHub Actions dengan status **Success**: [run #42497169863](https://github.com/roveradmin1st/layanan_pensiun/actions/runs/42497169863).
+- **Insiden Regresi Aktivasi & Status VPS per 9 November 2026:**
+  - Sempat terjadi insiden di mana `/srv/layanan-pensiunan/current` menunjuk `layanan-pensiunan-2c20fd2-production`, sedangkan proses yang mendengarkan port `4000` masih berjalan dari `layanan-pensiunan-c76e823-production/backend` (mengubah symlink `current` saja tidak mengganti proses PM2).
+  - Pada **9 November 2026**, pemilik melaporkan fitur sudah berjalan sesuai harapan setelah instruksi aktivasi diperbaiki. Sesuai aturan audit, **keluaran teknis PID/`current` pasca-aktivasi belum diterima di percakapan ini**, sehingga laporan tersebut dicatat sebagai laporan pemilik (belum diklaim sebagai verifikasi pemeriksaan server langsung sampai output `PID`/`cwd`/`current` diperiksa).
+  - Backup terakhir yang dilaporkan sebelum aktivasi berisi `27 users, 225 leads, 1 application, 2 simulations, 1 claim, 9 files` (snapshot historis saat itu, bukan batas statis untuk transaksi baru berikutnya).
+
+---
+
+## 6. Audit Keamanan Otoritas, Isolasi Multi-Sales Manager & Sinkronisasi Admin (9 November 2026)
+
+**Basis Kode:** Dibangun langsung di atas commit terverifikasi `fe1025a94ebcb9ca6b078fa57e00287015ff8dc0` (`origin/fix/release-operational-ux-20261108`).
+
+### Lingkup Perubahan Aplikasi (`backend/` & `frontend/`):
+1. **Isolasi Multi-Sales Manager dalam Satu Cabang (`backend/src/server.js`):**
+   - Menghapus celah `PUSAT JAKARTA` pada `isGlobalBranchScope` sehingga hanya `super_admin` dan `admin_ops` yang memiliki cakupan nasional.
+   - Menambahkan helper otorisasi tim (`isMarketingInSmTeam`, `isOwnedByAnotherSm`, `isLeadInSmScope`, `resolveSmForMarketing`, `canAccessLead`, `canAccessSimulation`, `canAccessApplication`, `canAccessClaim`, `canAccessImportBatch`, `scopeLeads`).
+   - Pada cabang dengan banyak Sales Manager (Multi-SM), setiap `sales_manager` diisolasi secara ketat hanya pada anggota tim marketing miliknya (`mkt.manager_id === sm.id`) dan antrean pribadinya (`sales_manager_id === sm.id`), sehingga tidak dapat melihat atau mengubah pencapaian, prospek, simulasi, pengajuan, klaim, maupun akun marketing milik Sales Manager lain di cabang yang sama.
+   - Menyembunyikan metrik rahasia perusahaan (`est_gross_revenue` / Gross Fee 4% dan `net_company_profit`) menjadi `null` pada `GET /api/dashboard` untuk peran non-pusat (`sales_manager`, `admin_branch`, `marketing`).
+   - Memperbaiki perhitungan `mSims` pada `marketing_leaderboard` agar mencocokkan `s.marketing_id === m.id`, menambahkan atribut `manager_id` & `manager_name`, serta menambahkan blok `team_summary` bagi `sales_manager`.
+2. **Sinkronisasi Kewenangan Admin Operasional & Admin Cabang:**
+   - Mendukung penugasan prospek langsung ke antrean Sales Manager tertentu (`sm:<id>`) pada `POST /api/leads/assign` dan `PATCH /api/leads/:id`.
+   - Mendukung distribusi impor database multi-SM yang adil pada `POST /api/imports` (termasuk fallback ke antrean SM jika SM target belum memiliki marketing aktif, serta penguncian `target_manager_id` otomatis saat `sales_manager` melakukan impor).
+   - Melindungi antrean milik SM lain saat persetujuan `POST /api/lead-requests/:id/approve`.
+   - Mengunci unggah ulang dokumen (`POST /api/applications/:id/documents/:key`) pada pengajuan yang sudah berstatus `DISBURSED`, `COMPLETED`, atau `REJECTED`.
+   - Menjaga sinkronisasi mutasi `manager_id` pada `PATCH /api/users/:id` sehingga prospek aktif yang belum cair otomatis diperbarui `sales_manager_id` dan `sales_manager_name`-nya ke SM baru.
+3. **Penyelarasan Antarmuka Frontend (`frontend/src/`):**
+   - Membatasi rute `/audit` hanya untuk `centralOnly` (`super_admin`, `admin_ops`) pada `App.js` dan menyembunyikan kartu Gross Fee 4% / Net Profit / tautan Audit di `Dashboard.jsx` untuk peran cabang.
+   - Menambahkan opsi `Antrean SM: <Nama>` (`sm:<id>`) dan badge `(SM: <Nama>)` pada `Leads.jsx`, `AssignDialog.jsx`, dan `LeadDetailSheet.jsx`, serta membuka tab `Permintaan Data Marketing` secara *read-only* bagi `sales_manager` dan `admin_branch`.
+   - Mengunci pilihan target impor bagi `sales_manager` ke tim sendiri pada `ImportLeads.jsx`.
+   - Menambahkan badge pihak (`ADMIN CABANG`, `SALES MANAGER`) dan filter cabang bagi `admin_ops` pada `Progress.jsx`.
+   - Mengatur tampilan detail klaim menjadi *read-only* bagi `sales_manager` pada `Claims.jsx` dan membatasi tombol edit user bagi `sales_manager` hanya untuk anggota timnya di `Users.jsx`.
+
+### Bukti Pengujian Lokal (9 November 2026):
+- **Suite Isolasi Multi-SM & RBAC Baru (`node --test backend/tests/sm-isolation-and-rbac.test.mjs`):** **6/6 pengujian LULUS 100%** (mencakup isolasi cabang Multi-SM antara SM1/SM2/SM-BSI, proteksi finansial dashboard, penugasan `sm:<id>`, kuota permintaan prospek tanpa mencuri antrean SM lain, mutasi `manager_id`, batas cabang & bank `bsi_only` vs `all_bank`, serta stage lock dokumen `409` pada status `booking_live`).
+- **Rangkaian Backend Test Suite Lengkap (`npm --prefix backend test`):** **64/64 pengujian LULUS 100%** (`tests 64, suites 0, pass 64, fail 0`).
+- **Suite Keamanan & API Terintegrasi (`backend/tests/security-and-api.test.mjs` pada backend sementara):** **LULUS 100%** (`ALL SECURITY, RBAC, BUSINESS RULE & REGRESSION TESTS PASSED (100%)`), termasuk kontrak penyamaran nominal klaim dari `fe1025a`.
+- **Frontend Production Build (`npm --prefix frontend run build`):** **LULUS** (`vite build` selesai bersih tanpa error).
+- **Kerahasiaan Folder `Blue_Print/`:** Folder `Blue_Print/` ditarik dari pelacakan Git (`git rm -r --cached Blue_Print` dan ditambahkan ke `.gitignore`) atas instruksi pemilik agar dokumen rahasia perusahaan hanya tersimpan di lokal dan tidak di-push ke GitHub.

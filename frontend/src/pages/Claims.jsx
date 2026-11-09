@@ -63,6 +63,9 @@ function ClaimDetail({ claim, onClose, onChanged }) {
   if (!claim) return null;
   const c = claim;
   const isSuperOrOps = user && ["super_admin", "admin_ops"].includes(user.role);
+  const isMarketing = user?.role === "marketing";
+  const isBranchAdmin = user?.role === "admin_branch";
+  const isSalesManager = user?.role === "sales_manager";
   const admin = isAdmin(user);
   const s = c.status;
 
@@ -176,7 +179,12 @@ function ClaimDetail({ claim, onClose, onChanged }) {
           {c.booking_proof && <Button size="sm" variant="outline" onClick={() => openFile(`/claims/${c.id}/file/booking`)} data-testid="view-booking-proof"><FileText className="mr-1.5 h-4 w-4" />Bukti booking</Button>}
           {c.payment_proof && <Button size="sm" variant="outline" onClick={() => openFile(`/claims/${c.id}/file/payment`)} data-testid="view-payment-proof"><FileText className="mr-1.5 h-4 w-4" />Bukti transaksi</Button>}
         </div>
-        {!["PAID", "REJECTED"].includes(s) && (
+        {isSalesManager && (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600" data-testid="claim-sm-readonly">
+            Sales Manager memiliki akses pantau (read-only) pada klaim insentif tim marketing.
+          </div>
+        )}
+        {!["PAID", "REJECTED"].includes(s) && !isSalesManager && (
           <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
             <Label className="text-xs font-semibold text-slate-700">
               Catatan {(isSuperOrOps || admin) && "(wajib untuk revisi/penolakan)"}
@@ -234,7 +242,7 @@ function ClaimDetail({ claim, onClose, onChanged }) {
                 />
               </div>
             )}
-            {!isSuperOrOps && ["DRAFT", "REVISION"].includes(s) && (
+            {isMarketing && ["DRAFT", "REVISION"].includes(s) && (
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold text-slate-700">
                   Ganti bukti booking
@@ -251,7 +259,7 @@ function ClaimDetail({ claim, onClose, onChanged }) {
             {/* Tombol Aksi */}
             <div className="flex flex-wrap items-center gap-2 pt-2">
               {/* Marketing aksi di DRAFT/REVISION */}
-              {!isSuperOrOps && ["DRAFT", "REVISION"].includes(s) && (
+              {isMarketing && ["DRAFT", "REVISION"].includes(s) && (
                 <>
                   <Button variant="outline" disabled={busy} onClick={replace} data-testid="claim-replace-proof">
                     Simpan Bukti
@@ -320,13 +328,12 @@ function ClaimDetail({ claim, onClose, onChanged }) {
                 </>
               )}
 
-              {/* Admin Cabang / Sales Manager */}
-              {(user.role === "admin_branch" || user.role === "sales_manager") && !isSuperOrOps && (
+              {/* Admin Cabang */}
+              {isBranchAdmin && (
                 <>
                   {["DRAFT", "REVISION"].includes(s) && (
                     <Button
-                      variant="secondary"
-                      className="bg-slate-100 text-slate-700 hover:bg-slate-200"
+                      className="bg-[#351080] text-white hover:bg-[#280c61]"
                       disabled={busy}
                       onClick={() => act("submit")}
                       data-testid="claim-submit"

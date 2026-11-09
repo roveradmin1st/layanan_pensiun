@@ -50,11 +50,12 @@ function RouteFallback() {
   );
 }
 
-function Protected({ admin, children }) {
+function Protected({ admin, centralOnly, children }) {
   const { user } = useAuth();
   if (user === null) return <Splash />;
   if (!user) return <Navigate to="/login" replace />;
   if (user.must_change_password) return <PasswordChangeGate />;
+  if (centralOnly && !["super_admin", "admin_ops"].includes(user.role)) return <Navigate to="/dashboard" replace />;
   if (admin && !isAdmin(user)) return <Navigate to="/dashboard" replace />;
   return children;
 }
@@ -109,7 +110,7 @@ export default function App() {
               <Route path="/progress" element={<Progress />} />
               <Route path="/klaim" element={<Claims />} />
               <Route path="/pengguna" element={<Protected admin><UsersPage /></Protected>} />
-              <Route path="/audit" element={<Protected admin><AuditLog /></Protected>} />
+              <Route path="/audit" element={<Protected centralOnly><AuditLog /></Protected>} />
               <Route path="/pengaturan" element={<SettingsPage />} />
             </Route>
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
@@ -121,4 +122,3 @@ export default function App() {
     </AuthProvider>
   );
 }
-
