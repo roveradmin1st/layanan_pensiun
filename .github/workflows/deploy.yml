@@ -1,0 +1,135 @@
+name: Deploy validated release to production
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: 'Full 40-character hex commit SHA to deploy (must have passed CI validation)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: production-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Production VPS
+    runs-on: ubuntu-24.04
+    environment: production
+    timeout-minutes: 20
+
+    steps:
+      - name: Validate Commit SHA format
+        env:
+          INPUT_SHA: ${{ github.event.inputs.commit_sha }}
+        run: |
+          if [[ ! "$INPUT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid commit SHA format. Must be exact 40 lowercase hexadecimal characters."
+            exit 1
+          fi
+          printf 'TARGET_SHA=%s\n' "$INPUT_SHA" >> "$GITHUB_ENV"
+
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Verify Commit exists in repository history
+        run: |
+          git fetch --depth=100 origin "$TARGET_SHA" || true
+          if ! git cat-file -e "${TARGET_SHA}^{commit}"; then
+            echo "::error::Commit $TARGET_SHA not found in repository history."
+            exit 1
+          fi
+
+      - name: Download Runtime Release Artifact from CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Finding CI validation artifact for commit $TARGET_SHA..."
+          RUN_ID=$(gh run list --workflow=validate.yml --event=push --commit="$TARGET_SHA" --status=success --json databaseId -q '.[0].databaseId')
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "::error::No successful push validation found for commit $TARGET_SHA. Commit must pass validation first."
+            exit 1
+          fi
+          RUN_EVENT=$(gh run view "$RUN_ID" --json event -q '.event')
+          RUN_SHA=$(gh run view "$RUN_ID" --json headSha -q '.headSha')
+          RUN_RESULT=$(gh run view "$RUN_ID" --json conclusion -q '.conclusion')
+          if [ "$RUN_EVENT" != "push" ] || [ "$RUN_SHA" != "$TARGET_SHA" ] || [ "$RUN_RESULT" != "success" ]; then
+            echo "::error::Selected CI run is not a successful push validation of the requested commit."
+            exit 1
+          fi
+          echo "Found successful run: $RUN_ID. Downloading artifact..."
+          mkdir -p /tmp/release-artifact
+          gh run download "$RUN_ID" --name "runtime-release-$TARGET_SHA" --dir /tmp/release-artifact
+          
+          ARCHIVE="/tmp/release-artifact/release-${TARGET_SHA}.tar.gz"
+          if [ ! -f "$ARCHIVE" ] || [ -L "$ARCHIVE" ]; then
+            echo "::error::Downloaded artifact does not contain the expected release archive."
+            exit 1
+          fi
+          printf 'ARCHIVE_PATH=%s\n' "$ARCHIVE" >> "$GITHUB_ENV"
+          echo "Package size: $(wc -c < "$ARCHIVE") bytes"
+          sha256sum "$ARCHIVE"
+
+      - name: Configure SSH and Deploy to VPS
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_USER: ${{ secrets.DEPLOY_SSH_USER || 'layananpensiunan' }}
+          SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST || '139.190.106.136' }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          if [ -z "$SSH_KEY" ]; then
+            echo "::error::DEPLOY_SSH_KEY secret is not configured in production environment."
+            exit 1
+          fi
+          if [ -z "$KNOWN_HOSTS" ]; then
+            echo "::error::DEPLOY_SSH_KNOWN_HOSTS secret is not configured in production environment. Configure verified VPS host key before deploying (ssh-keyscan fallback is disabled for security)."
+            exit 1
+          fi
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+          eval "$(ssh-agent -s)" > /dev/null
+          printf '%s\n' "$SSH_KEY" | tr -d '\r' | ssh-add - > /dev/null
+
+          REMOTE_TMP="/tmp/release-${TARGET_SHA}.tar.gz"
+          echo "Transferring release package to ${SSH_USER}@${SSH_HOST}:${REMOTE_TMP}..."
+          scp -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" "$ARCHIVE_PATH" "${SSH_USER}@${SSH_HOST}:${REMOTE_TMP}"
+
+          echo "Executing release controller on VPS..."
+          DEPLOY_CMD="sudo /usr/local/bin/lp-release apply --archive ${REMOTE_TMP} --commit ${TARGET_SHA}"
+          set +e
+          RECEIPT_JSON=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" "${SSH_USER}@${SSH_HOST}" "$DEPLOY_CMD")
+          SSH_EXIT=$?
+          set -e
+
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" "${SSH_USER}@${SSH_HOST}" "rm -f ${REMOTE_TMP}" || true
+
+          if [ $SSH_EXIT -ne 0 ]; then
+            echo "::error::Deployment controller returned non-zero exit code: $SSH_EXIT"
+            echo "$RECEIPT_JSON"
+            exit $SSH_EXIT
+          fi
+
+          echo "=== DEPLOYMENT RECEIPT ==="
+          echo "$RECEIPT_JSON"
+          printf '%s\n' "$RECEIPT_JSON" > /tmp/receipt.json
+
+      - name: Generate Deployment Step Summary
+        run: |
+          if [ -f /tmp/receipt.json ]; then
+            echo "## 🚀 Deployment Result" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/receipt.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -1,5 +1,7 @@
 # Portal Layanan Pensiunan (Calc Platinum & Leads)
 
+Panduan aktif: [status pekerjaan](docs/STATUS.md), [SOP produksi](docs/SOP.md), dan [runbook](docs/RUNBOOK.md). Rilis produksi memakai SQLite dan satu proses backend; Docker/PostgreSQL di bawah merupakan rancangan pengembangan, bukan jalur migrasi VPS yang sedang digunakan.
+
 Portal Layanan Pensiunan adalah platform komprehensif berbasis web untuk simulasi pinjaman pensiun/prapensiun, manajemen database leads calon nasabah, pelacakan proses pengajuan kredit (8-tahap pipeline), verifikasi dokumen, serta tata kelola insentif marketing dengan dukungan Role-Based Access Control (RBAC).
 
 ---
@@ -68,8 +70,8 @@ layanan_pensiunan/
 
 ## ⚙️ Persyaratan Sistem
 
-- [Node.js](https://nodejs.org/) v18.0.0 atau lebih baru
-- npm v9.0.0 atau lebih baru
+- [Node.js](https://nodejs.org/) versi persis pada `.node-version` (Node 24, menyediakan `node:sqlite`)
+- npm bawaan runtime tersebut dan Python 3.12 untuk alat operasional
 - *(Opsional)* Docker & Docker Compose
 
 ---
@@ -81,7 +83,7 @@ layanan_pensiunan/
 #### Backend:
 ```bash
 cd backend
-npm install
+npm ci --omit=dev
 node src/server.js
 # Backend berjalan di: http://localhost:4000
 ```
@@ -89,7 +91,7 @@ node src/server.js
 #### Frontend (React Vite):
 ```bash
 cd frontend
-npm install
+npm ci --include=dev
 npm run dev
 # Frontend berjalan di: http://localhost:5173
 ```
@@ -108,7 +110,7 @@ docker-compose up --build
 
 ## 🔐 Akun Default Pengujian (Initial Seed)
 
-Secara default, sistem membuat akun berikut saat inisialisasi awal:
+Hanya mode development yang membuat data contoh berikut saat database belum ada. Produksi menolak database hilang/rusak dan tidak membuat akun/data demo.
 
 | Role | Email | Password Default |
 |---|---|---|
@@ -117,7 +119,11 @@ Secara default, sistem membuat akun berikut saat inisialisasi awal:
 | Marketing | `marketing@layananpensiunan.id` | `Password123!` |
 
 > [!WARNING]
-> Segera ubah password default saat melakukan deployment ke server produksi melalui menu Pengaturan Profil.
+> Password contoh ditolak pada login produksi. Database calon produksi menyiapkan kata sandi sementara acak dan setiap pengguna wajib menggantinya saat pertama masuk. Ikuti rencana akun dan cutover di SOP; jangan menghapus data langsung pada VPS.
+
+## Validasi perubahan
+
+Jalankan `python3 ops/ci.py` dari root checkout pengembangan. Seluruh tes backend memakai salinan sementara. Untuk tes browser: `cd frontend`, `npx --no-install playwright install chromium`, lalu dari root `python3 ops/ci.py --browser`. CI GitHub menjalankan pemeriksaan ini tanpa akses deploy. Jangan menjalankan suite API mutasi terhadap VPS.
 
 ---
 

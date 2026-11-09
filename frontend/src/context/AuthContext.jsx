@@ -25,7 +25,11 @@ export function AuthProvider({ children }) {
     refresh();
     const onLogout = () => setUser(false);
     window.addEventListener("auth:logout", onLogout);
-    return () => window.removeEventListener("auth:logout", onLogout);
+    window.addEventListener("auth:password-required", refresh);
+    return () => {
+      window.removeEventListener("auth:logout", onLogout);
+      window.removeEventListener("auth:password-required", refresh);
+    };
   }, [refresh]);
 
   const login = async (email, password) => {
