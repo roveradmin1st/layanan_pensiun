@@ -43,7 +43,7 @@ jobs:
           mkdir -p dist-release
           python3 ops/package_release.py --commit ${{ github.sha }} --output dist-release/release-${{ github.sha }}.tar.gz
       - name: Upload runtime release artifact
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2b6cb7079576 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: runtime-release-${{ github.sha }}
           path: dist-release/release-${{ github.sha }}.tar.gz

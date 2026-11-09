@@ -183,31 +183,28 @@ Alur klaim yang disetujui pemilik: persetujuan dahulu, pembayaran kemudian denga
 - **Perbaikan:** Menambahkan peran `marketing` dan `sales_manager` ke dalam allowlist pengiriman data referensi tarif Simas pada `GET /api/calculator-limits`.
 - **Hasil:** Perhitungan otomatis biaya asuransi Simas dan rekomendasi plafond pada akun Marketing berjalan konsisten dan akurat. CI lulus dan perubahan telah diterima.
 
-### B. Otomasi Jalur Deployment Rutin (Commit `c6b99e9`, Branch `feat/repeatable-deployment-20261109`)
-Sesuai arahan teknis `Blue_Print/command.md` (9 November 2026), dibangun satu jalur rilis resmi dan terisolasi untuk update kode berkala tanpa menyentuh data persisten:
+### B. Otomasi Jalur Deployment Rutin (Branch `feat/repeatable-deployment-20261109`)
+Sesuai arahan teknis `Blue_Print/command.md` (9 November 2026) dan hasil temuan audit CI 9 November 2026, dibangun satu jalur rilis terisolasi pada branch tugas `feat/repeatable-deployment-20261109` (belum dipasang pada VPS produksi dan belum di-merge ke default branch sampai seluruh tahapan verifikasi selesai):
 1. **Pengemas Runtime Bersih (`ops/package_release.py`):**
-   - Mengemas kode produksi ke dalam arsip deterministik `.tar.gz`.
+   - Mengemas kode produksi ke dalam arsip deterministik `.tar.gz` tanpa menyertakan symlink.
    - Menggunakan allowlist ketat (`backend/src`, `backend/package.json`, `backend/package-lock.json`, `backend/node_modules`, `frontend/dist`, `.node-version`, `ecosystem.config.cjs`, `release-manifest.json`).
    - Larangan ketat (denylist): `.git`, `*.sqlite*`, `backend/data`, `.env*`, `*.private.json`, `*.pem`, `*.key`, `tests/`, `ops/`.
    - Menghasilkan manifest dengan checksum SHA256 per file dan kontrak data `lp-production-20261109-v1`.
 2. **Konfigurasi PM2 Produksi (`ops/ecosystem.config.cjs`):**
-   - Mendefinisikan proses `layanan-pensiunan-api` tepat 1 instance mode `fork` pada `127.0.0.1:4000`.
+   - Mendefinisikan proses `layanan-pensiunan-api` tepat 1 instance mode `fork` pada `127.0.0.1:4000` dengan `cwd: __dirname`.
 3. **Pengendali Rilis Server (`ops/server_release.py` / Target `/usr/local/bin/lp-release`):**
    - Pengendali milik `root` dengan sub-perintah: `status`, `plan`, `apply`.
+   - Memuat dan memvalidasi `/etc/layanan-pensiunan/runtime.env` (`parse_runtime_env` / `load_runtime_env`) tanpa ekspansi shell dan tanpa mencetak secret, memastikan `NODE_ENV=production`, `HOST=127.0.0.1`, `PORT=4000`, dan `JWT_SECRET` server yang sah digunakan baik saat startup rilis baru maupun saat rollback.
+   - Menjalankan seluruh operasi PM2 secara terpusat sebagai `lpapp` (`run_as_app`) dari home layanan `/var/lib/layanan-pensiunan` (`PM2_HOME=/var/lib/layanan-pensiunan/.pm2`).
    - Memastikan perlindungan zero-data-loss: database persisten `/srv/layanan-pensiunan/shared/data/enterprise.sqlite` tidak pernah ditimpa/di-reset. Symlink `backend/data` selalu diarahkan ke `shared/data`.
-   - Koordinasi lock ganda (`.deploy.lock` dan `.ops.lock`).
-   - Verifikasi backup sebelum aktivasi kode (`BACKUP_NOT_VERIFIED` jika gagal/umur > 10 menit).
-   - Pengalihan atomik penunjuk rilis (`current_next` -> `current`).
-   - Deteksi insiden `CURRENT_PID_MISMATCH` (mendeteksi jika symlink `current` tidak sinkron dengan `cwd` proses PM2 aktif).
-   - Rollback aman (`failed_code_restored`) jika startup port 4000 gagal tanpa menyentuh database.
-   - Bersifat idempoten (*no-op*) jika commit target sudah aktif dan sehat.
+   - Menolak `CURRENT_PID_MISMATCH` pada tahap `status`, `plan`, maupun `pre_stop` di `apply` (termasuk regresi `current -> 2c20fd2` sementara proses berjalan dari `c76e823/backend`) tanpa menghentikan layanan aktif.
+   - Mencakup pemulihan otomatis (`failed_code_restored`) untuk seluruh kegagalan pasca-stop (kegagalan `pm2 start`, timeout readiness port 4000, ketidakcocokan HTML/API 401/403, kegagalan switch `current`, maupun kegagalan `pm2 save` / verifikasi `dump.pm2`), serta memverifikasi ulang proses, `current`, dan `dump.pm2` sebelum menulis receipt `active_verified` atau `failed_code_restored` (atau `MANUAL_RECOVERY_REQUIRED` bila verifikasi pemulihan juga gagal).
 4. **Alur Kerja Deployment GitHub Actions (`.github/workflows/deploy.yml`):**
-   - Dipicu via `workflow_dispatch` dengan input wajib `commit_sha` (validasi format 40-karakter heksadesimal).
+   - Dipicu via `workflow_dispatch` dengan input `commit_sha` yang dikirim melalui variabel environment (`INPUT_SHA`) sebelum divalidasi sebagai 40-karakter heksadesimal.
+   - Mewajibkan `DEPLOY_SSH_KNOWN_HOSTS` terverifikasi (tanpa fallback `ssh-keyscan`).
    - Menargetkan GitHub Environment `production` dengan *concurrency group* global `production-deployment` (`cancel-in-progress: false`).
-   - Mengunduh artifact tepercaya `runtime-release-<sha>` dari run CI yang berhasil, mentransfer via SSH, dan menjalankan `sudo /usr/local/bin/lp-release apply`.
 5. **Pembaruan CI & Pengujian Mandiri:**
-   - `.github/workflows/validate.yml` diperbarui untuk mengemas dan mengunggah artifact `runtime-release-<sha>` dengan retensi 14 hari.
-   - `ops/ci.py` diperbarui dengan pengujian pembuatan paket rilis dan verifikasi checksum.
-   - Suite Python baru: `ops/tests/test_deployment_automation.py`.
-   - Suite Node.js baru: `backend/tests/deployment-automation.test.mjs`.
-   - **Hasil Validasi:** Seluruh 69 pengujian backend lulus (`69 pass, 0 fail`), dan build frontend Vite sukses (38s).
+   - `.github/workflows/validate.yml` memakai SHA resmi `actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02` (`v4.6.2`).
+   - `ops/ci.py` menguji pembuatan paket rilis, ekstraksi ke direktori terpisah, dan 2 kali *cold start* produksi menggunakan Node nyata pada database sintetis.
+   - Suite Python (`ops/tests/test_deployment_automation.py`) memisahkan seam layanan PM2/OS dari `subprocess` global dan menguji seluruh skenario gagal/rollback serta eksekusi paket nyata dengan Node.
+   - Suite Node.js (`backend/tests/deployment-automation.test.mjs`): **70/70 pengujian backend LULUS (100%)**.

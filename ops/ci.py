@@ -137,10 +137,13 @@ const user=store.users.find(u=>u.email==='superadmin@layananpensiunan.id');
 user.password_hash=await hashPassword(password); user.auth_version=1; user.must_change_password=false;
 saveStore();db.close();"""
         subprocess.run(['node','--input-type=module','-e',setup], cwd=sandbox / 'backend', input=production_password, text=True, check=True, capture_output=True)
+        pkg_data_dir = sandbox / 'packaged-shared-data'
+        pkg_data_dir.mkdir()
+        shutil.copyfile(sandbox / 'backend/data/enterprise.sqlite', pkg_data_dir / 'enterprise.sqlite')
         with server(sandbox, 'production', sandbox / 'production.log') as base:
             production_smoke(base, production_password)
         candidate_smoke(sandbox)
-        # Exercise release packaging and manifest validation on disposable commit
+        # Exercise release packaging, extraction, and two production cold starts on disposable DB
         spec_pkg = importlib.util.spec_from_file_location('lp_ci_pkg', ROOT / 'ops/package_release.py')
         mod_pkg = importlib.util.module_from_spec(spec_pkg)
         spec_pkg.loader.exec_module(mod_pkg)
@@ -148,7 +151,17 @@ saveStore();db.close();"""
         pkg_manifest = mod_pkg.create_release_package('1' * 40, test_tar, ROOT)
         if pkg_manifest['package_sha256'] != mod_pkg.sha256_file(test_tar):
             raise RuntimeError('CI release packaging sha256 mismatch.')
-        print('PACKAGING PASSED: reproducible runtime package created & verified.', flush=True)
+        extracted_dir = sandbox / 'extracted-release'
+        extracted_dir.mkdir()
+        with mod_pkg.tarfile.open(test_tar, 'r:gz') as tar:
+            tar.extractall(extracted_dir, filter='data')
+        if os.path.lexists(extracted_dir / 'backend/data'):
+            raise RuntimeError('Extracted runtime package must not contain backend/data.')
+        (extracted_dir / 'backend/data').symlink_to(pkg_data_dir, target_is_directory=True)
+        for attempt in (1, 2):
+            with server(extracted_dir, 'production', sandbox / f'packaged-prod-{attempt}.log') as base:
+                production_smoke(base, production_password)
+        print('PACKAGING PASSED: reproducible runtime package created, extracted & verified across 2 cold starts.', flush=True)
         if args.browser:
             browser_args = ['node', 'ops/browser-smoke.mjs']
             if args.system_chromium: browser_args.append('--system-chromium')

@@ -119,14 +119,14 @@ def collect_package_files(root: Path) -> dict[str, Path]:
     if not src_dir.is_dir():
         raise FileNotFoundError(f"Missing required backend/src directory at {src_dir}")
     for p in src_dir.rglob("*"):
-        if p.is_file() and not is_denied(str(p.relative_to(root))):
+        if p.is_file() and not p.is_symlink() and not is_denied(str(p.relative_to(root))):
             files[str(p.relative_to(root))] = p
 
     # 4. backend/node_modules/**
     nm_dir = root / "backend" / "node_modules"
     if nm_dir.is_dir():
         for p in nm_dir.rglob("*"):
-            if p.is_file() and not is_denied(str(p.relative_to(root))):
+            if p.is_file() and not p.is_symlink() and not is_denied(str(p.relative_to(root))):
                 files[str(p.relative_to(root))] = p
 
     # 5. frontend/dist/**
@@ -135,7 +135,7 @@ def collect_package_files(root: Path) -> dict[str, Path]:
     if not index_html.is_file():
         raise FileNotFoundError(f"Missing required frontend build output at {index_html}")
     for p in dist_dir.rglob("*"):
-        if p.is_file() and not is_denied(str(p.relative_to(root))):
+        if p.is_file() and not p.is_symlink() and not is_denied(str(p.relative_to(root))):
             files[str(p.relative_to(root))] = p
 
     # 6. PM2 Ecosystem config (if exists in ops/ecosystem.config.cjs or root)
@@ -179,7 +179,8 @@ def create_release_package(
                 tarinfo.mtime = fixed_time
                 if tarinfo.isreg():
                     tarinfo.mode = 0o755 if (abs_path.stat().st_mode & 0o111) else 0o644
-                tar.addfile(tarinfo, abs_path.open("rb"))
+                with abs_path.open("rb") as f:
+                    tar.addfile(tarinfo, f)
 
     pkg_sha256 = sha256_file(output_path)
     pkg_size = output_path.stat().st_size

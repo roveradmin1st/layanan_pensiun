@@ -25,13 +25,14 @@ jobs:
 
     steps:
       - name: Validate Commit SHA format
+        env:
+          INPUT_SHA: ${{ github.event.inputs.commit_sha }}
         run: |
-          SHA="${{ github.event.inputs.commit_sha }}"
-          if [[ ! "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Invalid commit SHA format. Must be exact 40 hexadecimal characters."
+          if [[ ! "$INPUT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid commit SHA format. Must be exact 40 lowercase hexadecimal characters."
             exit 1
           fi
-          echo "TARGET_SHA=$SHA" >> "$GITHUB_ENV"
+          printf 'TARGET_SHA=%s\n' "$INPUT_SHA" >> "$GITHUB_ENV"
 
       - name: Check out repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -41,7 +42,7 @@ jobs:
       - name: Verify Commit exists in repository history
         run: |
           git fetch --depth=100 origin "$TARGET_SHA" || true
-          if ! git cat-file -e "$TARGET_SHA^{commit}"; then
+          if ! git cat-file -e "${TARGET_SHA}^{commit}"; then
             echo "::error::Commit $TARGET_SHA not found in repository history."
             exit 1
           fi
@@ -65,7 +66,7 @@ jobs:
             echo "::error::Could not find .tar.gz archive in downloaded artifact."
             exit 1
           fi
-          echo "ARCHIVE_PATH=$ARCHIVE" >> "$GITHUB_ENV"
+          printf 'ARCHIVE_PATH=%s\n' "$ARCHIVE" >> "$GITHUB_ENV"
           echo "Package size: $(wc -c < "$ARCHIVE") bytes"
           sha256sum "$ARCHIVE"
 
@@ -80,29 +81,31 @@ jobs:
             echo "::error::DEPLOY_SSH_KEY secret is not configured in production environment."
             exit 1
           fi
+          if [ -z "$KNOWN_HOSTS" ]; then
+            echo "::error::DEPLOY_SSH_KNOWN_HOSTS secret is not configured in production environment. Configure verified VPS host key before deploying (ssh-keyscan fallback is disabled for security)."
+            exit 1
+          fi
 
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          if [ -n "$KNOWN_HOSTS" ]; then
-            echo "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-            chmod 644 ~/.ssh/known_hosts
-          else
-            ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          fi
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
-          eval "$(ssh-agent -s)"
-          echo "$SSH_KEY" | tr -d '\r' | ssh-add - > /dev/null
+          eval "$(ssh-agent -s)" > /dev/null
+          printf '%s\n' "$SSH_KEY" | tr -d '\r' | ssh-add - > /dev/null
 
-          REMOTE_TMP="/tmp/release-$TARGET_SHA.tar.gz"
-          echo "Transferring release package to $SSH_USER@$SSH_HOST:$REMOTE_TMP..."
-          scp -o BatchMode=yes -o StrictHostKeyChecking=yes "$ARCHIVE_PATH" "$SSH_USER@$SSH_HOST:$REMOTE_TMP"
+          REMOTE_TMP="/tmp/release-${TARGET_SHA}.tar.gz"
+          echo "Transferring release package to ${SSH_USER}@${SSH_HOST}:${REMOTE_TMP}..."
+          scp -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" "$ARCHIVE_PATH" "${SSH_USER}@${SSH_HOST}:${REMOTE_TMP}"
 
           echo "Executing release controller on VPS..."
-          DEPLOY_CMD="sudo /usr/local/bin/lp-release apply --archive $REMOTE_TMP --commit $TARGET_SHA"
-          RECEIPT_JSON=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" "$DEPLOY_CMD")
+          DEPLOY_CMD="sudo /usr/local/bin/lp-release apply --archive ${REMOTE_TMP} --commit ${TARGET_SHA}"
+          set +e
+          RECEIPT_JSON=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" "${SSH_USER}@${SSH_HOST}" "$DEPLOY_CMD")
           SSH_EXIT=$?
+          set -e
 
-          ssh -o BatchMode=yes "$SSH_USER@$SSH_HOST" "rm -f $REMOTE_TMP" || true
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" "${SSH_USER}@${SSH_HOST}" "rm -f ${REMOTE_TMP}" || true
 
           if [ $SSH_EXIT -ne 0 ]; then
             echo "::error::Deployment controller returned non-zero exit code: $SSH_EXIT"
@@ -112,7 +115,7 @@ jobs:
 
           echo "=== DEPLOYMENT RECEIPT ==="
           echo "$RECEIPT_JSON"
-          echo "$RECEIPT_JSON" > /tmp/receipt.json
+          printf '%s\n' "$RECEIPT_JSON" > /tmp/receipt.json
 
       - name: Generate Deployment Step Summary
         run: |
