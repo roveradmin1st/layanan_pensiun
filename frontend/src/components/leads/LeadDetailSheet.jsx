@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { Calculator, FileUp, FileText, Loader2, Phone, MapPin, Trash2 } from "lucide-react";
@@ -60,9 +60,10 @@ function Documents({ leadId, admin }) {
   );
 }
 
-export default function LeadDetailSheet({ leadId, onClose, onChanged, marketers }) {
+export default function LeadDetailSheet({ leadId, onClose, onChanged, marketers = [], salesManagers = [] }) {
   const { user } = useAuth();
   const admin = isAdmin(user);
+  const isSalesManager = user?.role === "sales_manager";
   const [lead, setLead] = useState(null);
   const [form, setForm] = useState({});
   const [note, setNote] = useState("");
@@ -85,8 +86,10 @@ export default function LeadDetailSheet({ leadId, onClose, onChanged, marketers 
     } catch (e) { toast.error(errMsg(e)); }
   };
   const assign = async (uid) => {
-    await api.post("/leads/assign", { lead_ids: [leadId], user_id: uid === "none" ? null : uid });
-    toast.success("Penugasan diperbarui"); load(); onChanged();
+    try {
+      await api.post("/leads/assign", { lead_ids: [leadId], user_id: uid === "none" ? null : uid });
+      toast.success("Penugasan diperbarui"); load(); onChanged();
+    } catch (e) { toast.error(errMsg(e)); }
   };
   const addAct = async () => {
     if (!note.trim()) return;
@@ -111,14 +114,32 @@ export default function LeadDetailSheet({ leadId, onClose, onChanged, marketers 
               <Info k="NOPEN" v={lead.nopen} /><Info k="NIP" v={lead.nip} /><Info k="Gaji Pensiun" v={lead.pension_salary ? rp(lead.pension_salary) : null} />
               <Info k="Tanggal Lahir" v={fmtDate(lead.birth_date)} /><Info k="Sumber" v={lead.source} />
               {admin && <Info k="Marketing" v={lead.assigned_name || "Belum ditugaskan"} />}
+              {admin && !isSalesManager && <Info k="Sales Manager" v={lead.sales_manager_name || "Belum ditetapkan"} />}
             </div>
             <Button asChild className="w-full bg-[#F28A19] hover:bg-[#DC7A0F]" data-testid="lead-simulate-button">
               <Link to={`/kalkulator?lead=${lead.id}`}><Calculator className="mr-2 h-4 w-4" />Buat Simulasi Calc Platinum</Link>
             </Button>
             {admin && (
               <div className="space-y-1.5"><Label>Tugaskan ke marketing</Label>
-                <Select value={lead.assigned_to || "none"} onValueChange={assign}><SelectTrigger data-testid="lead-assign-select"><SelectValue /></SelectTrigger>
-                  <SelectContent><SelectItem value="none">— Belum ditugaskan —</SelectItem>{marketers.map((m) => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}</SelectContent></Select>
+                <Select
+                  value={lead.assigned_to || (!isSalesManager && lead.sales_manager_id ? `sm:${lead.sales_manager_id}` : "none")}
+                  onValueChange={assign}
+                >
+                  <SelectTrigger data-testid="lead-assign-select"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">— Belum ditugaskan —</SelectItem>
+                    {!isSalesManager && salesManagers.map((sm) => (
+                      <SelectItem key={`sm:${sm.id}`} value={`sm:${sm.id}`}>
+                        📋 Antrean Tim SM: {sm.name} ({sm.branch})
+                      </SelectItem>
+                    ))}
+                    {marketers.map((m) => (
+                      <SelectItem key={m.id} value={m.id}>
+                        {m.name}{!isSalesManager && m.manager_name ? ` (SM: ${m.manager_name})` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             )}
             <div className="space-y-4 rounded-xl border p-4">
@@ -161,4 +182,3 @@ export default function LeadDetailSheet({ leadId, onClose, onChanged, marketers 
     </Sheet>
   );
 }
-

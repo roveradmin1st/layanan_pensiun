@@ -1,11 +1,11 @@
-﻿import { useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { api, errMsg } from "../../lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Button } from "../ui/button";
 
-export default function AssignDialog({ open, onOpenChange, leadIds, marketers, onDone }) {
+export default function AssignDialog({ open, onOpenChange, leadIds, marketers = [], salesManagers = [], onDone }) {
   const [uid, setUid] = useState("");
   const [busy, setBusy] = useState(false);
   const submit = async () => {
@@ -26,10 +26,19 @@ export default function AssignDialog({ open, onOpenChange, leadIds, marketers, o
       <DialogContent data-testid="assign-dialog">
         <DialogHeader><DialogTitle className="font-display">Tugaskan {leadIds.length} leads</DialogTitle></DialogHeader>
         <Select value={uid} onValueChange={setUid}>
-          <SelectTrigger data-testid="assign-marketing-select"><SelectValue placeholder="Pilih marketing" /></SelectTrigger>
+          <SelectTrigger data-testid="assign-marketing-select"><SelectValue placeholder="Pilih tujuan penugasan" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="none">— Lepas penugasan —</SelectItem>
-            {marketers.map((m) => <SelectItem key={m.id} value={m.id}>{m.name} • {m.branch}</SelectItem>)}
+            {salesManagers.map((sm) => (
+              <SelectItem key={`sm:${sm.id}`} value={`sm:${sm.id}`}>
+                📋 Antrean Tim SM: {sm.name} • {sm.branch}
+              </SelectItem>
+            ))}
+            {marketers.map((m) => (
+              <SelectItem key={m.id} value={m.id}>
+                {m.name} • {m.branch}{m.manager_name ? ` (SM: ${m.manager_name})` : ""}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
         <DialogFooter>
@@ -39,4 +48,3 @@ export default function AssignDialog({ open, onOpenChange, leadIds, marketers, o
     </Dialog>
   );
 }
-

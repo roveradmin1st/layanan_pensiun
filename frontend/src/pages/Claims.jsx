@@ -59,27 +59,115 @@ function ClaimDetail({ claim, onClose, onChanged }) {
   const [note, setNote] = useState("");
   const [amount, setAmount] = useState("");
   const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
   if (!claim) return null;
-  const c = claim, admin = isAdmin(user), s = c.status;
-  const act = async (action) => {
-    try { await api.post(`/claims/${c.id}/action`, { action, note, amount: amount === "" ? null : Number(amount) }); toast.success(`Klaim ${action}`); setNote(""); onChanged(); } catch (e) { toast.error(errMsg(e)); }
+  const c = claim;
+  const isSuperOrOps = user && ["super_admin", "admin_ops"].includes(user.role);
+  const isMarketing = user?.role === "marketing";
+  const isBranchAdmin = user?.role === "admin_branch";
+  const isSalesManager = user?.role === "sales_manager";
+  const admin = isAdmin(user);
+  const s = c.status;
+
+  const setClaimAmount = async () => {
+    if (!amount || Number(amount) <= 0) return toast.error("Masukkan nominal insentif yang valid.");
+    setBusy(true);
+    try {
+      await api.post(`/claims/${c.id}/action`, {
+        action: "set_amount",
+        amount: Number(amount),
+        note: note || undefined
+      });
+      toast.success("Nominal insentif berhasil ditetapkan.");
+      setAmount("");
+      onChanged();
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
   };
+
+  const act = async (action) => {
+    if ((action === "revision" || action === "reject") && !note.trim()) {
+      return toast.error("Catatan alasan penolakan/revisi wajib diisi.");
+    }
+    setBusy(true);
+    try {
+      await api.post(`/claims/${c.id}/action`, {
+        action,
+        note,
+        amount: amount === "" ? null : Number(amount)
+      });
+      toast.success(
+        action === "approve"
+          ? "Klaim disetujui (APPROVED). Lanjutkan pembayaran dengan bukti transfer."
+          : action === "reject"
+          ? "Klaim telah ditolak (REJECTED)"
+          : action === "revision"
+          ? "Klaim dikembalikan untuk revisi (REVISION)"
+          : action === "submit"
+          ? "Klaim diajukan (SUBMITTED)"
+          : `Klaim berhasil diubah ke ${action}`
+      );
+      setNote("");
+      onChanged();
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const pay = async () => {
     if (!file) return toast.error("Bukti transaksi pembayaran wajib dilampirkan");
     if (!window.confirm("Konfirmasi pembayaran benar-benar telah dilakukan?")) return;
-    const fd = new FormData(); fd.append("file", file); fd.append("note", note); if (amount !== "") fd.append("amount", amount);
-    try { await api.post(`/claims/${c.id}/pay`, fd); toast.success("Klaim ditandai PAID"); onChanged(); } catch (e) { toast.error(errMsg(e)); }
+    setBusy(true);
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("note", note);
+    if (amount !== "") fd.append("amount", amount);
+    try {
+      await api.post(`/claims/${c.id}/pay`, fd);
+      toast.success("Klaim ditandai PAID (Sudah Dibayarkan)");
+      onChanged();
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
   };
+
   const replace = async () => {
     if (!file) return toast.error("Pilih file bukti booking");
-    const fd = new FormData(); fd.append("file", file);
-    try { await api.post(`/claims/${c.id}/proof`, fd); toast.success("Bukti diperbarui"); onChanged(); } catch (e) { toast.error(errMsg(e)); }
+    setBusy(true);
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      await api.post(`/claims/${c.id}/proof`, fd);
+      toast.success("Bukti booking diperbarui");
+      onChanged();
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
   };
+
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-h-[92vh] max-w-2xl overflow-y-auto" data-testid="claim-detail-dialog">
         <DialogHeader><DialogTitle className="font-display">{c.claim_no} — {c.lead_name}</DialogTitle></DialogHeader>
-        <div className="flex items-center gap-2"><Badge s={s} />{c.amount != null && <span className="text-sm font-semibold">{rp(c.amount)}</span>}</div>
+        <div className="flex items-center gap-2">
+          <Badge s={s} />
+          {c.amount != null ? (
+            <span className="text-sm font-bold text-[#17223B] lp-num">{rp(c.amount)}</span>
+          ) : (
+            <span className="rounded bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 border border-amber-200">
+              Menunggu penetapan nominal Admin
+            </span>
+          )}
+        </div>
         <div className="grid grid-cols-2 gap-2 rounded-lg bg-[#F5F6FA] p-3 text-xs">
           <span>Pengajuan: <b>{c.app_no}</b></span><span>Bank: <b>{c.bank_name}</b></span><span>Marketing: <b>{c.marketing_name}</b></span><span>Cabang: <b>{c.branch}</b></span>
           <span>Tgl booking: <b>{fmtDate(c.booking_date)}</b></span><span>No. kredit: <b>{c.credit_no || "-"}</b></span>
@@ -91,19 +179,180 @@ function ClaimDetail({ claim, onClose, onChanged }) {
           {c.booking_proof && <Button size="sm" variant="outline" onClick={() => openFile(`/claims/${c.id}/file/booking`)} data-testid="view-booking-proof"><FileText className="mr-1.5 h-4 w-4" />Bukti booking</Button>}
           {c.payment_proof && <Button size="sm" variant="outline" onClick={() => openFile(`/claims/${c.id}/file/payment`)} data-testid="view-payment-proof"><FileText className="mr-1.5 h-4 w-4" />Bukti transaksi</Button>}
         </div>
-        {!["PAID", "REJECTED"].includes(s) && (
-          <div className="space-y-3 rounded-xl border p-4">
-            <Label>Catatan {admin && "(wajib untuk revisi/penolakan)"}</Label><Textarea value={note} onChange={(e) => setNote(e.target.value)} data-testid="claim-action-note" />
-            {admin && ["REVIEW", "APPROVED"].includes(s) && <div className="space-y-1.5"><Label>Nominal insentif (input berwenang)</Label><Input inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))} data-testid="claim-amount-input" /></div>}
-            {((!admin && ["DRAFT", "REVISION"].includes(s)) || (admin && s === "APPROVED")) &&
-              <div className="space-y-1.5"><Label>{admin ? "Bukti transaksi pembayaran * (JPG/PNG/PDF)" : "Ganti bukti booking"}</Label><Input type="file" accept=".jpg,.jpeg,.png,.pdf" onChange={(e) => setFile(e.target.files[0] || null)} data-testid="claim-file-input" /></div>}
-            <div className="flex flex-wrap gap-2">
-              {!admin && ["DRAFT", "REVISION"].includes(s) && <><Button variant="outline" onClick={replace} data-testid="claim-replace-proof">Simpan Bukti</Button><Button className="bg-[#351080]" onClick={() => act("submit")} data-testid="claim-submit">Ajukan Klaim</Button></>}
-              {admin && s === "SUBMITTED" && <Button className="bg-[#351080]" onClick={() => act("review")} data-testid="claim-review">Mulai Review</Button>}
-              {admin && ["SUBMITTED", "REVIEW"].includes(s) && <Button className="bg-[#F28A19]" onClick={() => act("revision")} data-testid="claim-revision">Minta Revisi</Button>}
-              {admin && s === "REVIEW" && <Button className="bg-[#078D67]" onClick={() => act("approve")} data-testid="claim-approve">Setujui</Button>}
-              {admin && s === "APPROVED" && <Button className="bg-[#078D67]" onClick={pay} data-testid="claim-pay">Konfirmasi Dibayar (PAID)</Button>}
-              {admin && ["SUBMITTED", "REVIEW", "APPROVED"].includes(s) && <Button variant="outline" className="text-red-600" onClick={() => act("reject")} data-testid="claim-reject">Tolak</Button>}
+        {isSalesManager && (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600" data-testid="claim-sm-readonly">
+            Sales Manager memiliki akses pantau (read-only) pada klaim insentif tim marketing.
+          </div>
+        )}
+        {!["PAID", "REJECTED"].includes(s) && !isSalesManager && (
+          <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+            <Label className="text-xs font-semibold text-slate-700">
+              Catatan {(isSuperOrOps || admin) && "(wajib untuk revisi/penolakan)"}
+            </Label>
+            <Textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder={isSuperOrOps ? "Tuliskan catatan persetujuan, alasan revisi, atau penolakan..." : "Catatan pengajuan..."}
+              data-testid="claim-action-note"
+            />
+
+            {/* Input nominal insentif jika Super Admin / Admin Ops */}
+            {isSuperOrOps && (
+              <div className="space-y-1.5 rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+                <Label className="text-xs font-semibold text-slate-700">
+                  Penetapan Nominal Insentif (Admin Berwenang)
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    inputMode="numeric"
+                    value={amount}
+                    placeholder={c.amount != null ? `Nominal saat ini: ${rp(c.amount)}` : "Ketik nominal insentif fix..."}
+                    onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))}
+                    data-testid="claim-amount-input"
+                    className="bg-white"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={busy || !amount}
+                    onClick={setClaimAmount}
+                    className="shrink-0 border-[#351080] text-[#351080] hover:bg-[#351080]/10 font-semibold"
+                    data-testid="claim-set-amount-button"
+                  >
+                    Tetapkan Nominal
+                  </Button>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Nominal ini yang akan tampil di akun Marketing dan Sales Manager setelah ditetapkan.
+                </p>
+              </div>
+            )}
+
+            {/* Upload bukti transaksi untuk Super Admin/Ops saat APPROVED, atau upload bukti booking untuk marketing */}
+            {isSuperOrOps && s === "APPROVED" && (
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-slate-700">
+                  Bukti transfer / pembayaran * (JPG/PNG/PDF)
+                </Label>
+                <Input
+                  type="file"
+                  accept=".jpg,.jpeg,.png,.pdf"
+                  onChange={(e) => setFile(e.target.files[0] || null)}
+                  data-testid="claim-file-input"
+                />
+              </div>
+            )}
+            {isMarketing && ["DRAFT", "REVISION"].includes(s) && (
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-slate-700">
+                  Ganti bukti booking
+                </Label>
+                <Input
+                  type="file"
+                  accept=".jpg,.jpeg,.png,.pdf"
+                  onChange={(e) => setFile(e.target.files[0] || null)}
+                  data-testid="claim-file-input"
+                />
+              </div>
+            )}
+
+            {/* Tombol Aksi */}
+            <div className="flex flex-wrap items-center gap-2 pt-2">
+              {/* Marketing aksi di DRAFT/REVISION */}
+              {isMarketing && ["DRAFT", "REVISION"].includes(s) && (
+                <>
+                  <Button variant="outline" disabled={busy} onClick={replace} data-testid="claim-replace-proof">
+                    Simpan Bukti
+                  </Button>
+                  <Button className="bg-[#351080] text-white hover:bg-[#280c61]" disabled={busy} onClick={() => act("submit")} data-testid="claim-submit">
+                    Ajukan Klaim
+                  </Button>
+                </>
+              )}
+
+              {/* Super Admin & Admin Operasional */}
+              {isSuperOrOps && (
+                <>
+                  {["DRAFT", "SUBMITTED", "REVIEW", "REVISION"].includes(s) && (
+                    <Button
+                      className="bg-[#078D67] text-white hover:bg-[#067253] font-semibold"
+                      disabled={busy}
+                      onClick={() => act("approve")}
+                      data-testid="claim-approve"
+                    >
+                      Setujui Klaim
+                    </Button>
+                  )}
+                  {["DRAFT", "SUBMITTED", "REVIEW", "REVISION", "APPROVED"].includes(s) && (
+                    <Button
+                      variant="outline"
+                      className="border-red-300 text-red-600 hover:bg-red-50 hover:text-red-700 font-semibold"
+                      disabled={busy}
+                      onClick={() => act("reject")}
+                      data-testid="claim-reject"
+                    >
+                      Tolak Klaim
+                    </Button>
+                  )}
+                  {["DRAFT", "SUBMITTED", "REVIEW"].includes(s) && (
+                    <Button
+                      className="bg-[#F28A19] text-white hover:bg-[#d97706] font-semibold"
+                      disabled={busy}
+                      onClick={() => act("revision")}
+                      data-testid="claim-revision"
+                    >
+                      Minta Revisi
+                    </Button>
+                  )}
+                  {["DRAFT", "REVISION"].includes(s) && (
+                    <Button
+                      variant="secondary"
+                      className="bg-slate-100 text-slate-700 hover:bg-slate-200"
+                      disabled={busy}
+                      onClick={() => act("submit")}
+                      data-testid="claim-submit"
+                    >
+                      Ajukan (Submit)
+                    </Button>
+                  )}
+                  {s === "APPROVED" && (
+                    <Button
+                      className="bg-[#078D67] text-white hover:bg-[#067253] font-semibold"
+                      disabled={busy}
+                      onClick={pay}
+                      data-testid="claim-pay"
+                    >
+                      Konfirmasi Dibayar (PAID)
+                    </Button>
+                  )}
+                </>
+              )}
+
+              {/* Admin Cabang */}
+              {isBranchAdmin && (
+                <>
+                  {["DRAFT", "REVISION"].includes(s) && (
+                    <Button
+                      className="bg-[#351080] text-white hover:bg-[#280c61]"
+                      disabled={busy}
+                      onClick={() => act("submit")}
+                      data-testid="claim-submit"
+                    >
+                      Ajukan Klaim
+                    </Button>
+                  )}
+                  {["DRAFT", "SUBMITTED", "REVIEW"].includes(s) && (
+                    <Button
+                      className="bg-[#F28A19] text-white hover:bg-[#d97706]"
+                      disabled={busy}
+                      onClick={() => act("revision")}
+                      data-testid="claim-revision"
+                    >
+                      Minta Revisi
+                    </Button>
+                  )}
+                </>
+              )}
             </div>
           </div>
         )}
@@ -130,8 +379,34 @@ export default function Claims() {
 
   return (
     <div>
-      <PageHeader eyebrow="Insentif" title="Pengajuan Klaim" desc="Klaim insentif marketing berdasarkan pengajuan yang telah BOOKING/LIVE. Klaim tidak otomatis dianggap dibayar."
-        actions={user.role === "marketing" && <CtaButton onClick={() => setCreate(true)} data-testid="new-claim-button"><Plus className="mr-2 h-4 w-4" />Ajukan Klaim</CtaButton>} />
+      <PageHeader
+        eyebrow="Insentif"
+        title="Pengajuan Klaim"
+        desc={
+          user.bank_scope === "bsi_only"
+            ? `Klaim fee pencairan pembiayaan khusus Bank Syariah Indonesia (BSI) di Cabang ${user.branch || "Anda"}.`
+            : "Klaim insentif marketing berdasarkan pengajuan yang telah BOOKING/LIVE. Klaim tidak otomatis dianggap dibayar."
+        }
+        actions={
+          <div className="flex items-center gap-2">
+            {user.bank_scope === "bsi_only" ? (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-bold text-[#078D67]" data-testid="scope-badge-claims-bsi">
+                <span className="h-2 w-2 rounded-full bg-[#078D67] animate-pulse" />
+                Otoritas: Khusus BSI
+              </span>
+            ) : user.role === "admin_branch" ? (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700" data-testid="scope-badge-claims-all">
+                Otoritas: Multi Mitra (All Bank)
+              </span>
+            ) : null}
+            {user.role === "marketing" && (
+              <CtaButton onClick={() => setCreate(true)} data-testid="new-claim-button">
+                <Plus className="mr-2 h-4 w-4" />Ajukan Klaim
+              </CtaButton>
+            )}
+          </div>
+        }
+      />
       <div className="lp-card">
         <FilterBar>
           <div className="relative min-w-0 flex-1 sm:min-w-[240px]">
@@ -184,7 +459,13 @@ export default function Claims() {
                   <TableCell>{c.marketing_name}</TableCell>
                   <TableCell>{c.branch}</TableCell>
                   <TableCell className="lp-num">{fmtDate(c.booking_date)}</TableCell>
-                  <TableCell className="lp-num">{c.amount != null ? rp(c.amount) : "-"}</TableCell>
+                  <TableCell className="lp-num">
+                    {c.amount != null ? (
+                      rp(c.amount)
+                    ) : (
+                      <span className="text-xs text-amber-700 italic">Menunggu penetapan</span>
+                    )}
+                  </TableCell>
                   <TableCell><Badge s={c.status} /></TableCell>
                 </TableRow>
               ))}
@@ -222,4 +503,3 @@ export default function Claims() {
     </div>
   );
 }
-

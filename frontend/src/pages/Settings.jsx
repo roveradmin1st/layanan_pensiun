@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { Download, Upload, ShieldCheck, Save, RotateCcw, CheckCircle2, XCircle, Sliders, LogOut } from "lucide-react";
+import { Download, Upload, ShieldCheck, Save, RotateCcw, CheckCircle2, XCircle, Sliders, LogOut, User, Smartphone } from "lucide-react";
 import { api, errMsg, downloadFile } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { rp, ROLE_LABEL } from "../lib/format";
@@ -21,29 +21,74 @@ const PARTNER_KEYS = [
   "bank_bni",
 ];
 
+const BSI_SUB_PRODUCTS = [
+  { code: "PP3", label: "TriBerkah / PP3", subtitle: "Prapensiun ≤ 3 Tahun (Maks 240 bln • 74 thn 6 bln)" },
+  { code: "PP10", label: "Dekade / PP10", subtitle: "Prapensiun ≤ 10 Tahun (Maks 180 bln • 74 thn 4 bln)" },
+  { code: "PENSIUN", label: "Pensiun Berkah", subtitle: "Pensiun Murni / Janda (Maks 180 bln • 74 thn 6 bln)" },
+];
+
+function splitMonthsToYm(totalMonths) {
+  const m = Number.isInteger(Number(totalMonths)) && Number(totalMonths) >= 0 ? Number(totalMonths) : 892;
+  return {
+    years: Math.floor(m / 12),
+    months: m % 12,
+  };
+}
+
 function DynamicPartnerParams({ user }) {
   const [data, setData] = useState(null);
   const [selectedKey, setSelectedKey] = useState("ams2");
+  const [selectedBsiProduct, setSelectedBsiProduct] = useState("PP3");
   const [draft, setDraft] = useState(null);
+  const [bsiProductDraft, setBsiProductDraft] = useState(null);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
 
   const canEdit = user.role === "super_admin" || user.role === "admin_ops";
 
+  const hydrateBsiProductDraft = useCallback((partnerObj, prodCode) => {
+    const prod = partnerObj?.products?.[prodCode];
+    if (!prod) {
+      setBsiProductDraft(null);
+      return;
+    }
+    const cloned = structuredClone(prod);
+    const ym = splitMonthsToYm(cloned.loan?.maxMaturityAgeMonths);
+    cloned._endAgeYears = ym.years;
+    cloned._endAgeMonths = ym.months;
+    setBsiProductDraft(cloned);
+  }, []);
+
   const load = useCallback(() => {
     api.get("/calc/params").then((r) => {
       setData(r.data);
       const p = r.data.partners?.[selectedKey];
-      if (p) setDraft(structuredClone(p));
+      if (p) {
+        setDraft(structuredClone(p));
+        if (selectedKey === "bsi_prapen") {
+          hydrateBsiProductDraft(p, selectedBsiProduct);
+        }
+      }
     });
-  }, [selectedKey]);
+  }, [selectedKey, selectedBsiProduct, hydrateBsiProductDraft]);
 
   useEffect(() => { load(); }, [load]);
 
   const selectPartner = (k) => {
     setSelectedKey(k);
     if (data?.partners?.[k]) {
-      setDraft(structuredClone(data.partners[k]));
+      const p = structuredClone(data.partners[k]);
+      setDraft(p);
+      if (k === "bsi_prapen") {
+        hydrateBsiProductDraft(p, selectedBsiProduct);
+      }
+    }
+  };
+
+  const selectBsiSubProduct = (prodCode) => {
+    setSelectedBsiProduct(prodCode);
+    if (data?.partners?.bsi_prapen) {
+      hydrateBsiProductDraft(data.partners.bsi_prapen, prodCode);
     }
   };
 
@@ -58,16 +103,173 @@ function DynamicPartnerParams({ user }) {
     });
   };
 
+  const setBsiLoanNum = (field, val) => {
+    setBsiProductDraft((prev) => ({
+      ...prev,
+      loan: { ...(prev?.loan || {}), [field]: Number(val) },
+    }));
+  };
+
+  const setBsiAgeYm = (part, val) => {
+    const numVal = Number(val);
+    setBsiProductDraft((prev) => {
+      const nextYears = part === "years" ? numVal : Number(prev?._endAgeYears ?? 74);
+      const nextMonths = part === "months" ? numVal : Number(prev?._endAgeMonths ?? 0);
+      const clampedMonths = Math.max(0, Math.min(11, Number.isFinite(nextMonths) ? Math.trunc(nextMonths) : 0));
+      const clampedYears = Math.max(55, Math.min(85, Number.isFinite(nextYears) ? Math.trunc(nextYears) : 74));
+      return {
+        ...prev,
+        _endAgeYears: clampedYears,
+        _endAgeMonths: clampedMonths,
+        loan: {
+          ...(prev?.loan || {}),
+          maxMaturityAgeMonths: clampedYears * 12 + clampedMonths,
+        },
+      };
+    });
+  };
+
+  const setBsiActiveNum = (field, val) => {
+    setBsiProductDraft((prev) => ({
+      ...prev,
+      activePhase: { ...(prev?.activePhase || {}), [field]: Number(val) },
+    }));
+  };
+
+  const setBsiRetiredNum = (field, val) => {
+    setBsiProductDraft((prev) => ({
+      ...prev,
+      retiredPhase: { ...(prev?.retiredPhase || {}), [field]: Number(val) },
+    }));
+  };
+
+  const setBsiFeeNum = (field, val) => {
+    setBsiProductDraft((prev) => ({
+      ...prev,
+      fees: { ...(prev?.fees || {}), [field]: Number(val) },
+    }));
+  };
+
+  const setBsiInsNum = (field, val) => {
+    setBsiProductDraft((prev) => ({
+      ...prev,
+      insurance: { ...(prev?.insurance || {}), [field]: Number(val) },
+    }));
+  };
+
+  const setBsiPricingTierNum = (tierKey, field, val) => {
+    setBsiProductDraft((prev) => ({
+      ...prev,
+      pricingTiers: {
+        ...(prev?.pricingTiers || {}),
+        [tierKey]: {
+          ...(prev?.pricingTiers?.[tierKey] || {}),
+          [field]: Number(val),
+        },
+      },
+    }));
+  };
+
   const saveParams = async (e) => {
     e.preventDefault();
     setBusy(true);
     try {
+      if (selectedKey === "bsi_prapen" && bsiProductDraft) {
+        const isPensiun = selectedBsiProduct === "PENSIUN";
+        const payload = {
+          expectedPolicyVersion: bsiProductDraft.policyVersion,
+          loan: {
+            minPlafondAbsolute: Number(bsiProductDraft.loan?.minPlafondAbsolute),
+            maxPlafondAbsolute: Number(bsiProductDraft.loan?.maxPlafondAbsolute),
+            maxTenorMonths: Number(bsiProductDraft.loan?.maxTenorMonths),
+            maxMaturityAgeMonths:
+              Number(bsiProductDraft._endAgeYears) * 12 + Number(bsiProductDraft._endAgeMonths ?? 0),
+            ...(isPensiun
+              ? {
+                  minBankAgePensiunan: Number(bsiProductDraft.loan?.minBankAgePensiunan ?? 50),
+                  minBankAgeJanda: Number(bsiProductDraft.loan?.minBankAgeJanda ?? 48),
+                }
+              : {}),
+          },
+          ...(isPensiun
+            ? {
+                retiredPhase: {
+                  defaultBaseRateAnnual: Number(bsiProductDraft.retiredPhase?.defaultBaseRateAnnual ?? 10.5),
+                  maxInstallmentRatioPercent: Number(bsiProductDraft.retiredPhase?.maxInstallmentRatioPercent ?? 90),
+                  minInstallmentRatioPercent: Number(bsiProductDraft.retiredPhase?.minInstallmentRatioPercent ?? 70),
+                  spouseFactorWithSpouse: Number(bsiProductDraft.retiredPhase?.spouseFactorWithSpouse ?? 0.98),
+                  maxAttributionPremiumRatioPercent: Number(
+                    bsiProductDraft.retiredPhase?.maxAttributionPremiumRatioPercent ?? 70
+                  ),
+                },
+              }
+            : {
+                activePhase: {
+                  maxMonthsToRetirement: Number(bsiProductDraft.activePhase?.maxMonthsToRetirement),
+                  bupAgeDefault: Number(bsiProductDraft.activePhase?.bupAgeDefault ?? 58),
+                  dbrActivePayroll: Number(bsiProductDraft.activePhase?.dbrActivePayroll ?? 70),
+                  dbrActivePayrollColek: Number(bsiProductDraft.activePhase?.dbrActivePayrollColek ?? 80),
+                  dbrActiveNonPayroll: Number(bsiProductDraft.activePhase?.dbrActiveNonPayroll ?? 50),
+                },
+                retiredPhase: {
+                  maxInstallmentRatioPercent: Number(bsiProductDraft.retiredPhase?.maxInstallmentRatioPercent ?? 90),
+                },
+                pricingTiers: bsiProductDraft.pricingTiers,
+              }),
+          fees: {
+            adminRatePercent: Number(bsiProductDraft.fees?.adminRatePercent ?? 1.0),
+            materaiFee: Number(bsiProductDraft.fees?.materaiFee ?? 100000),
+            taksasiMmqMarkupPercent: Number(bsiProductDraft.fees?.taksasiMmqMarkupPercent ?? 2.0),
+            ...(isPensiun
+              ? {
+                  blokirAtribusiCount: Number(bsiProductDraft.fees?.blokirAtribusiCount ?? 2),
+                }
+              : {
+                  blokirActiveCount: Number(bsiProductDraft.fees?.blokirActiveCount ?? 1),
+                  blokirPensionCount: Number(bsiProductDraft.fees?.blokirPensionCount ?? 2),
+                }),
+          },
+          insurance: {
+            bufferDefaultMonths: Number(bsiProductDraft.insurance?.bufferDefaultMonths ?? 0),
+            ...(isPensiun
+              ? {
+                  maxSumAssured: Number(bsiProductDraft.insurance?.maxSumAssured ?? 500000000),
+                }
+              : {}),
+          },
+        };
+
+        const { data: res } = await api.put(`/calc/params/bsi_prapen/products/${selectedBsiProduct}`, {
+          updates: payload,
+          expectedPolicyVersion: bsiProductDraft.policyVersion,
+          reason: reason || `Penyesuaian parameter BSI ${selectedBsiProduct}`,
+        });
+        toast.success(res.message);
+        setReason("");
+        load();
+        return;
+      }
+
       const { data: res } = await api.put(`/calc/params/${selectedKey}`, {
         updates: draft,
         reason: reason || `Penyesuaian aturan mitra ${draft.shortName}`,
       });
       toast.success(res.message);
       setReason("");
+      load();
+    } catch (err) {
+      toast.error(errMsg(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resetBsiProduct = async () => {
+    if (!window.confirm(`Reset parameter produk BSI ${selectedBsiProduct} ke nilai standar awal?`)) return;
+    setBusy(true);
+    try {
+      await api.post(`/calc/params/bsi_prapen/products/${selectedBsiProduct}/reset`);
+      toast.success(`Parameter BSI ${selectedBsiProduct} dikembalikan ke standar awal`);
       load();
     } catch (err) {
       toast.error(errMsg(err));
@@ -124,10 +326,8 @@ function DynamicPartnerParams({ user }) {
         <p className="mb-4 text-xs text-slate-500">
           Pilih mitra bank di bawah ini untuk melihat atau menyesuaikan suku bunga, batas usia, tenor, plafon maksimal, DSR/DBR, serta komponen biaya.
           {user.role === "super_admin"
-            ? " Sebagai Super Admin, perubahan Anda langsung aktif di kalkulator."
-            : user.role === "admin_ops"
-            ? " Sebagai Admin Operasional, perubahan Anda akan dikirim sebagai usulan (Dual Control) ke Super Admin."
-            : " Sebagai Marketing, Anda memiliki akses baca (View Only) pada parameter aktif."}
+            ? " Sebagai Super Admin (Owner), perubahan Anda langsung aktif pada mesin kalkulator seluruh cabang."
+            : " Sebagai Admin Operasional, setiap perubahan akan dikirim sebagai usulan (Dual Control) ke Super Admin untuk disetujui."}
         </p>
 
         <div className="mb-6 flex gap-2.5 border-b border-slate-100 pb-4 lp-scroll-x -mx-4 px-4 sm:mx-0 sm:px-0">
@@ -230,15 +430,460 @@ function DynamicPartnerParams({ user }) {
             </>
           )}
 
-          {/* 2. BSI PRAPENSIUN + SIMAS JIWA */}
-          {selectedKey === "bsi_prapen" && (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <div><Label>Plafond Maksimal BSI (Rp)</Label><Input type="number" step="10000000" disabled={!canEdit} value={draft.maxPlafondAbsolute} onChange={(e) => setNum("maxPlafondAbsolute", e.target.value)} className="lp-num" /></div>
-              <div><Label>Tenor Maksimal (Bulan)</Label><Input type="number" disabled={!canEdit} value={draft.maxTenorMonths} onChange={(e) => setNum("maxTenorMonths", e.target.value)} className="lp-num" /></div>
-              <div><Label>DBR Saat Aktif Payroll (%)</Label><Input type="number" step="0.5" disabled={!canEdit} value={draft.dbrActivePayroll} onChange={(e) => setNum("dbrActivePayroll", e.target.value)} className="lp-num" /></div>
-              <div><Label>DSR Saat Pensiun Maks (%)</Label><Input type="number" step="0.5" disabled={!canEdit} value={draft.dsrPensionMax} onChange={(e) => setNum("dsrPensionMax", e.target.value)} className="lp-num" /></div>
-              <div><Label>Usia Jatuh Tempo Maks (Thn)</Label><Input type="number" disabled={!canEdit} value={draft.maxEndAgeYears} onChange={(e) => setNum("maxEndAgeYears", e.target.value)} className="lp-num" /></div>
-              <div><Label>Default Usia BUP (Thn)</Label><Input type="number" disabled={!canEdit} value={draft.bupAgeDefault} onChange={(e) => setNum("bupAgeDefault", e.target.value)} className="lp-num" /></div>
+          {/* 2. BSI PRAPENSIUN & PENSIUN BERKAH (PER-PRODUCT SCOPED CONFIG) */}
+          {selectedKey === "bsi_prapen" && bsiProductDraft && (
+            <div className="space-y-5" data-testid="bsi-product-params-panel">
+              {/* Selector Produk BSI */}
+              <div className="rounded-xl border border-[#078D67]/25 bg-[#078D67]/[0.03] p-4">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-extrabold uppercase tracking-wider text-[#078D67]">
+                      Pilih Sub-Produk BSI (Konfigurasi Terisolasi per Produk)
+                    </p>
+                    <p className="text-[11px] text-slate-600">
+                      Setiap perubahan hanya berlaku untuk produk yang dipilih tanpa mencemari produk BSI lainnya.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full bg-white px-2.5 py-1 font-mono text-[11px] font-bold text-[#078D67] ring-1 ring-[#078D67]/30" data-testid="bsi-policy-version-badge">
+                      Policy: {bsiProductDraft.policyVersion}
+                    </span>
+                    {user.role === "super_admin" && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={busy}
+                        onClick={resetBsiProduct}
+                        data-testid={`reset-bsi-product-${selectedBsiProduct}`}
+                      >
+                        <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Reset {selectedBsiProduct}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid gap-2.5 sm:grid-cols-3">
+                  {BSI_SUB_PRODUCTS.map((sp) => {
+                    const activeTab = selectedBsiProduct === sp.code;
+                    return (
+                      <button
+                        key={sp.code}
+                        type="button"
+                        onClick={() => selectBsiSubProduct(sp.code)}
+                        data-testid={`bsi-param-subtab-${sp.code}`}
+                        className={`rounded-xl border p-3 text-left transition ${
+                          activeTab
+                            ? "border-[#078D67] bg-[#078D67] text-white shadow-sm"
+                            : "border-slate-200 bg-white text-slate-700 hover:border-[#078D67]/40"
+                        }`}
+                      >
+                        <p className="font-display text-xs font-bold">{sp.label}</p>
+                        <p className={`mt-0.5 text-[11px] ${activeTab ? "text-emerald-100" : "text-slate-500"}`}>
+                          {sp.subtitle}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-emerald-900/10 pt-2.5 text-[11px] text-slate-500">
+                  <span>
+                    Produk Aktif: <b className="text-slate-800">{bsiProductDraft.productName || bsiProductDraft.label}</b>
+                  </span>
+                  <span>
+                    Pembaruan Terakhir:{" "}
+                    <b className="text-slate-700">
+                      {bsiProductDraft.updatedAt ? new Date(bsiProductDraft.updatedAt).toLocaleString("id-ID") : "-"}
+                    </b>{" "}
+                    oleh <b className="text-slate-700">{bsiProductDraft.updatedBy || "-"}</b>
+                  </span>
+                </div>
+              </div>
+
+              {/* A. Batas Plafon, Tenor & Usia Jatuh Tempo (Tahun + Bulan 0..11) */}
+              <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
+                <p className="text-xs font-bold uppercase tracking-wider text-[#351080]">
+                  1. Batas Pembiayaan, Tenor &amp; Usia Jatuh Tempo ({selectedBsiProduct})
+                </p>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  <div>
+                    <Label>Plafond Minimal (Rp)</Label>
+                    <Input
+                      type="number"
+                      step="1000000"
+                      disabled={!canEdit}
+                      value={bsiProductDraft.loan?.minPlafondAbsolute ?? 10000000}
+                      onChange={(e) => setBsiLoanNum("minPlafondAbsolute", e.target.value)}
+                      className="lp-num"
+                      data-testid="bsi-min-plafond-input"
+                    />
+                  </div>
+                  <div>
+                    <Label>Plafond Maksimal (Rp)</Label>
+                    <Input
+                      type="number"
+                      step="10000000"
+                      disabled={!canEdit}
+                      value={bsiProductDraft.loan?.maxPlafondAbsolute ?? 800000000}
+                      onChange={(e) => setBsiLoanNum("maxPlafondAbsolute", e.target.value)}
+                      className="lp-num"
+                      data-testid="bsi-max-plafond-input"
+                    />
+                  </div>
+                  <div>
+                    <Label>Tenor Maksimal (Bulan)</Label>
+                    <Input
+                      type="number"
+                      min="12"
+                      max={selectedBsiProduct === "PENSIUN" ? "180" : "240"}
+                      disabled={!canEdit}
+                      value={bsiProductDraft.loan?.maxTenorMonths ?? 180}
+                      onChange={(e) => setBsiLoanNum("maxTenorMonths", e.target.value)}
+                      className="lp-num"
+                      data-testid="bsi-max-tenor-input"
+                    />
+                  </div>
+                  <div>
+                    <Label>Usia Akhir Maksimum (Tahun)</Label>
+                    <Input
+                      type="number"
+                      min="55"
+                      max="85"
+                      disabled={!canEdit}
+                      value={bsiProductDraft._endAgeYears ?? 74}
+                      onChange={(e) => setBsiAgeYm("years", e.target.value)}
+                      className="lp-num"
+                      data-testid="bsi-end-age-years-input"
+                    />
+                  </div>
+                  <div>
+                    <Label>Tambahan Bulan Usia Akhir (0–11 Bulan)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      max="11"
+                      disabled={!canEdit}
+                      value={bsiProductDraft._endAgeMonths ?? 0}
+                      onChange={(e) => setBsiAgeYm("months", e.target.value)}
+                      className="lp-num"
+                      data-testid="bsi-end-age-months-input"
+                    />
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      Total: <b>{bsiProductDraft.loan?.maxMaturityAgeMonths} bulan</b> ({bsiProductDraft._endAgeYears} thn{" "}
+                      {bsiProductDraft._endAgeMonths} bln)
+                    </p>
+                  </div>
+                  <div>
+                    <Label>Default Buffer Masa Asuransi (Bulan)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      max="24"
+                      disabled={!canEdit}
+                      value={bsiProductDraft.insurance?.bufferDefaultMonths ?? 0}
+                      onChange={(e) => setBsiInsNum("bufferDefaultMonths", e.target.value)}
+                      className="lp-num"
+                      data-testid="bsi-buffer-months-input"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* B. Parameter Fase Aktif & Pasca Pensiun untuk PP3 / PP10 */}
+              {selectedBsiProduct !== "PENSIUN" ? (
+                <>
+                  <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
+                    <p className="text-xs font-bold uppercase tracking-wider text-[#351080]">
+                      2. DBR Masa Aktif — Prapen &amp; DSR Fase Pasca Pensiun — Prapen ({selectedBsiProduct})
+                    </p>
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                      <div>
+                        <Label>DBR Masa Aktif — Prapen (Payroll %)</Label>
+                        <Input
+                          type="number"
+                          step="0.5"
+                          disabled={!canEdit}
+                          value={bsiProductDraft.activePhase?.dbrActivePayroll ?? 70}
+                          onChange={(e) => setBsiActiveNum("dbrActivePayroll", e.target.value)}
+                          className="lp-num"
+                          data-testid="bsi-dbr-payroll-input"
+                        />
+                      </div>
+                      <div>
+                        <Label>DBR Masa Aktif — Prapen (Comitted Payroll %)</Label>
+                        <Input
+                          type="number"
+                          step="0.5"
+                          disabled={!canEdit}
+                          value={bsiProductDraft.activePhase?.dbrActivePayrollColek ?? 80}
+                          onChange={(e) => setBsiActiveNum("dbrActivePayrollColek", e.target.value)}
+                          className="lp-num"
+                          data-testid="bsi-dbr-colek-input"
+                        />
+                      </div>
+                      <div>
+                        <Label>DBR Masa Aktif — Prapen (Non-Payroll %)</Label>
+                        <Input
+                          type="number"
+                          step="0.5"
+                          disabled={!canEdit}
+                          value={bsiProductDraft.activePhase?.dbrActiveNonPayroll ?? 50}
+                          onChange={(e) => setBsiActiveNum("dbrActiveNonPayroll", e.target.value)}
+                          className="lp-num"
+                          data-testid="bsi-dbr-nonpayroll-input"
+                        />
+                      </div>
+                      <div>
+                        <Label>DSR Fase Pasca Pensiun — Prapen (%)</Label>
+                        <Input
+                          type="number"
+                          step="0.5"
+                          disabled={!canEdit}
+                          value={bsiProductDraft.retiredPhase?.maxInstallmentRatioPercent ?? 90}
+                          onChange={(e) => setBsiRetiredNum("maxInstallmentRatioPercent", e.target.value)}
+                          className="lp-num"
+                          data-testid="bsi-dsr-pension-input"
+                        />
+                      </div>
+                      <div>
+                        <Label>Jendela Maks Masa Aktif ke Pensiun (Bln)</Label>
+                        <Input
+                          type="number"
+                          disabled={!canEdit}
+                          value={bsiProductDraft.activePhase?.maxMonthsToRetirement ?? (selectedBsiProduct === "PP3" ? 36 : 120)}
+                          onChange={(e) => setBsiActiveNum("maxMonthsToRetirement", e.target.value)}
+                          className="lp-num"
+                          data-testid="bsi-max-active-window-input"
+                        />
+                      </div>
+                      <div>
+                        <Label>Default Usia BUP (Tahun)</Label>
+                        <Input
+                          type="number"
+                          disabled={!canEdit}
+                          value={bsiProductDraft.activePhase?.bupAgeDefault ?? 58}
+                          onChange={(e) => setBsiActiveNum("bupAgeDefault", e.target.value)}
+                          className="lp-num"
+                          data-testid="bsi-bup-default-input"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Pricing Tiers & Biaya Prapen */}
+                  <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
+                    <p className="text-xs font-bold uppercase tracking-wider text-[#351080]">
+                      3. Tier Pricing Margin &amp; Komponen Biaya ({selectedBsiProduct})
+                    </p>
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                      {selectedBsiProduct === "PP3" ? (
+                        <>
+                          <div>
+                            <Label>Margin Aktif ≥ Rp200 Jt (% p.a.)</Label>
+                            <Input
+                              type="number"
+                              step="0.05"
+                              disabled={!canEdit}
+                              value={bsiProductDraft.pricingTiers?.triNettAbove200?.rateActiveAnnual ?? 9.25}
+                              onChange={(e) => setBsiPricingTierNum("triNettAbove200", "rateActiveAnnual", e.target.value)}
+                              className="lp-num"
+                            />
+                          </div>
+                          <div>
+                            <Label>Margin Pensiun ≥ Rp200 Jt (% p.a.)</Label>
+                            <Input
+                              type="number"
+                              step="0.05"
+                              disabled={!canEdit}
+                              value={bsiProductDraft.pricingTiers?.triNettAbove200?.ratePensionAnnual ?? 10.5}
+                              onChange={(e) => setBsiPricingTierNum("triNettAbove200", "ratePensionAnnual", e.target.value)}
+                              className="lp-num"
+                            />
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div>
+                            <Label>Margin Aktif ≥ Rp200 Jt (% p.a.)</Label>
+                            <Input
+                              type="number"
+                              step="0.05"
+                              disabled={!canEdit}
+                              value={bsiProductDraft.pricingTiers?.dekadeNettAbove200?.rateActiveAnnual ?? 9.5}
+                              onChange={(e) => setBsiPricingTierNum("dekadeNettAbove200", "rateActiveAnnual", e.target.value)}
+                              className="lp-num"
+                            />
+                          </div>
+                          <div>
+                            <Label>Margin Pensiun ≥ Rp200 Jt (% p.a.)</Label>
+                            <Input
+                              type="number"
+                              step="0.05"
+                              disabled={!canEdit}
+                              value={bsiProductDraft.pricingTiers?.dekadeNettAbove200?.ratePensionAnnual ?? 10.5}
+                              onChange={(e) => setBsiPricingTierNum("dekadeNettAbove200", "ratePensionAnnual", e.target.value)}
+                              className="lp-num"
+                            />
+                          </div>
+                        </>
+                      )}
+                      <div>
+                        <Label>Margin Aktif &lt; Rp200 Jt (% p.a.)</Label>
+                        <Input
+                          type="number"
+                          step="0.05"
+                          disabled={!canEdit}
+                          value={bsiProductDraft.pricingTiers?.below200?.rateActiveAnnual ?? 10.5}
+                          onChange={(e) => setBsiPricingTierNum("below200", "rateActiveAnnual", e.target.value)}
+                          className="lp-num"
+                        />
+                      </div>
+                      <div>
+                        <Label>Margin Pensiun &lt; Rp200 Jt (% p.a.)</Label>
+                        <Input
+                          type="number"
+                          step="0.05"
+                          disabled={!canEdit}
+                          value={bsiProductDraft.pricingTiers?.below200?.ratePensionAnnual ?? 11.5}
+                          onChange={(e) => setBsiPricingTierNum("below200", "ratePensionAnnual", e.target.value)}
+                          className="lp-num"
+                        />
+                      </div>
+                      <div>
+                        <Label>Biaya Administrasi (%)</Label>
+                        <Input
+                          type="number"
+                          step="0.1"
+                          disabled={!canEdit}
+                          value={bsiProductDraft.fees?.adminRatePercent ?? 1.0}
+                          onChange={(e) => setBsiFeeNum("adminRatePercent", e.target.value)}
+                          className="lp-num"
+                        />
+                      </div>
+                      <div>
+                        <Label>Biaya Materai (Rp)</Label>
+                        <Input
+                          type="number"
+                          step="10000"
+                          disabled={!canEdit}
+                          value={bsiProductDraft.fees?.materaiFee ?? 100000}
+                          onChange={(e) => setBsiFeeNum("materaiFee", e.target.value)}
+                          className="lp-num"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                /* C. Parameter Khusus Pensiun Berkah (PENSIUN) */
+                <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
+                  <p className="text-xs font-bold uppercase tracking-wider text-[#351080]">
+                    2. Parameter Khusus BSI Pensiun Berkah &amp; Simas Pensiun (PENSIUN)
+                  </p>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    <div>
+                      <Label>Pricing Dasar Pensiun (% p.a.)</Label>
+                      <Input
+                        type="number"
+                        step="0.05"
+                        disabled={!canEdit}
+                        value={bsiProductDraft.retiredPhase?.defaultBaseRateAnnual ?? 10.5}
+                        onChange={(e) => setBsiRetiredNum("defaultBaseRateAnnual", e.target.value)}
+                        className="lp-num"
+                        data-testid="bsi-pensiun-base-rate-input"
+                      />
+                    </div>
+                    <div>
+                      <Label>Rasio DBR/DSR Maksimum Pensiun (%)</Label>
+                      <Input
+                        type="number"
+                        step="0.5"
+                        disabled={!canEdit}
+                        value={bsiProductDraft.retiredPhase?.maxInstallmentRatioPercent ?? 90}
+                        onChange={(e) => setBsiRetiredNum("maxInstallmentRatioPercent", e.target.value)}
+                        className="lp-num"
+                        data-testid="bsi-pensiun-max-ratio-input"
+                      />
+                    </div>
+                    <div>
+                      <Label>Rasio DBR/DSR Opsi Bawah Pensiun (%)</Label>
+                      <Input
+                        type="number"
+                        step="0.5"
+                        disabled={!canEdit}
+                        value={bsiProductDraft.retiredPhase?.minInstallmentRatioPercent ?? 70}
+                        onChange={(e) => setBsiRetiredNum("minInstallmentRatioPercent", e.target.value)}
+                        className="lp-num"
+                      />
+                    </div>
+                    <div>
+                      <Label>Faktor Kapasitas Ada Pasangan (0.5–1.0)</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        disabled={!canEdit}
+                        value={bsiProductDraft.retiredPhase?.spouseFactorWithSpouse ?? 0.98}
+                        onChange={(e) => setBsiRetiredNum("spouseFactorWithSpouse", e.target.value)}
+                        className="lp-num"
+                      />
+                    </div>
+                    <div>
+                      <Label>Usia Min Bank — Pensiun Sendiri (Thn)</Label>
+                      <Input
+                        type="number"
+                        disabled={!canEdit}
+                        value={bsiProductDraft.loan?.minBankAgePensiunan ?? 50}
+                        onChange={(e) => setBsiLoanNum("minBankAgePensiunan", e.target.value)}
+                        className="lp-num"
+                      />
+                    </div>
+                    <div>
+                      <Label>Usia Min Bank — Pensiun Janda (Thn)</Label>
+                      <Input
+                        type="number"
+                        disabled={!canEdit}
+                        value={bsiProductDraft.loan?.minBankAgeJanda ?? 48}
+                        onChange={(e) => setBsiLoanNum("minBankAgeJanda", e.target.value)}
+                        className="lp-num"
+                      />
+                    </div>
+                    <div>
+                      <Label>Batas Santunan Simas Pensiun (Rp)</Label>
+                      <Input
+                        type="number"
+                        step="10000000"
+                        disabled={!canEdit}
+                        value={bsiProductDraft.insurance?.maxSumAssured ?? 500000000}
+                        onChange={(e) => setBsiInsNum("maxSumAssured", e.target.value)}
+                        className="lp-num"
+                      />
+                    </div>
+                    <div>
+                      <Label>Batas Premi Atribusi thd Plafon (%)</Label>
+                      <Input
+                        type="number"
+                        step="1"
+                        disabled={!canEdit}
+                        value={bsiProductDraft.retiredPhase?.maxAttributionPremiumRatioPercent ?? 70}
+                        onChange={(e) => setBsiRetiredNum("maxAttributionPremiumRatioPercent", e.target.value)}
+                        className="lp-num"
+                      />
+                    </div>
+                    <div>
+                      <Label>Biaya Administrasi (%)</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        disabled={!canEdit}
+                        value={bsiProductDraft.fees?.adminRatePercent ?? 1.0}
+                        onChange={(e) => setBsiFeeNum("adminRatePercent", e.target.value)}
+                        className="lp-num"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -307,7 +952,19 @@ function DynamicPartnerParams({ user }) {
             {data.proposals.map((prop) => (
               <li key={prop.id} className="flex flex-col justify-between gap-3 py-3 text-sm sm:flex-row sm:items-center">
                 <div>
-                  <p className="font-semibold text-[#351080]">{prop.partner_name}</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-semibold text-[#351080]">{prop.partner_name}</p>
+                    {prop.product_key && (
+                      <span className="rounded-md bg-[#078D67]/15 px-2 py-0.5 text-[11px] font-bold text-[#078D67]">
+                        Produk: {prop.product_key}
+                      </span>
+                    )}
+                    {prop.base_policy_version && (
+                      <span className="font-mono text-[11px] text-slate-500">
+                        ({prop.base_policy_version} → {prop.target_policy_version || "baru"})
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs text-slate-600">{prop.reason}</p>
                   <p className="mt-0.5 text-[11px] text-slate-400">Diusulkan oleh {prop.proposed_by_name} • Status: <b>{prop.status}</b></p>
                 </div>
@@ -344,13 +1001,14 @@ function ChangePassword() {
     <form onSubmit={submit} className="lp-card space-y-4 p-6" data-testid="change-password-form">
       <h2 className="font-display font-bold">Ubah Kata Sandi</h2>
       <div className="space-y-1.5"><Label htmlFor="cp1">Kata sandi saat ini</Label><Input id="cp1" type="password" required value={v.current_password} onChange={(e) => setV({ ...v, current_password: e.target.value })} data-testid="current-password-input" /></div>
-      <div className="space-y-1.5"><Label htmlFor="cp2">Kata sandi baru (min. 8)</Label><Input id="cp2" type="password" required minLength={8} value={v.new_password} onChange={(e) => setV({ ...v, new_password: e.target.value })} data-testid="new-password-input" /></div>
+      <div className="space-y-1.5"><Label htmlFor="cp2">Kata sandi baru (minimal 12 karakter)</Label><Input id="cp2" type="password" required minLength={12} value={v.new_password} onChange={(e) => setV({ ...v, new_password: e.target.value })} data-testid="new-password-input" /></div>
       <Button type="submit" className="bg-[#351080] hover:bg-[#2a0c66]" data-testid="change-password-submit">Simpan</Button>
     </form>
   );
 }
 
 function Backup() {
+  const { user } = useAuth();
   const ref = useRef();
   const restore = async (file) => {
     if (!file) return;
@@ -364,11 +1022,106 @@ function Backup() {
   return (
     <section className="lp-card space-y-4 p-6" data-testid="backup-panel">
       <h2 className="font-display font-bold">Backup &amp; Pemulihan</h2>
-      <p className="text-sm text-slate-500">Unduh salinan JSON seluruh leads, aktivitas, simulasi, parameter mitra, dan audit log. Pemulihan menggabungkan data berdasarkan ID.</p>
+      <p className="text-sm text-slate-500">Unduh salinan JSON seluruh leads, aktivitas, simulasi, parameter mitra, dan audit log. Pemulihan mengganti koleksi data dan dilakukan pengelola sistem saat maintenance.</p>
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" onClick={() => downloadFile("/backup", "backup.json")} data-testid="backup-download-button"><Download className="mr-2 h-4 w-4" />Unduh Backup</Button>
         <input ref={ref} type="file" accept=".json" className="hidden" onChange={(e) => restore(e.target.files[0])} data-testid="restore-file-input" />
-        <Button variant="outline" onClick={() => ref.current.click()} data-testid="restore-button"><Upload className="mr-2 h-4 w-4" />Pulihkan dari File</Button>
+        <Button variant="outline" disabled={user.capabilities?.web_restore === false} onClick={() => ref.current.click()} data-testid="restore-button"><Upload className="mr-2 h-4 w-4" />Pulihkan dari File</Button>
+      </div>
+    </section>
+  );
+}
+
+function UserProfileCard({ user }) {
+  return (
+    <section className="lp-card space-y-4 p-6" data-testid="user-profile-card">
+      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+        <div className="flex items-center gap-2">
+          <User className="h-5 w-5 text-[#351080]" />
+          <h2 className="font-display font-bold text-slate-900">Profil &amp; Informasi Pengguna</h2>
+        </div>
+        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
+          <CheckCircle2 className="h-3.5 w-3.5" /> Akun Terverifikasi
+        </span>
+      </div>
+
+      <div className="flex items-center gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-[#351080] text-xl font-bold text-white shadow-sm">
+          {user.name?.[0]?.toUpperCase()}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-base font-bold text-slate-900">{user.name}</p>
+          <p className="truncate text-xs text-slate-500">{user.email}</p>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            <span className="rounded-md bg-[#351080]/10 px-2 py-0.5 text-xs font-bold text-[#351080]">
+              {ROLE_LABEL[user.role] || user.role}
+            </span>
+            <span className="rounded-md bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700">
+              Cabang: {user.branch || "PUSAT"}
+            </span>
+            {user.role === "admin_branch" && (
+              <span
+                className={`rounded-md px-2 py-0.5 text-xs font-semibold ${
+                  user.bank_scope === "bsi_only" ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-700"
+                }`}
+              >
+                {user.bank_scope === "bsi_only" ? "Khusus BSI" : "Semua Mitra"}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-3 pt-1 text-xs sm:grid-cols-2">
+        <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
+          <span className="font-medium text-slate-400">ID Pengguna</span>
+          <p className="mt-0.5 font-mono font-bold text-slate-800">{user.id}</p>
+        </div>
+        <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
+          <span className="font-medium text-slate-400">Penempatan Wilayah</span>
+          <p className="mt-0.5 font-semibold text-slate-800">{user.branch || "Kantor Pusat Operasional"}</p>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-blue-100 bg-blue-50/70 p-3.5 text-xs text-blue-900 flex items-start gap-2.5">
+        <ShieldCheck className="h-4 w-4 shrink-0 text-blue-600 mt-0.5" />
+        <p className="leading-relaxed">
+          Hak akses akun dibatasi sesuai standar tata kelola perbankan (RBAC). Untuk perubahan nama, email, atau mutasi cabang, silakan ajukan permohonan ke Admin Operasional / Super Admin.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function AppSystemInfoCard() {
+  return (
+    <section className="lp-card space-y-4 p-6" data-testid="app-info-card">
+      <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+        <Smartphone className="h-5 w-5 text-[#078D67]" />
+        <h2 className="font-display font-bold text-slate-900">Informasi SuperApps PWA</h2>
+      </div>
+
+      <div className="space-y-3 text-xs">
+        <div className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/80 p-3">
+          <span className="font-medium text-slate-500">Versi SuperApps Enterprise</span>
+          <span className="font-mono font-bold text-[#351080]">v2.6.2 (Production Ready)</span>
+        </div>
+        <div className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/80 p-3">
+          <span className="font-medium text-slate-500">Koneksi Layanan</span>
+          <span className="inline-flex items-center gap-1 font-semibold text-emerald-700">
+            <span className="h-2 w-2 rounded-full bg-emerald-500"></span> Online (Terhubung)
+          </span>
+        </div>
+        <div className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/80 p-3">
+          <span className="font-medium text-slate-500">Keamanan Cache PWA</span>
+          <span className="font-semibold text-slate-700">Shell Terenkripsi &amp; Terisolasi</span>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 text-xs text-slate-600 space-y-1">
+        <p className="font-bold text-slate-800">Pusat Dukungan Operasional &amp; Bantuan:</p>
+        <p>Email: <span className="font-mono text-slate-700">operasional@layananpensiunan.id</span></p>
+        <p>Hotline Helpdesk Cabang: Hari Kerja 08.00 – 17.00 WIB</p>
       </div>
     </section>
   );
@@ -410,17 +1163,40 @@ function AccountLogout({ user }) {
 
 export default function SettingsPage() {
   const { user } = useAuth();
+  const isCentral = user?.role === "super_admin" || user?.role === "admin_ops";
+
   return (
     <div>
-      <PageHeader eyebrow="Pengaturan & Parameter Mitra" title="Pengaturan Enterprise" desc="Kelola parameter aturan mitra bank secara dinamis, keamanan akun, dan pencadangan database." />
-      <div className="grid gap-6 xl:grid-cols-[1.55fr_1fr]">
-        <DynamicPartnerParams user={user} />
-        <div className="space-y-6">
-          <AccountLogout user={user} />
-          <ChangePassword />
-          {user.role === "super_admin" && <Backup />}
+      <PageHeader
+        eyebrow={isCentral ? "Pengaturan Enterprise & Parameter Sistem" : "Pengaturan Akun & Profil"}
+        title={isCentral ? "Pengaturan Sistem & Parameter Mitra" : "Pengaturan Akun"}
+        desc={
+          isCentral
+            ? "Kelola parameter aturan mitra bank secara dinamis, usulan dual control, keamanan akun, dan pencadangan database."
+            : "Kelola profil pribadi, keamanan kata sandi, dan preferensi aplikasi operasional Anda."
+        }
+      />
+      {isCentral ? (
+        <div className="grid gap-6 xl:grid-cols-[1.55fr_1fr]">
+          <DynamicPartnerParams user={user} />
+          <div className="space-y-6">
+            <AccountLogout user={user} />
+            <ChangePassword />
+            {user.role === "super_admin" && <Backup />}
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="grid gap-6 lg:grid-cols-2">
+          <div className="space-y-6">
+            <UserProfileCard user={user} />
+            <AccountLogout user={user} />
+          </div>
+          <div className="space-y-6">
+            <ChangePassword />
+            <AppSystemInfoCard />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

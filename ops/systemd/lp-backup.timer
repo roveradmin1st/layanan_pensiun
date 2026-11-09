@@ -1,0 +1,9 @@
+[Unit]
+Description=Layanan Pensiunan hourly backup at minute 15 WIB
+
+[Timer]
+OnCalendar=*-*-* *:15:00 Asia/Jakarta
+Persistent=true
+
+[Install]
+WantedBy=timers.target

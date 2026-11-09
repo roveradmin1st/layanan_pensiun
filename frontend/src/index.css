@@ -82,8 +82,12 @@
 
 @layer components {
   .lp-card {
-    @apply rounded-lg border border-slate-200 bg-white;
-    box-shadow: 0 1px 2px rgb(16 24 40 / 0.04);
+    @apply rounded-xl border border-slate-200/90 bg-white;
+    box-shadow: 0 1px 3px 0 rgb(15 23 42 / 0.04), 0 1px 2px -1px rgb(15 23 42 / 0.03);
+  }
+
+  .lp-skeleton {
+    @apply animate-pulse rounded-md bg-slate-200/75;
   }
 
   .lp-eyebrow {

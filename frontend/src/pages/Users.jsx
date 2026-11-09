@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { Plus, Pencil } from "lucide-react";
 import { api, errMsg } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
-import { ROLE_LABEL } from "../lib/format";
+import { ROLE_LABEL, KANWIL_BRANCHES, normalizeBranch } from "../lib/format";
 import { PageHeader, CtaButton, DesktopTable, MobileList, ListCard } from "../components/common";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
@@ -13,23 +13,66 @@ import { Label } from "../components/ui/label";
 import { Switch } from "../components/ui/switch";
 import { Button } from "../components/ui/button";
 
-function UserDialog({ open, onOpenChange, editing, onSaved, me }) {
+function UserDialog({ open, onOpenChange, editing, onSaved, me, allUsers = [] }) {
   const [v, setV] = useState({});
-  useEffect(() => { setV(editing ? { ...editing, password: "" } : { name: "", email: "", role: "marketing", branch: me?.branch || "", phone: "", password: "" }); }, [editing, open, me]);
+  useEffect(() => {
+    setV(
+      editing
+        ? {
+            ...editing,
+            password: "",
+            bank_scope: editing.bank_scope || "all_bank",
+            manager_id: editing.manager_id || null
+          }
+        : {
+            name: "",
+            email: "",
+            role: "marketing",
+            branch: me?.branch || "",
+            bank_scope: me?.bank_scope === "bsi_only" ? "bsi_only" : "all_bank",
+            manager_id: null,
+            phone: "",
+            password: ""
+          }
+    );
+  }, [editing, open, me]);
   const roles =
     me.role === "super_admin"
       ? ["super_admin", "admin_ops", "admin_branch", "sales_manager", "marketing"]
       : me.role === "admin_ops"
       ? ["admin_branch", "sales_manager", "marketing"]
       : ["marketing"];
+
+  const eligibleManagers = (allUsers || []).filter(
+    (u) =>
+      u.role === "sales_manager" &&
+      u.active !== false &&
+      normalizeBranch(u.branch) === normalizeBranch(v.branch) &&
+      (v.bank_scope !== "all_bank" || u.bank_scope !== "bsi_only")
+  );
+
   const submit = async (e) => {
     e.preventDefault();
     try {
       if (editing) {
-        const body = { name: v.name, role: v.role, branch: v.branch, phone: v.phone, active: v.active };
+        const body = {
+          name: v.name,
+          role: v.role,
+          branch: v.branch,
+          bank_scope: v.bank_scope || "all_bank",
+          manager_id: v.role === "marketing" ? (v.manager_id || null) : null,
+          phone: v.phone,
+          active: v.active
+        };
         if (v.password) body.password = v.password;
         await api.patch(`/users/${editing.id}`, body);
-      } else await api.post("/users", v);
+      } else {
+        await api.post("/users", {
+          ...v,
+          bank_scope: v.bank_scope || "all_bank",
+          manager_id: v.role === "marketing" ? (v.manager_id || null) : null
+        });
+      }
       toast.success("Pengguna disimpan");
       onOpenChange(false); onSaved();
     } catch (err) { toast.error(errMsg(err)); }
@@ -45,10 +88,87 @@ function UserDialog({ open, onOpenChange, editing, onSaved, me }) {
           {field("name", "Nama lengkap", { required: true })}
           {!editing && field("email", "Email", { type: "email", required: true })}
           <div className="space-y-1.5"><Label>Peran</Label>
-            <Select value={v.role} onValueChange={(r) => setV({ ...v, role: r })}><SelectTrigger data-testid="user-form-role"><SelectValue /></SelectTrigger>
+            <Select value={v.role} disabled={me.role !== "super_admin" && me.role !== "admin_ops"} onValueChange={(r) => setV({ ...v, role: r })}><SelectTrigger data-testid="user-form-role"><SelectValue /></SelectTrigger>
               <SelectContent>{roles.map((r) => <SelectItem key={r} value={r}>{ROLE_LABEL[r]}</SelectItem>)}</SelectContent></Select></div>
-          <div className="grid grid-cols-2 gap-3">{field("branch", "Cabang")}{field("phone", "Telepon")}</div>
-          {field("password", editing ? "Kata sandi baru (opsional)" : "Kata sandi awal (min. 8)", { type: "password", required: !editing, minLength: 8 })}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="u-branch">Cabang</Label>
+              <Select
+                value={v.branch ? normalizeBranch(v.branch) : ""}
+                disabled={me.role !== "super_admin" && me.role !== "admin_ops"}
+                onValueChange={(val) => setV({ ...v, branch: val })}
+              >
+                <SelectTrigger id="u-branch" data-testid="user-form-branch">
+                  <SelectValue placeholder="Pilih Cabang" />
+                </SelectTrigger>
+                <SelectContent className="max-h-72">
+                  {KANWIL_BRANCHES.map((k) => (
+                    <div key={k.code} className="py-1">
+                      <div className="px-2 py-0.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-slate-50">
+                        {k.code} - {k.name}
+                      </div>
+                      {k.branches.map((b) => (
+                        <SelectItem key={b} value={b}>
+                          {b}
+                        </SelectItem>
+                      ))}
+                    </div>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {field("phone", "Telepon")}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="u-bank-scope">Cakupan Mitra Bank (Bank Scope)</Label>
+            <Select
+              value={v.bank_scope || "all_bank"}
+              disabled={me.role !== "super_admin" && me.role !== "admin_ops"}
+              onValueChange={(val) => setV({ ...v, bank_scope: val })}
+            >
+              <SelectTrigger id="u-bank-scope" data-testid="user-form-bank-scope">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all_bank">Semua Bank (All Bank / Multi Mitra)</SelectItem>
+                <SelectItem value="bsi_only">Khusus BSI (Bank Syariah Indonesia Only)</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-[11px] text-slate-500">
+              {v.bank_scope === "bsi_only"
+                ? "Akun khusus BSI: hanya dapat melihat, menghitung, dan memproses transaksi BSI."
+                : "Akun All Bank: berwenang memantau seluruh transaksi mitra bank (AMS2, BSI, Capital, Mestika)."}
+            </p>
+          </div>
+
+          {v.role === "marketing" && (
+            <div className="space-y-1.5">
+              <Label htmlFor="u-manager">Sales Manager Pembina (Opsional)</Label>
+              <Select
+                value={v.manager_id || "none"}
+                disabled={me.role === "sales_manager"}
+                onValueChange={(val) => setV({ ...v, manager_id: val === "none" ? null : val })}
+              >
+                <SelectTrigger id="u-manager" data-testid="user-form-manager">
+                  <SelectValue placeholder="Pilih Sales Manager Pembina" />
+                </SelectTrigger>
+                <SelectContent className="max-h-56">
+                  <SelectItem value="none">-- Tanpa Sales Manager Khusus --</SelectItem>
+                  {eligibleManagers.map((m) => (
+                    <SelectItem key={m.id} value={m.id}>
+                      {m.name} ({m.branch}) {m.bank_scope === "bsi_only" ? "• Khusus BSI" : "• All Bank"}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-slate-500">
+                Hubungkan marketing ini ke Sales Manager pembina. Berkas pengajuan yang diproses otomatis mencatat nama manajer.
+              </p>
+            </div>
+          )}
+
+          {field("password", editing ? "Kata sandi baru (opsional)" : "Kata sandi awal (min. 12)", { type: "password", required: !editing, minLength: 12 })}
           {editing && <label className="flex items-center gap-3 text-sm"><Switch checked={v.active} onCheckedChange={(c) => setV({ ...v, active: c })} data-testid="user-form-active" />Akun aktif</label>}
           <DialogFooter><Button type="submit" className="bg-[#351080] hover:bg-[#2a0c66]" data-testid="user-form-submit">Simpan</Button></DialogFooter>
         </form>
@@ -67,13 +187,34 @@ export default function UsersPage() {
   const canEdit = (u) => {
     if (user.role === "super_admin") return true;
     if (user.role === "admin_ops") return ["admin_branch", "sales_manager", "marketing"].includes(u.role);
-    return u.role === "marketing";
+    const isSameBranch = String(u.branch || "").trim().toUpperCase() === String(user.branch || "").trim().toUpperCase();
+    if (user.role === "admin_branch") {
+      return u.role === "marketing" && isSameBranch;
+    }
+    if (user.role === "sales_manager") {
+      return u.role === "marketing" && isSameBranch && u.manager_id === user.id;
+    }
+    return false;
   };
 
   return (
     <div>
-      <PageHeader eyebrow="Administrasi" title="Pengguna & Peran" desc="Tidak ada registrasi publik. Seluruh akun dibuat oleh administrator yang berwenang."
-        actions={<CtaButton onClick={() => { setEditing(null); setOpen(true); }} data-testid="add-user-button"><Plus className="mr-2 h-4 w-4" />Tambah Pengguna</CtaButton>} />
+      <PageHeader
+        eyebrow="Administrasi"
+        title={user.role === "sales_manager" ? "Tim Marketing Saya" : "Pengguna & Peran"}
+        desc={
+          user.role === "sales_manager"
+            ? `Kelola dan pantau anggota tim marketing yang berada di bawah binaan Anda (${user.name}) di Cabang ${user.branch}.`
+            : "Tidak ada registrasi publik. Seluruh akun dibuat oleh administrator yang berwenang."
+        }
+        actions={
+          ["super_admin", "admin_ops"].includes(user.role) ? (
+            <CtaButton onClick={() => { setEditing(null); setOpen(true); }} data-testid="add-user-button">
+              <Plus className="mr-2 h-4 w-4" />Tambah Pengguna
+            </CtaButton>
+          ) : null
+        }
+      />
       <div className="lp-card">
         {/* Desktop Table View */}
         <DesktopTable testid="users-table">
@@ -84,6 +225,7 @@ export default function UsersPage() {
                 <TableHead>Email</TableHead>
                 <TableHead>Peran</TableHead>
                 <TableHead>Cabang</TableHead>
+                <TableHead>Cakupan Bank</TableHead>
                 <TableHead>Leads</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="w-[60px]" />
@@ -98,8 +240,29 @@ export default function UsersPage() {
                     <span className="rounded-md bg-[#5720B8]/10 px-2 py-0.5 text-xs font-semibold text-[#5720B8]">
                       {u.role_label}
                     </span>
+                    {u.role === "marketing" && u.manager_name && (
+                      <span className="block mt-1 text-[11px] text-slate-500 font-medium">
+                        SM: {u.manager_name}
+                      </span>
+                    )}
+                    {u.role === "sales_manager" && u.team_count !== undefined && (
+                      <span className="block mt-1 text-[11px] text-emerald-700 font-medium">
+                        {u.team_count} Tim Marketing
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell>{u.branch || "-"}</TableCell>
+                  <TableCell>
+                    {u.bank_scope === "bsi_only" ? (
+                      <span className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-[#078D67]" data-testid={`user-scope-${u.id}`}>
+                        Khusus BSI
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600" data-testid={`user-scope-${u.id}`}>
+                        Semua Bank
+                      </span>
+                    )}
+                  </TableCell>
                   <TableCell className="lp-num">{u.lead_count}</TableCell>
                   <TableCell>
                     {u.active ? (
@@ -142,9 +305,12 @@ export default function UsersPage() {
               }
               meta={[
                 u.branch || "PUSAT",
+                u.bank_scope === "bsi_only" ? "Khusus BSI" : "Semua Bank",
+                u.role === "marketing" && u.manager_name ? `SM: ${u.manager_name}` : null,
+                u.role === "sales_manager" && u.team_count !== undefined ? `${u.team_count} Marketing` : null,
                 `${u.lead_count} leads`,
                 u.active ? "Aktif" : "Nonaktif",
-              ]}
+              ].filter(Boolean)}
             >
               {canEdit(u) && (
                 <div className="mt-3 flex justify-end">
@@ -164,8 +330,7 @@ export default function UsersPage() {
           ))}
         </MobileList>
       </div>
-      <UserDialog open={open} onOpenChange={setOpen} editing={editing} onSaved={load} me={user} />
+      <UserDialog open={open} onOpenChange={setOpen} editing={editing} onSaved={load} me={user} allUsers={list} />
     </div>
   );
 }
-
