@@ -199,15 +199,31 @@ def build_app_env(runtime_vars: dict[str, str], app_user: pwd.struct_passwd) -> 
     }
 
 
-def get_pm2_binary() -> str:
-    pm2_bin = shutil.which("pm2", path="/usr/local/bin:/usr/bin:/bin") or shutil.which("pm2")
-    if not pm2_bin:
-        raise RuntimeError("RUNTIME_MISMATCH: pm2 binary not found in /usr/local/bin:/usr/bin:/bin.")
-    return pm2_bin
+def get_pm2_binary(pm2_bin: str | None = None) -> str:
+    resolved = None
+    if pm2_bin and Path(pm2_bin).is_file():
+        resolved = pm2_bin
+    else:
+        resolved = (
+            shutil.which("pm2")
+            or shutil.which("pm2", path="/usr/local/bin:/usr/bin:/bin")
+            or ("/usr/bin/pm2" if Path("/usr/bin/pm2").is_file() else None)
+        )
+    if not resolved:
+        raise RuntimeError("RUNTIME_MISMATCH: pm2 binary not found.")
+    return resolved
 
 
-def get_system_node_version(node_bin: str = "/usr/bin/node") -> str:
-    resolved = node_bin if Path(node_bin).is_file() else (shutil.which("node", path="/usr/local/bin:/usr/bin:/bin") or shutil.which("node"))
+def get_system_node_version(node_bin: str | None = None) -> str:
+    resolved = None
+    if node_bin and Path(node_bin).is_file():
+        resolved = node_bin
+    else:
+        resolved = (
+            shutil.which("node")
+            or shutil.which("node", path="/usr/local/bin:/usr/bin:/bin")
+            or ("/usr/bin/node" if Path("/usr/bin/node").is_file() else None)
+        )
     if not resolved or not Path(resolved).is_file():
         raise RuntimeError("RUNTIME_MISMATCH: Node binary not found.")
     res = subprocess.run(
@@ -216,13 +232,12 @@ def get_system_node_version(node_bin: str = "/usr/bin/node") -> str:
         capture_output=True,
         text=True,
         timeout=10,
-        env={"PATH": "/usr/local/bin:/usr/bin:/bin"},
     )
     if res.returncode != 0:
-        raise RuntimeError("RUNTIME_MISMATCH: Failed to execute node --version.")
+        raise RuntimeError(f"RUNTIME_MISMATCH: Failed to execute {resolved} --version: {res.stderr}")
     ver = res.stdout.strip().removeprefix("v")
     if not ver:
-        raise RuntimeError("RUNTIME_MISMATCH: Empty output from node --version.")
+        raise RuntimeError(f"RUNTIME_MISMATCH: Empty output from {resolved} --version.")
     return ver
 
 

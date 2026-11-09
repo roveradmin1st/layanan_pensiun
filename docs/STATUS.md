@@ -205,6 +205,7 @@ Sesuai arahan teknis `Blue_Print/command.md` (9 November 2026) dan hasil temuan 
    - Menargetkan GitHub Environment `production` dengan *concurrency group* global `production-deployment` (`cancel-in-progress: false`).
 5. **Pembaruan CI & Pengujian Mandiri:**
    - `.github/workflows/validate.yml` memakai SHA resmi `actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02` (`v4.6.2`).
-   - `ops/ci.py` menguji pembuatan paket rilis, ekstraksi ke direktori terpisah, dan 2 kali *cold start* produksi menggunakan Node nyata pada database sintetis.
-   - Suite Python (`ops/tests/test_deployment_automation.py`) memisahkan seam layanan PM2/OS dari `subprocess` global dan menguji seluruh skenario gagal/rollback serta eksekusi paket nyata dengan Node.
-   - Suite Node.js (`backend/tests/deployment-automation.test.mjs`): **70/70 pengujian backend LULUS (100%)**.
+   - `ops/ci.py` menyalin seluruh direktori data (`shutil.copytree`) agar WAL/SHM sidecars persisten, menginjeksikan symlink `ops`, `.github`, dan `docs` ke dalam sandbox isolasi, menguji pembuatan paket rilis, ekstraksi ke direktori terpisah, dan 2 kali *cold start* produksi menggunakan Node nyata pada database sintetis.
+   - `ops/server_release.py` mendeteksi runtime Node via `PATH` aktif runner (`actions/setup-node` toolcache) secara dinamis sebelum fallback sistem, tanpa membatasi PATH statis.
+   - Suite Python (`ops/tests/test_deployment_automation.py`) mengisolasi seam layanan PM2/OS tanpa kebocoran patch mock antar-`subTest` dan menguji seluruh skenario gagal/rollback serta eksekusi paket nyata dengan Node.
+   - Suite Node.js (`backend/tests/deployment-automation.test.mjs`) menggunakan `resolveRepoRoot()` dinamis dan lulus 6/6; total rangkaian pengujian backend (`npm --prefix backend test`): **70/70 pengujian backend LULUS 100%**.

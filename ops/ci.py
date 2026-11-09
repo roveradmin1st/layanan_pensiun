@@ -123,8 +123,11 @@ def main():
         (sandbox / 'backend/node_modules').symlink_to(ROOT / 'backend/node_modules', target_is_directory=True)
         shutil.copytree(ROOT / 'frontend/src', sandbox / 'frontend/src')
         (sandbox / 'frontend/dist').symlink_to(ROOT / 'frontend/dist', target_is_directory=True)
+        (sandbox / 'ops').symlink_to(ROOT / 'ops', target_is_directory=True)
+        (sandbox / '.github').symlink_to(ROOT / '.github', target_is_directory=True)
+        (sandbox / 'docs').symlink_to(ROOT / 'docs', target_is_directory=True)
         # Even child-process production checks resolve into this disposable source copy.
-        run(['npm', 'test'], sandbox / 'backend')
+        run(['npm', 'test'], sandbox / 'backend', {**os.environ, 'REPO_ROOT': str(ROOT)})
         with server(sandbox, 'development', sandbox / 'development.log') as base:
             env = {**os.environ, 'API_BASE_URL': base}
             run(['node', 'tests/security-and-api.test.mjs'], sandbox / 'backend', env)
@@ -138,8 +141,7 @@ user.password_hash=await hashPassword(password); user.auth_version=1; user.must_
 saveStore();db.close();"""
         subprocess.run(['node','--input-type=module','-e',setup], cwd=sandbox / 'backend', input=production_password, text=True, check=True, capture_output=True)
         pkg_data_dir = sandbox / 'packaged-shared-data'
-        pkg_data_dir.mkdir()
-        shutil.copyfile(sandbox / 'backend/data/enterprise.sqlite', pkg_data_dir / 'enterprise.sqlite')
+        shutil.copytree(sandbox / 'backend/data', pkg_data_dir)
         with server(sandbox, 'production', sandbox / 'production.log') as base:
             production_smoke(base, production_password)
         candidate_smoke(sandbox)

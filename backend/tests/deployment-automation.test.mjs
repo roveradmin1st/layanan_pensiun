@@ -8,7 +8,22 @@ import { disposableBackend, runFixture, startFixture } from "./helpers/disposabl
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const ROOT = path.resolve(__dirname, "../..");
+
+function resolveRepoRoot() {
+  if (process.env.REPO_ROOT && fs.existsSync(path.join(process.env.REPO_ROOT, "ops/package_release.py"))) {
+    return process.env.REPO_ROOT;
+  }
+  let curr = __dirname;
+  while (curr !== path.dirname(curr)) {
+    if (fs.existsSync(path.join(curr, "ops/package_release.py")) && fs.existsSync(path.join(curr, ".github"))) {
+      return curr;
+    }
+    curr = path.dirname(curr);
+  }
+  return path.resolve(__dirname, "../..");
+}
+
+const ROOT = resolveRepoRoot();
 
 test("1. Package Release Controller (ops/package_release.py) structure & denylist rules", () => {
   const pkgScriptPath = path.join(ROOT, "ops/package_release.py");

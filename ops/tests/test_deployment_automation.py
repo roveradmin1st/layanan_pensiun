@@ -244,6 +244,8 @@ class FakeServerEnvironment:
 
 class DeploymentAutomationTests(unittest.TestCase):
     def setUp(self):
+        self._active_patches = []
+        self.addCleanup(self._stop_active_patches)
         self.temp_dir = tempfile.TemporaryDirectory(prefix="lp-deploy-test-")
         self.root = Path(self.temp_dir.name)
         self.addCleanup(self.temp_dir.cleanup)
@@ -285,8 +287,16 @@ class DeploymentAutomationTests(unittest.TestCase):
 
         self.commit = "a" * 40
 
+    def _stop_active_patches(self):
+        for p in reversed(self._active_patches):
+            try:
+                p.stop()
+            except Exception:
+                pass
+        self._active_patches.clear()
+
     def _patch_env(self, env: FakeServerEnvironment, node_version: str = "24.22.2"):
-        stack = mock.MagicMock()
+        self._stop_active_patches()
         patches = [
             mock.patch.object(server_release, "require_root", return_value=None),
             mock.patch.object(
@@ -307,7 +317,7 @@ class DeploymentAutomationTests(unittest.TestCase):
         ]
         for p in patches:
             p.start()
-            self.addCleanup(p.stop)
+            self._active_patches.append(p)
 
     def test_package_allowlist_and_denylist_enforcement(self):
         output_tar = self.root / "test-release.tar.gz"
@@ -585,7 +595,7 @@ class DeploymentAutomationTests(unittest.TestCase):
         shared_data.mkdir()
         db_file = shared_data / "enterprise.sqlite"
         fixture(db_file)
-        (extracted_dir / "backend/data").symlink_to(shared_data)
+        (extracted_dir / "backend/data").symlink_to(shared_data, target_is_directory=True)
 
         # Run 2 cold starts in production mode with real Node
         for attempt in range(2):
