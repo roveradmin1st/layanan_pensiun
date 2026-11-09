@@ -939,7 +939,9 @@ function summarizeBsiProductLimits(prod) {
       bufferDefaultMonths: prod.insurance?.bufferDefaultMonths ?? 0,
       maxUpAge70: prod.insurance?.maxUpAge70,
       maxUpAge75: prod.insurance?.maxUpAge75,
-      maxSumAssured: prod.insurance?.maxSumAssured
+      maxSumAssured: prod.insurance?.maxSumAssured,
+      monthMultipliers: prod.insurance?.monthMultipliers,
+      decreasingRateTable: prod.insurance?.decreasingRateTable
     },
     fees: prod.fees
   };

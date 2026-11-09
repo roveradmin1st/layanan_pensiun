@@ -516,6 +516,28 @@ try {
     const recResult = sandbox.computeAms2LiveRecommendation(testInput, mktLimitsRes.data.limits.ams2);
     assert.equal(recResult.recMaxTenor, 60, "Helper frontend di Node VM wajib menghasilkan 60 bulan");
     assert.equal(recResult.recMaxTenor, ams2MaxRes.data.max_tenor, "Hasil helper frontend dan server API wajib konsisten 100%");
+
+    // Verifikasi bahwa Marketing menerima tabel tarif Simas dan live recommendation BSI berjalan otomatis
+    assert.ok(mktLimitsRes.data.limits.bsi_prapen.products.PP10.insurance.decreasingRateTable, "Marketing harus menerima tabel tarif Simas untuk PP10");
+    assert.ok(mktLimitsRes.data.limits.bsi_prapen.products.PP3.insurance.decreasingRateTable, "Marketing harus menerima tabel tarif Simas untuk PP3");
+
+    const bsiTestInput = {
+      bsi_birth_iso: "1976-10-24",
+      bsi_proyeksi_cair: "2026-11-07",
+      bsi_start_angsuran: "2026-11-01",
+      gaji_pokok: 8134916,
+      pension_salary: 4600000,
+      bsi_sub_product: "PP10",
+      bsi_req_tenor: "180",
+      bsi_price_aktif: "9.25",
+      bsi_price_pensiun: "10.50",
+      bsi_skema: "Atribusi",
+      bsi_insurance_buffer_months: "6"
+    };
+    const bsiRecMkt = sandbox.computeBsiLiveRecommendation(bsiTestInput, mktLimitsRes.data.limits.bsi_prapen);
+    assert.equal(bsiRecMkt.ready, true, "BSI recommendation harus ready untuk akun marketing");
+    assert.equal(bsiRecMkt.tarifPerMil, 76.92, "Tarif Simas untuk marketing harus 76.92");
+    assert.ok(bsiRecMkt.maxPlafond > 0, "Kapasitas maksimal plafon harus terhitung otomatis (> 0) untuk marketing");
   }
 
   // Restore AMS2 max tenor to 120
