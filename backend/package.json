@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test tests/baseline-regression.test.mjs tests/bsi-pensiun-preview.test.mjs tests/bsi-pensiun-api.test.mjs tests/lead-distribution-and-branch.test.mjs tests/bsi-product-isolation-and-calendar.test.mjs tests/production-readiness.test.mjs tests/operational-features.test.mjs tests/sm-isolation-and-rbac.test.mjs"
+    "test": "node --test tests/baseline-regression.test.mjs tests/bsi-pensiun-preview.test.mjs tests/bsi-pensiun-api.test.mjs tests/lead-distribution-and-branch.test.mjs tests/bsi-product-isolation-and-calendar.test.mjs tests/production-readiness.test.mjs tests/operational-features.test.mjs tests/sm-isolation-and-rbac.test.mjs tests/deployment-automation.test.mjs"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",

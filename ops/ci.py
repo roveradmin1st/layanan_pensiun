@@ -140,6 +140,15 @@ saveStore();db.close();"""
         with server(sandbox, 'production', sandbox / 'production.log') as base:
             production_smoke(base, production_password)
         candidate_smoke(sandbox)
+        # Exercise release packaging and manifest validation on disposable commit
+        spec_pkg = importlib.util.spec_from_file_location('lp_ci_pkg', ROOT / 'ops/package_release.py')
+        mod_pkg = importlib.util.module_from_spec(spec_pkg)
+        spec_pkg.loader.exec_module(mod_pkg)
+        test_tar = sandbox / 'ci-release.tar.gz'
+        pkg_manifest = mod_pkg.create_release_package('1' * 40, test_tar, ROOT)
+        if pkg_manifest['package_sha256'] != mod_pkg.sha256_file(test_tar):
+            raise RuntimeError('CI release packaging sha256 mismatch.')
+        print('PACKAGING PASSED: reproducible runtime package created & verified.', flush=True)
         if args.browser:
             browser_args = ['node', 'ops/browser-smoke.mjs']
             if args.system_chromium: browser_args.append('--system-chromium')
