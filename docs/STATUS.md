@@ -172,3 +172,42 @@ Alur klaim yang disetujui pemilik: persetujuan dahulu, pembayaran kemudian denga
 - **Suite Keamanan & API Terintegrasi (`backend/tests/security-and-api.test.mjs` pada backend sementara):** **LULUS 100%** (`ALL SECURITY, RBAC, BUSINESS RULE & REGRESSION TESTS PASSED (100%)`), termasuk kontrak penyamaran nominal klaim dari `fe1025a`.
 - **Frontend Production Build (`npm --prefix frontend run build`):** **LULUS** (`vite build` selesai bersih tanpa error).
 - **Kerahasiaan Folder `Blue_Print/`:** Folder `Blue_Print/` ditarik dari pelacakan Git (`git rm -r --cached Blue_Print` dan ditambahkan ke `.gitignore`) atas instruksi pemilik agar dokumen rahasia perusahaan hanya tersimpan di lokal dan tidak di-push ke GitHub.
+
+---
+
+## 7. Perbaikan Kalkulator Simas Marketing & Otomasi Deployment Rutin (9 November 2026)
+
+### A. Perbaikan Kalkulator Simas untuk Marketing (Commit `7ad57a2`)
+- **Masalah:** Pada akun Marketing, input tanggal transaksi kalkulator BSI Pra Pensiun tidak menampilkan otomatis perhitungan Biaya Asuransi Simas dan rekomendasi batas maksimal plafond, padahal pada akun Super Admin muncul normal.
+- **Penyebab:** Endpoint `GET /api/calculator-limits` membatasi pengiriman tabel tarif `simas_decreasing_rates` dan `multipliers` hanya untuk `super_admin` dan `admin_ops`. Akibatnya, pada frontend akun Marketing objek tarif bernilai `undefined` sehingga perhitungan otomatis terhambat.
+- **Perbaikan:** Menambahkan peran `marketing` dan `sales_manager` ke dalam allowlist pengiriman data referensi tarif Simas pada `GET /api/calculator-limits`.
+- **Hasil:** Perhitungan otomatis biaya asuransi Simas dan rekomendasi plafond pada akun Marketing berjalan konsisten dan akurat. CI lulus dan perubahan telah diterima.
+
+### B. Otomasi Jalur Deployment Rutin (Commit `c6b99e9`, Branch `feat/repeatable-deployment-20261109`)
+Sesuai arahan teknis `Blue_Print/command.md` (9 November 2026), dibangun satu jalur rilis resmi dan terisolasi untuk update kode berkala tanpa menyentuh data persisten:
+1. **Pengemas Runtime Bersih (`ops/package_release.py`):**
+   - Mengemas kode produksi ke dalam arsip deterministik `.tar.gz`.
+   - Menggunakan allowlist ketat (`backend/src`, `backend/package.json`, `backend/package-lock.json`, `backend/node_modules`, `frontend/dist`, `.node-version`, `ecosystem.config.cjs`, `release-manifest.json`).
+   - Larangan ketat (denylist): `.git`, `*.sqlite*`, `backend/data`, `.env*`, `*.private.json`, `*.pem`, `*.key`, `tests/`, `ops/`.
+   - Menghasilkan manifest dengan checksum SHA256 per file dan kontrak data `lp-production-20261109-v1`.
+2. **Konfigurasi PM2 Produksi (`ops/ecosystem.config.cjs`):**
+   - Mendefinisikan proses `layanan-pensiunan-api` tepat 1 instance mode `fork` pada `127.0.0.1:4000`.
+3. **Pengendali Rilis Server (`ops/server_release.py` / Target `/usr/local/bin/lp-release`):**
+   - Pengendali milik `root` dengan sub-perintah: `status`, `plan`, `apply`.
+   - Memastikan perlindungan zero-data-loss: database persisten `/srv/layanan-pensiunan/shared/data/enterprise.sqlite` tidak pernah ditimpa/di-reset. Symlink `backend/data` selalu diarahkan ke `shared/data`.
+   - Koordinasi lock ganda (`.deploy.lock` dan `.ops.lock`).
+   - Verifikasi backup sebelum aktivasi kode (`BACKUP_NOT_VERIFIED` jika gagal/umur > 10 menit).
+   - Pengalihan atomik penunjuk rilis (`current_next` -> `current`).
+   - Deteksi insiden `CURRENT_PID_MISMATCH` (mendeteksi jika symlink `current` tidak sinkron dengan `cwd` proses PM2 aktif).
+   - Rollback aman (`failed_code_restored`) jika startup port 4000 gagal tanpa menyentuh database.
+   - Bersifat idempoten (*no-op*) jika commit target sudah aktif dan sehat.
+4. **Alur Kerja Deployment GitHub Actions (`.github/workflows/deploy.yml`):**
+   - Dipicu via `workflow_dispatch` dengan input wajib `commit_sha` (validasi format 40-karakter heksadesimal).
+   - Menargetkan GitHub Environment `production` dengan *concurrency group* global `production-deployment` (`cancel-in-progress: false`).
+   - Mengunduh artifact tepercaya `runtime-release-<sha>` dari run CI yang berhasil, mentransfer via SSH, dan menjalankan `sudo /usr/local/bin/lp-release apply`.
+5. **Pembaruan CI & Pengujian Mandiri:**
+   - `.github/workflows/validate.yml` diperbarui untuk mengemas dan mengunggah artifact `runtime-release-<sha>` dengan retensi 14 hari.
+   - `ops/ci.py` diperbarui dengan pengujian pembuatan paket rilis dan verifikasi checksum.
+   - Suite Python baru: `ops/tests/test_deployment_automation.py`.
+   - Suite Node.js baru: `backend/tests/deployment-automation.test.mjs`.
+   - **Hasil Validasi:** Seluruh 69 pengujian backend lulus (`69 pass, 0 fail`), dan build frontend Vite sukses (38s).
