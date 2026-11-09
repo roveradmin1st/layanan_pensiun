@@ -213,3 +213,27 @@ Sesuai arahan teknis `Blue_Print/command.md` (9 November 2026) dan hasil temuan 
      - Run #19 (commit `28e7759`): **SUCCESS** (1m 40s) — URL: `https://github.com/roveradmin1st/layanan_pensiun/actions/runs/42598038239`.
      - Run #20 (PR #2): **SUCCESS** (1m 45s) — URL: `https://github.com/roveradmin1st/layanan_pensiun/actions/runs/42598048958`.
      - Artifact rilis terverifikasi: `runtime-release-28e7759e69d39ac85af0b12b9eadcc6e01c41a67` (2.8 MB, terbukti bebas dari `.env`, database, testing, maupun skrip operator).
+
+### C. Pengambilalihan perbaikan pemilihan paket (9 November 2026)
+
+- Pemilik meminta perbaikan dilanjutkan dan diterapkan ke VPS. Branch tugas
+  `fix/deploy-artifact-selection-20261109` dibuat dari `8168589`; tidak mengubah
+  kode bisnis, akun, password atau database produksi.
+- CI push `8168589` [42598468454](https://github.com/roveradmin1st/layanan_pensiun/actions/runs/42598468454)
+  dan PR #2 [42598479042](https://github.com/roveradmin1st/layanan_pensiun/actions/runs/42598479042)
+  diperiksa melalui halaman GitHub publik dan keduanya Success.
+- Workflow deploy kini memilih successful **push** run, memverifikasi event,
+  `headSha` dan conclusion sebelum download, serta meminta nama archive tepat.
+  Ini mencegah pemilihan paket PR terbaru yang memakai SHA merge berbeda.
+- Uji regresi menjalankan Bash asli dari langkah workflow dengan CLI GitHub
+  sintetis: PR lebih baru dari push, event/SHA/conclusion salah, tidak ada run
+  sukses, dan nama archive salah. Tidak memakai koneksi GitHub/SSH atau data VPS.
+- Validasi lokal `python3 ops/ci.py --skip-install --browser --system-chromium`
+  pada Node **24.22.2** dan Python 3.12 lulus: 46 tes operasi, 70 tes backend,
+  suite API keamanan/RBAC/bisnis, build frontend, kandidat sintetis, ekstraksi
+  paket dengan dua cold start, serta alur browser sintetis. Dependensi lockfile
+  sama dengan checkout validasi sebelumnya. Actionlint juga lulus.
+- Ditambahkan wrapper instalasi `ops/lp-release` dan langkah pemasangan operator
+  pada RUNBOOK. Pemasangan/VPS belum diklaim berhasil; hasil doctor terbaru dari
+  operator diminta sebelum aktivasi. Konfigurasi secret GitHub dan deployment
+  nyata pertama tetap membutuhkan bukti dari server.

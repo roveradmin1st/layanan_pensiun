@@ -2,6 +2,57 @@
 
 Mulai selalu dari [STATUS.md](STATUS.md), [SOP.md](SOP.md), dan instruksi aktif di [`Blue_Print/command.md`](../Blue_Print/command.md).
 
+## Update rutin dengan controller rilis (9 November 2026)
+
+Pemilik telah meminta pengambilalihan perbaikan dan penerapan ke VPS. Gunakan
+paket commit yang lulus pengujian, tanpa reset akun atau database. Instalasi
+controller dan aktivasi aplikasi merupakan dua langkah terpisah; jangan
+menganggap CI hijau sebagai bukti VPS sudah diperbarui.
+
+Setelah checkout operator dipin ke commit yang ditinjau, pemasangan pertama:
+
+```bash
+sudo install -d -o root -g root -m 755 /usr/local/lib/layanan-pensiunan/ops
+sudo install -o root -g root -m 644 ops/server_release.py /usr/local/lib/layanan-pensiunan/ops/server_release.py
+sudo install -o root -g root -m 755 ops/lp-release /usr/local/bin/lp-release
+sudo /usr/local/bin/lp-release status
+```
+
+Pemasangan ini tidak mengaktifkan rilis. `server_backup.py` terpasang yang sudah
+teruji tetap digunakan. Ambil paket `runtime-release-<full SHA>` dari successful
+**push** run `validate.yml` commit yang disetujui, bukan paket PR dengan SHA merge.
+Ekstrak ZIP unduhan GitHub di laptop lalu unggah `release-<full SHA>.tar.gz` ke
+folder operator VPS. Simpan path sebenarnya pada `lp_archive` dan full SHA pada
+`lp_commit`, lalu jalankan pemeriksaan sebelum aktivasi:
+
+```bash
+sudo /usr/local/bin/lp-release plan --archive "$lp_archive" --commit "$lp_commit"
+```
+
+Hasil harus `plan_ready` dengan rilis lama sesuai proses yang sebenarnya. Bila
+`CURRENT_PID_MISMATCH`, hentikan alur dan periksa proses/current; jangan
+mengganti symlink berdasarkan tebakan. Untuk aktivasi yang telah diminta pemilik:
+
+```bash
+sudo systemd-run --unit="lp-release-${lp_commit}" --collect --wait \
+  --property=Type=oneshot --property=TimeoutStartSec=900 \
+  /usr/local/bin/lp-release apply --archive "$lp_archive" --commit "$lp_commit"
+sudo /usr/local/bin/lp-release status
+sudo python3 -I /usr/local/lib/layanan-pensiunan/ops/server_doctor.py
+```
+
+Systemd meneruskan operasi bila terminal terputus; periksa unit/receipt yang sama
+sebelum mencoba ulang. Tepat satu backend membutuhkan restart singkat. Bukti
+selesai adalah receipt `active_verified`, proses/current/commit yang cocok,
+HTTPS berfungsi, dan pemeriksaan fungsi oleh pemilik. Pemulihan otomatis hanya
+mengembalikan kode kompatibel dan tidak memulihkan database lama.
+
+Untuk tombol GitHub, `deploy.yml` harus dipublikasikan ke default branch serta
+Environment `production` dikonfigurasi dengan `DEPLOY_SSH_KEY`,
+`DEPLOY_SSH_KNOWN_HOSTS` yang diverifikasi dan akses sudo controller yang
+dibatasi. Jangan membagikan key/password melalui chat. Sampai konfigurasi itu
+selesai dan diuji, gunakan controller yang sama melalui terminal operator.
+
 ## Status Operasional Penting (Acuan Audit 8 November 2026)
 
 1. **Rilis Produksi Sudah Aktif (`c76e823`):**
