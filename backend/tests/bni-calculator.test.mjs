@@ -716,10 +716,50 @@ db.close();`);
   }
 });
 
-test("BNI Fleksi Production Preservation: migrasi store 6a791a3 mempertahankan data, akun, dan parameter produksi secara idempoten", () => {
+test("BNI Fleksi Production Preservation: migrasi store 6a791a3 idempoten dan boot production bersifat read-only terhadap SQLite", () => {
   const fixture = disposableBackend();
   try {
-    const prep = runFixture(fixture, `import { getStore, saveStore, db } from './src/db/database.js';
+    // 1. Uji migrasi store dari format 6a791a3 (engine: partner_bank) pada store penuh dev secara idempoten
+    const prepDev = runFixture(fixture, `import { getStore, saveStore, db } from './src/db/database.js';
+const state = getStore();
+state.partner_parameters.bsi_prapen.products.PP10.loan.maxPlafondAbsolute = 432000000;
+state.partner_parameters.bank_bni = { id: 'bank_bni', code: 'BNI-FLEKSI', name: 'Bank BNI', engine: 'partner_bank', active: false, interestRateAnnual: 10.75 };
+state.parameter_migration_snapshots = (state.parameter_migration_snapshots || []).filter(s => s.partner_key !== 'bank_bni');
+saveStore();
+console.log(JSON.stringify({ usersCount: state.users.length }));
+db.close();`, 'development');
+    assert.equal(prepDev.status, 0, prepDev.stderr);
+    const expectedUsers = JSON.parse(prepDev.stdout.trim()).usersCount;
+
+    const migrateRun = runFixture(fixture, `import { getStore, db } from './src/db/database.js';
+const state = getStore();
+console.log(JSON.stringify({
+  usersCount: state.users.length,
+  bsiCustomMax: state.partner_parameters.bsi_prapen.products.PP10.loan.maxPlafondAbsolute,
+  bniEngine: state.partner_parameters.bank_bni.engine,
+  bniSnapshots: state.parameter_migration_snapshots.filter(s => s.partner_key === 'bank_bni').length
+}));
+db.close();`, 'development');
+    assert.equal(migrateRun.status, 0, migrateRun.stderr);
+    assert.deepEqual(JSON.parse(migrateRun.stdout.trim()), {
+      usersCount: expectedUsers,
+      bsiCustomMax: 432000000,
+      bniEngine: 'bni_fleksi',
+      bniSnapshots: 1
+    });
+
+    // Jalankan kedua kali -> idempoten (snapshot tidak bertambah)
+    const migrateRun2 = runFixture(fixture, `import { getStore, db } from './src/db/database.js';
+const state = getStore();
+console.log(JSON.stringify({
+  bniSnapshots: state.parameter_migration_snapshots.filter(s => s.partner_key === 'bank_bni').length
+}));
+db.close();`, 'development');
+    assert.equal(migrateRun2.status, 0, migrateRun2.stderr);
+    assert.equal(JSON.parse(migrateRun2.stdout.trim()).bniSnapshots, 1);
+
+    // 2. Uji strict read-only pada boot production dengan 1 akun & transaksi sintetis (tanpa demo reseed atau mutasi SQLite)
+    const prepProd = runFixture(fixture, `import { getStore, saveStore, db } from './src/db/database.js';
 import { hashPassword } from './src/security/passwords.js';
 const state = getStore();
 const pwd = await hashPassword(${JSON.stringify(PASSWORD)});
@@ -734,50 +774,45 @@ state.applications = [{ id: 'app-prod-1', app_no: 'APP-PROD-01', lead_name: 'NAS
 state.simulations = [{ id: 'sim-prod-1', sim_no: 'SIM-PROD-01', bank_key: 'bsi_prapen', result: { name: 'NASABAH PROD SINTETIS', plafond: 100000000, tenor: 60 }, created_at: '2026-11-15T00:00:00.000Z' }];
 state.claims = [{ id: 'clm-prod-1', claim_no: 'CLM-PROD-01', application_id: 'app-prod-1', branch: 'BANDUNG', bank_key: 'bsi_prapen', amount: 500000, status: 'APPROVED', history: [] }];
 state.partner_parameters.bsi_prapen.products.PP10.loan.maxPlafondAbsolute = 432000000;
-state.partner_parameters.bank_bni = { id: 'bank_bni', code: 'BNI-FLEKSI', name: 'Bank BNI', engine: 'partner_bank', active: false, interestRateAnnual: 10.75 };
-state.parameter_migration_snapshots = [];
 saveStore();
-db.close();`);
-    assert.equal(prep.status, 0, prep.stderr);
+db.close();`, 'development');
+    assert.equal(prepProd.status, 0, prepProd.stderr);
 
-    const firstProdBoot = runFixture(fixture, `import { getStore, db } from './src/db/database.js';
-const state = getStore();
-console.log(JSON.stringify({
-  usersCount: state.users.length,
-  leadName: state.leads[0]?.name,
-  appNo: state.applications[0]?.app_no,
-  simNo: state.simulations[0]?.sim_no,
-  claimStatus: state.claims[0]?.status,
-  bsiCustomMax: state.partner_parameters.bsi_prapen.products.PP10.loan.maxPlafondAbsolute,
-  bniEngine: state.partner_parameters.bank_bni.engine,
-  bniSnapshots: state.parameter_migration_snapshots.filter(s => s.partner_key === 'bank_bni').length
-}));
-db.close();`, 'production');
-    assert.equal(firstProdBoot.status, 0, firstProdBoot.stderr);
-    const out1 = JSON.parse(firstProdBoot.stdout.trim());
-    assert.deepEqual(out1, {
-      usersCount: 1,
-      leadName: 'NASABAH PROD SINTETIS',
-      appNo: 'APP-PROD-01',
-      simNo: 'SIM-PROD-01',
-      claimStatus: 'APPROVED',
-      bsiCustomMax: 432000000,
-      bniEngine: 'bni_fleksi',
-      bniSnapshots: 1
-    });
+    const beforeProd = runFixture(fixture, `import { db } from './src/db/database.js';
+console.log(db.prepare("SELECT payload FROM kv_store WHERE collection='enterprise_state'").get().payload);
+db.close();`, 'development').stdout.trim();
 
-    const secondProdBoot = runFixture(fixture, `import { getStore, db } from './src/db/database.js';
+    for (let i = 0; i < 2; i++) {
+      const prodBoot = runFixture(fixture, `import { getStore, db } from './src/db/database.js';
 const state = getStore();
-console.log(JSON.stringify({
-  bniSnapshots: state.parameter_migration_snapshots.filter(s => s.partner_key === 'bank_bni').length,
-  bsiCustomMax: state.partner_parameters.bsi_prapen.products.PP10.loan.maxPlafondAbsolute
-}));
+if (state.users.length !== 1 || state.partner_parameters.bank_bni.engine !== 'bni_fleksi') {
+  throw new Error('Unexpected state change in production');
+}
 db.close();`, 'production');
-    assert.equal(secondProdBoot.status, 0, secondProdBoot.stderr);
-    assert.deepEqual(JSON.parse(secondProdBoot.stdout.trim()), {
-      bniSnapshots: 1,
-      bsiCustomMax: 432000000
-    });
+      assert.equal(prodBoot.status, 0, prodBoot.stderr);
+    }
+
+    const afterProd = runFixture(fixture, `import { db } from './src/db/database.js';
+console.log(db.prepare("SELECT payload FROM kv_store WHERE collection='enterprise_state'").get().payload);
+db.close();`, 'development').stdout.trim();
+    assert.equal(afterProd, beforeProd, "Boot production tidak boleh memodifikasi payload enterprise_state");
+
+    // 3. Store minimal produksi tanpa key bank_bni (pola ops/tests/test_production.py) tidak boleh dimutasi saat boot production
+    const minProdPrep = runFixture(fixture, `import { getStore, saveStore, db } from './src/db/database.js';
+const state = getStore();
+delete state.partner_parameters.bank_bni;
+saveStore();
+db.close();`, 'development');
+    assert.equal(minProdPrep.status, 0, minProdPrep.stderr);
+    const minBefore = runFixture(fixture, `import { db } from './src/db/database.js';
+console.log(db.prepare("SELECT payload FROM kv_store WHERE collection='enterprise_state'").get().payload);
+db.close();`, 'development').stdout.trim();
+    const minBoot = runFixture(fixture, `import { getStore, db } from './src/db/database.js'; getStore(); db.close();`, 'production');
+    assert.equal(minBoot.status, 0, minBoot.stderr);
+    const minAfter = runFixture(fixture, `import { db } from './src/db/database.js';
+console.log(db.prepare("SELECT payload FROM kv_store WHERE collection='enterprise_state'").get().payload);
+db.close();`, 'development').stdout.trim();
+    assert.equal(minAfter, minBefore, "Boot production pada store tanpa bank_bni tidak boleh menyisipkan key baru");
   } finally {
     fixture.cleanup();
   }

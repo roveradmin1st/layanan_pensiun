@@ -838,12 +838,8 @@ function ensureBniParameterUpgrade(state) {
 }
 
 export function ensureStoreUpgrades(state) {
-  // Demo fixture upgrades are never allowed to create accounts/transactions in production.
-  // Hanya migrasi skema parameter bank_bni yang aman & idempoten (berbasis snapshot) yang berjalan di produksi.
-  if (IS_PROD) {
-    validateState(state, { production: true });
-    return ensureBniParameterUpgrade(state);
-  }
+  // Demo fixture upgrades are never allowed to create accounts/transactions or mutate state on production boot.
+  if (IS_PROD) { validateState(state, { production: true }); return false; }
   let changed = false;
   const defaultPwdHash = demoPasswordHash("Password123!");
   const legacySeedHashes = new Set([
