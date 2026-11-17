@@ -35,6 +35,7 @@ export default function Login() {
   const { login, quickRole } = useAuth();
   const nav = useNavigate();
   const isDevOrDemo =
+    import.meta.env.DEV &&
     typeof window !== "undefined" &&
     (window.location.hostname === "localhost" ||
       window.location.hostname === "127.0.0.1" ||
@@ -148,7 +149,7 @@ export default function Login() {
 
       <InstallAppButton variant="login" />
 
-      {/* Panel Pilihan Peran Cepat (Hanya aktif di Localhost atau saat ada parameter ?demo=1) */}
+      {/* Panel simulasi hanya tersedia pada build pengembangan. */}
       {isDevOrDemo && (
         <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid="quick-role-panel">
           <div className="flex items-center gap-2">

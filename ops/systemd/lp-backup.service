@@ -1,0 +1,10 @@
+[Unit]
+Description=Layanan Pensiunan verified SQLite backup
+After=local-fs.target
+
+[Service]
+Type=oneshot
+UMask=0077
+Nice=10
+ExecStart=/usr/bin/python3 -I /usr/local/lib/layanan-pensiunan/ops/server_backup.py
+TimeoutStartSec=360

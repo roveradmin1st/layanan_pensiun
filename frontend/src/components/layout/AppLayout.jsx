@@ -28,26 +28,32 @@ const MOBILE_BOTTOM_NAV = [
   { to: "/leads", label: "Leads", icon: Users },
   { to: "/kalkulator", label: "Kalkulator", icon: Calculator },
   { to: "/progress", label: "Progress", icon: ListChecks },
-  { to: "/pengaturan", label: "Parameter", icon: Settings },
+  { to: "/pengaturan", label: "Pengaturan", icon: Settings },
 ];
 
 function NavItems({ user, onNavigate }) {
   return (
     <nav className="flex flex-col gap-1" aria-label="Navigasi utama">
-      {NAV.filter((n) => !n.admin || isAdmin(user)).map(({ to, label, icon: Icon }) => (
+      {NAV.filter((n) => {
+        if (n.to === "/audit") return ["super_admin", "admin_ops"].includes(user?.role);
+        if (n.admin) return isAdmin(user);
+        return true;
+      }).map(({ to, label, icon: Icon }) => (
         <NavLink
           key={to}
           to={to}
           onClick={onNavigate}
           data-testid={`nav-${to.slice(1)}`}
           className={({ isActive }) =>
-            `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-              isActive ? "bg-[#5720B8]/10 text-[#5720B8]" : "text-slate-600 hover:bg-slate-50 hover:text-[#351080]"
+            `relative flex items-center gap-3 rounded-lg px-3.5 py-2.5 text-sm font-medium transition-all ${
+              isActive
+                ? "bg-[#351080]/[0.08] font-semibold text-[#351080] before:absolute before:inset-y-1.5 before:left-0 before:w-1 before:rounded-r before:bg-[#351080]"
+                : "text-slate-600 hover:bg-slate-50 hover:text-[#17223B]"
             }`
           }
         >
-          <Icon className="h-[18px] w-[18px]" />
-          {label}
+          <Icon className="h-[18px] w-[18px] shrink-0" />
+          <span className="truncate">{label}</span>
         </NavLink>
       ))}
     </nav>
@@ -55,14 +61,13 @@ function NavItems({ user, onNavigate }) {
 }
 
 function RoleSwitcher({ user, onSwitch }) {
-  const isLocalOrDemo =
+  const isExplicitDemo =
+    import.meta.env.DEV &&
     typeof window !== "undefined" &&
-    (window.location.hostname === "localhost" ||
-      window.location.hostname === "127.0.0.1" ||
-      new URLSearchParams(window.location.search).get("demo") === "1");
+    new URLSearchParams(window.location.search).get("demo") === "1";
 
-  // Sembunyikan panel pindah role cepat jika diakses melalui Tunneling (Ngrok/Cloudflare) atau Domain Publik
-  if (!isLocalOrDemo) return null;
+  // Tampilkan hanya jika parameter eksplisit ?demo=1 diaktifkan
+  if (!isExplicitDemo) return null;
 
   const roles = [
     ["super_admin", "1. Super Admin"],
