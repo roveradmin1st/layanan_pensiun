@@ -39,8 +39,9 @@ Setiap sesi AI baru wajib memeriksa dokumen berikut pada checkout pengembangan:
 
 - **Sudah Terbukti Bekerja:**
   - Arsitektur runtime produksi: proses PM2 `layanan-pensiunan-api` berjalan sebagai `lpapp` (tepat 1 instance mode `fork` pada `127.0.0.1:4000`, Node sesuai `.node-version`) di balik Nginx HTTPS (`https://139.190.106.136/`), membuka `/srv/layanan-pensiunan/shared/data/enterprise.sqlite` (+ `-wal`, `-shm`) dengan kontrak data `lp-production-20261109-v1`. Untuk versi/commit rilis yang sedang aktif beserta tanggal verifikasinya, lihat catatan bertanggal dan receipt terbaru di `docs/STATUS.md`.
+  - Jalur rilis terkendali (`ops/package_release.py`, `ops/server_release.py` / `lp-release`, `.github/workflows/deploy.yml`): pada sinkronisasi 15 November 2026, controller VPS melaporkan `status=active_verified`, `alignment=aligned`, dan `database_healthy=true` pada baseline produksi `6a791a34b4f90111fabe3e5ce55fef08a8395913` (`feat/repeatable-deployment-20261109`). `origin/main` masih menunjuk `52ac0b883d903bca2dd35c3dd3ca43a8243d662f` dan tidak boleh dipakai sebagai baseline; setiap `git push` ke branch fitur tetap tidak otomatis mengubah VPS.
   - Validasi CI (`python3 ops/ci.py` dan GitHub Actions `.github/workflows/validate.yml`) pada database sementara, termasuk suite API terintegrasi (`backend/tests/security-and-api.test.mjs`).
-- **Belum Tervalidasi / Ditunda (Jangan Diasumsikan Aktif):**
-  - **Deployment rutin satu tombol (`ops/package_release.py`, `ops/server_release.py` / `lp-release`, `.github/workflows/deploy.yml`):** Spesifikasi telah ditetapkan pada `Blue_Print/command.md` (9 November 2026), namun belum diimplementasikan/dipasang di produksi. Setiap `git push` tidak otomatis memperbarui VPS.
-  - **`ops/production_cutover.py`:** Alat transisi satu kali UAT→produksi yang pernah gagal saat aktivasi; riset/perbaikannya ditunda pemilik. Jangan dijalankan ulang untuk update rutin.
+- **Ditunda / Alat Historis (Jangan Diasumsikan Aktif untuk Fitur Baru):**
+  - **Taspen / Si EMan (`heriansyah si eman`) dan Landing Page:** Taspen/Si EMan ditunda dan Landing Page dikerjakan terpisah dari branch BNI (`feat/calc-bni-20261115`).
+  - **`ops/production_cutover.py`:** Alat transisi satu kali UAT→produksi yang pernah gagal saat aktivasi awal 8 November 2026; riset/perbaikannya ditunda pemilik. Jangan dijalankan ulang untuk update rutin.
   - **`/srv/layanan-pensiunan/deploy.sh`:** Belum dinilai kesesuaiannya dalam audit 8 November 2026; jangan dianggap sebagai perintah update resmi.

@@ -12,8 +12,8 @@ Setiap perubahan mengikuti alur resmi 7 tahap berikut:
 **`pengembangan → pengujian → GitHub → CI berhasil → deployment saat diminta pemilik → verifikasi → catat versi`**
 
 1. **Pengembangan:**
-   - Kerjakan di checkout kerja terpisah (idealnya pada laptop) dengan branch sesuai pekerjaan.
-   - Pastikan berpijak pada baseline runtime produksi yang terpasang (`c76e823db5a047807bea77ad6c03f2985e62560b` dari branch `fix/production-readiness-20261109`) atau penerusnya yang sah, sehingga perbaikan keamanan produksi tetap terbawa. Jangan menganggap `main` lama atau branch dengan push terbaru otomatis layak dipasang tanpa memeriksa asal perubahannya.
+   - Kerjakan di checkout/branch kerja terpisah (idealnya pada laptop) sesuai tujuan pekerjaan.
+   - Pastikan berpijak pada baseline runtime produksi yang terverifikasi aktif (`6a791a34b4f90111fabe3e5ce55fef08a8395913` pada branch `feat/repeatable-deployment-20261109` per sinkronisasi 15 November 2026) atau penerusnya yang sah, sehingga perbaikan keamanan produksi dan isolasi tetap terbawa. `origin/main` masih menunjuk `52ac0b883d903bca2dd35c3dd3ca43a8243d662f`; jangan menganggap `main` lama atau branch dengan push terbaru otomatis layak dipasang tanpa memeriksa asal perubahannya.
 2. **Pengujian:**
    - Jalankan tes yang relevan dan build (`python3 ops/ci.py` atau suite pengujian pada salinan database sementara).
    - Jangan pernah mengarahkan suite pengujian mutasi ke VPS dan jangan menjalankan backend rilis lama di VPS untuk tes (karena symlink `backend/data` mengarah ke `shared/data` produksi).
@@ -40,13 +40,12 @@ Setiap perubahan mengikuti alur resmi 7 tahap berikut:
 
 - **Prosedur yang Sudah Terbukti Bekerja:**
   - **Validasi CI (`ops/ci.py` & GitHub Actions):** Sudah tersedia dan berjalan menguji kode pada salinan database sementara tanpa akses deploy.
-  - **Aktivasi Rilis Manual Terkendali:** Rilis produksi `c76e823` saat ini terbukti berjalan stabil di VPS (`/srv/layanan-pensiunan/current` → `/srv/layanan-pensiunan/releases/layanan-pensiunan-c76e823-production`) setelah diaktifkan melalui langkah manual yang diizinkan pemilik.
+  - **Deployment Rutin Terkendali via Controller Rilis (`lp-release` / `ops/server_release.py`):** Telah terpasang dan terverifikasi pada sinkronisasi 15 November 2026 dengan baseline produksi `6a791a34b4f90111fabe3e5ce55fef08a8395913` (`feat/repeatable-deployment-20261109`: `status=active_verified`, `alignment=aligned`, `database_healthy=true`). Sebelumnya rilis awal `c76e823` (8 Nov 2026) dan `fe1025a` (9 Nov 2026) diaktifkan secara manual. Setiap `git push` tetap tidak otomatis memperbarui VPS tanpa eksekusi rilis yang disetujui.
   - **Snapshot SQLite Konsisten & Enkripsi GPG:** Backup menggunakan SQLite Backup API sebagai `lpapp` dan ekspor terenkripsi GPG ke laptop telah teruji pada tahap persiapan (status timer dan keberhasilan backup terbaru tetap wajib diperiksa saat bertugas).
-- **Rencana Otomasi & Alat Lama yang Belum Tervalidasi / Ditunda (Jangan Diasumsikan Aktif):**
-  - **Deployment Rutin Satu Tombol (*Automated Deployment*):** Baru merupakan sasaran perbaikan berikutnya; **belum tersedia dan belum tervalidasi aman** untuk update produksi.
-  - **Alat `ops/production_cutover.py`:** Alat transisi satu kali dari UAT ke produksi ini pernah gagal saat aktivasi. Pemilik menunda riset/perbaikan alat deployment tersebut. **Jangan menjalankan ulang `production_cutover.py` atau skrip aktivasi historis untuk update rutin.**
+- **Alat Lama / Kebijakan yang Ditunda (Jangan Dipakai untuk Update Rutin):**
+  - **Alat `ops/production_cutover.py`:** Alat transisi satu kali dari UAT ke produksi ini pernah gagal saat aktivasi awal 8 November 2026. Pemilik menunda riset/perbaikan alat cutover satu kali tersebut. **Jangan menjalankan ulang `production_cutover.py` atau skrip aktivasi historis untuk update rutin.**
   - **File `/srv/layanan-pensiunan/deploy.sh`:** File ini ada di VPS, tetapi isi dan kesesuaiannya belum dinilai dalam audit 8 November 2026. **Jangan menganggap file itu sebagai perintah update resmi.**
-  - **Skrip di `/usr/local/lib/layanan-pensiunan/ops/`:** Keberadaan skrip yang pernah dipasang tidak membuktikan semuanya layak dipakai ulang tanpa pemeriksaan.
+  - **Skrip lama di `/usr/local/lib/layanan-pensiunan/ops/`:** Gunakan hanya `lp-release` (`server_release.py`), `server_backup.py`, `server_doctor.py`, dan `server_export.py` yang telah direview dan dipasang resmi.
 
 ---
 
@@ -91,6 +90,6 @@ Setiap perubahan mengikuti alur resmi 7 tahap berikut:
 2. **Arsipkan UAT:** Buat snapshot SQLite konsisten sebagai `lpapp`, enkripsi GPG, simpan di laptop pemilik, dan uji pemulihan di lokasi terpisah.
 3. **Siapkan rencana & kandidat (pekerjaan satu kali pra-peluncuran):** Gunakan `ops/production.py` pada snapshot offline untuk menyiapkan kandidat awal tanpa menyentuh `shared/data` live.
 4. **Uji kandidat & rilis:** Gunakan `ops/check_candidate.py` dan `ops/check_staged_release.py` pada salinan sementara, serta `python3 ops/ci.py` di checkout pengembangan.
-5. **Aktivasi & verifikasi:** Aktivasi rilis produksi `c76e823` telah diselesaikan secara manual dan terkonfirmasi pada audit 8 November 2026 (lihat [STATUS.md](STATUS.md)).
+5. **Aktivasi & verifikasi:** Aktivasi awal rilis produksi `c76e823` diselesaikan manual pada 8 November 2026, kemudian diteruskan pembaruan fitur (`fe1025a`) hingga rilis terkendali via controller `lp-release` pada commit `6a791a34b4f90111fabe3e5ce55fef08a8395913` (`feat/repeatable-deployment-20261109`) yang terverifikasi `status=active_verified`, `alignment=aligned`, `database_healthy=true` per 15 November 2026 (lihat [STATUS.md](STATUS.md)).
 
 Pegangan terkait: [STATUS.md](STATUS.md), [RUNBOOK.md](RUNBOOK.md), [CHECKLIST-PEMILIK.md](CHECKLIST-PEMILIK.md), dan [MULAI-DI-SINI.md](MULAI-DI-SINI.md).

@@ -9,6 +9,7 @@ import {
   BSI_SCHEMA_VERSION,
   createDefaultBsiProducts
 } from "./bsi-product-config.js";
+import { createDefaultBniConfig } from "./bni-product-config.js";
 
 export const DEFAULT_PARTNER_PARAMETERS = {
   version: "3.0.0-ENTERPRISE",
@@ -141,30 +142,7 @@ export const DEFAULT_PARTNER_PARAMETERS = {
     retentionMultiplier: 2
   },
 
-  bank_bni: {
-    id: "bank_bni",
-    code: "BNI-FLEKSI",
-    name: "Bank BNI — BNI Fleksi Pensiun",
-    shortName: "Bank BNI",
-    type: "bank_konvensional",
-    engine: "partner_bank",
-    active: false,
-    badgeColor: "green",
-    description: "Kredit lunak BNI Fleksi Pensiun & Prapensiun dengan suku bunga kompetitif.",
-    interestRateAnnual: 10.75,
-    interestMethod: "annuity",
-    maxInstallmentRatio: 85.0,
-    maxPlafondAbsolute: 500000000,
-    maxTenorMonths: 180,
-    maxEndAgeYears: 75,
-    maxEndAgeMonths: 0,
-    maxEntryAgeYears: 73,
-    provisionRatePercent: 1.0,
-    insuranceRatePercent: 8.5,
-    adminFee: 250000,
-    tataLaksanaRatePercent: 0.0,
-    retentionMultiplier: 1
-  },
+  bank_bni: createDefaultBniConfig(),
 
   bank_mestika: {
     id: "bank_mestika",

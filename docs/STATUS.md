@@ -1,19 +1,24 @@
 # Status Server dan Kesiapan Operasional — Layanan Pensiunan
 
-Tanggal acuan konteks server: **8–9 November 2026** (Peluncuran operasional dengan data nyata dijadwalkan **Senin, 9 November 2026**).
-Dasar fakta server: hasil audit folder, symlink, proses, dan file database yang dibuka oleh proses, dikirim pemilik pada 8 November 2026, serta catatan bertanggal perkembangan rilis dan CI pada 8–9 November 2026. Fakta historis persiapan (7 November 2026) dibedakan secara tegas dari hasil audit aktual ini.
+Tanggal acuan konteks server terkini: **15 November 2026** (sinkronisasi pemeriksaan GitHub dan controller VPS).
+Dasar fakta server: hasil pelaporan controller VPS (`lp-release` / `ops/server_release.py`) serta verifikasi commit pada repository `https://github.com/roveradmin1st/layanan_pensiun.git` per **15 November 2026**. Catatan audit sebelumnya (8–9 November 2026 pada rilis `c76e823`/`fe1025a`) dan persiapan awal (7 November 2026) dipertahankan di bawah sebagai riwayat historis bertanggal, bukan kondisi produksi terakhir.
 
-## 1. Kondisi Server Aktual yang Terkonfirmasi oleh Audit (8 November 2026)
+## 1. Kondisi Server Aktual yang Terkonfirmasi (Sinkronisasi 15 November 2026)
 
-- **Symlink Rilis Aktif (`current`):** `/srv/layanan-pensiunan/current` mengarah ke `/srv/layanan-pensiunan/releases/layanan-pensiunan-c76e823-production` (pada saat audit 8 November 2026; lihat pembaruan status aktivasi fitur 8–9 November 2026 di Bagian 5).
-- **Proses & Runtime:** Proses yang mendengarkan port aplikasi (`layanan-pensiunan-api` pada PM2) berjalan sebagai user layanan `lpapp` (satu instance mode *fork*, Node `24.22.2`), dengan *working directory* `/srv/layanan-pensiunan/releases/layanan-pensiunan-c76e823-production/backend` (pada saat audit 8 November 2026).
-- **Baseline Commit Terpasang (Audit 8 November 2026):** Manifest rilis tersebut mencatat commit `c76e823db5a047807bea77ad6c03f2985e62560b` (branch asal baseline produksi: `fix/production-readiness-20261109` di repository `https://github.com/roveradmin1st/layanan_pensiun.git`). Commit tersebut adalah baseline runtime yang terkonfirmasi pada audit 8 November 2026; untuk rilis fitur `fe1025a94ebcb9ca6b078fa57e00287015ff8dc0` (`fix/release-operational-ux-20261108`) pada 9 November 2026, lihat Bagian 5.
-- **Database Produksi Persisten:** Proses membuka `/srv/layanan-pensiunan/shared/data/enterprise.sqlite`, beserta sidecar `enterprise.sqlite-wal` dan `enterprise.sqlite-shm`. Dokumen unggahan disimpan sebagai BLOB di dalam SQLite.
-- **Alamat Listen & Alur Jaringan:** Alamat listen backend yang ditemukan adalah `127.0.0.1:4000`. Alur layanan: Browser pengguna (tanpa VPN) → Nginx HTTPS (`https://139.190.106.136/`) → Node/Express (`127.0.0.1:4000`) → SQLite. Frontend React/Vite hasil build (`frontend/dist`) dilayani oleh aplikasi.
-- **Kapasitas Disk:** Ruang disk tersedia sekitar **51 GB** dari filesystem **58 GB**. Tidak ada kebutuhan mendesak menghapus folder berdasarkan kapasitas ini.
-- **Pemisahan Konteks User:** User SSH operator adalah `layananpensiunan`; user layanan adalah `lpapp`. State PM2 dalam HOME operator dan PM2 milik `lpapp` (`/var/lib/layanan-pensiunan/.pm2/`) adalah konteks yang berbeda.
+- **Baseline Produksi Aktif & Terverifikasi:** Commit `6a791a34b4f90111fabe3e5ce55fef08a8395913` (branch `feat/repeatable-deployment-20261109`).
+- **Status Controller VPS (`lp-release`):**
+  - `status=active_verified`
+  - `alignment=aligned`
+  - `database_healthy=true`
+- **Posisi Branch `origin/main` (Saat Pemeriksaan 15 November 2026):** `52ac0b883d903bca2dd35c3dd3ca43a8243d662f` (branch lama; jangan dipakai sebagai baseline produksi maupun pengembangan).
+- **Proses, Runtime & Database Produksi Persisten:**
+  - Layanan `layanan-pensiunan-api` berjalan di PM2 sebagai user `lpapp` (satu instance mode *fork*, Node `24.22.2`) pada `127.0.0.1:4000` di balik Nginx HTTPS (`https://139.190.106.136/`).
+  - Membuka `/srv/layanan-pensiunan/shared/data/enterprise.sqlite` (+ `-wal` dan `-shm`) dengan dokumen BLOB tersimpan di dalam SQLite.
+- **Kapasitas Disk & Pemisahan User (Audit Server Sebelumnya, 8 November 2026):**
+  - Ruang disk tersedia sekitar **51 GB** dari filesystem **58 GB**.
+  - User SSH operator adalah `layananpensiunan`; user layanan adalah `lpapp` (PM2 state di `/var/lib/layanan-pensiunan/.pm2/`).
 
-> **Batas Fakta Audit 8 November 2026:** Audit ini **tidak** menghitung data nasabah/akun terkini, **tidak** memeriksa seluruh checksum kode terhadap GitHub, **tidak** membuktikan akses HTTPS terkini, dan **tidak** membuktikan integritas setiap backup. Jangan mengklaim pemeriksaan tersebut sudah dilakukan dari audit folder saja.
+> **Catatan Historis Rilis Sebelumnya (8–9 November 2026):** Pada audit 8 November 2026, `/srv/layanan-pensiunan/current` mengarah ke rilis awal `layanan-pensiunan-c76e823-production` (`c76e823db5a047807bea77ad6c03f2985e62560b`), lalu dilanjutkan pembaruan fitur operasional (`2c20fd2` / `fe1025a`), isolasi Multi-SM (`355de87` / `7ad57a2`), hingga pemasangan jalur rilis terkendali `feat/repeatable-deployment-20261109` (`6a791a34b4f90111fabe3e5ce55fef08a8395913`) yang terkonfirmasi `status=active_verified` pada 15 November 2026.
 
 ## 2. Peta Lokasi Server (VPS) dan Perannya
 
@@ -40,17 +45,17 @@ Salinan Git dalam HOME (`/home/layananpensiunan/`) pada saat audit 8 November 20
 - **Peringatan Symlink Data pada Rilis Lama:** Seluruh enam rilis yang tercatat dalam audit memiliki symlink `backend/data` menuju direktori `/srv/layanan-pensiunan/shared/data` yang sama. **Jangan menjalankan backend rilis lama untuk tes** karena proses itu dapat menulis ke database produksi. **Jangan memakai penghapusan rekursif yang mengikuti symlink** saat kelak membersihkan rilis.
 - **Status Folder Persiapan/Arsip:** Folder `lp-production-prep-*`, `lp-migration-*`, `lp-restore-drill-*`, dan `lp-backup-downloads` adalah hasil persiapan/uji/arsip. Isinya tidak seluruhnya diperiksa dalam audit ini. Perlakukan sebagai **arsip tertunda** sampai dinilai satu per satu, bukan sebagai folder yang otomatis aman dihapus.
 
-## 3. Prosedur yang Sudah Terbukti Bekerja vs. Rencana Otomasi / Alat Historis
+## 3. Prosedur yang Sudah Terbukti Bekerja vs. Alat Historis
 
 | Komponen / Prosedur | Status Aktual & Aturan Penggunaan |
 | --- | --- |
-| **Aktivasi Manual Terkendali ke Rilis `c76e823` (Terbukti Bekerja)** | Aktivasi memakai `production_cutover.py` pernah gagal, lalu aktivasi diselesaikan melalui langkah manual yang diizinkan pemilik. Audit 8 November 2026 mengonfirmasi proses `lpapp` dan symlink `current` telah memakai rilis produksi `c76e823`. |
+| **Deployment Terkendali via Controller Rilis (`lp-release` / `ops/server_release.py` + `ops/package_release.py`)** | **Terbukti Bekerja & Aktif:** Pada pemeriksaan 15 November 2026, controller VPS melaporkan `status=active_verified`, `alignment=aligned`, `database_healthy=true` pada commit `6a791a34b4f90111fabe3e5ce55fef08a8395913` (`feat/repeatable-deployment-20261109`). Push ke GitHub tetap tidak otomatis mengganti VPS tanpa memicu rilis yang disetujui. |
 | **CI Validasi GitHub Actions & `ops/ci.py` (Terbukti Bekerja)** | CI validasi pada salinan database sementara sudah ada dan berjalan. Setiap perubahan yang gagal validasi wajib diperbaiki dahulu sebelum dipertimbangkan untuk rilis. |
 | **Alur Kerja Update Terkendali (Prosedur Resmi)** | Alur baku: **pengembangan → pengujian → GitHub → CI berhasil → deployment saat diminta pemilik → verifikasi → catat versi** (lihat rincian di [SOP.md](SOP.md)). |
 | **Snapshot Backup SQLite & Ekspor Terenkripsi (Terbukti pada Persiapan, Perlu Cek Berkala)** | Backup terenkripsi ke laptop pemilik dan uji pemulihan pernah berhasil pada tahap persiapan (bukti backup terdahulu, bukan jaminan salinan laptop sudah berisi transaksi produksi terbaru). Folder backup berkala terlihat pada audit, tetapi status timer dan keberhasilan backup terbaru harus diperiksa bila menjadi bagian tugas berikutnya. |
-| **Deployment Rutin Satu Tombol (Rencana Otomasi — Belum Tersedia/Tervalidasi)** | Deployment rutin satu tombol adalah **sasaran perbaikan berikutnya**; belum terbukti tersedia dan aman untuk update produksi. Jangan menciptakan kesan setiap `git push` otomatis memperbarui VPS. |
-| **Alat `ops/production_cutover.py` & Skrip Aktivasi Historis (Ditunda — Jangan Dipakai Ulang)** | Pemilik menunda riset/perbaikan alat deployment. Pembersihan data uji dan penyiapan akun adalah pekerjaan sekali saat transisi UAT ke produksi, bukan langkah rutin update aplikasi. **Jangan menjalankan ulang `production_cutover.py` atau skrip aktivasi historis untuk update rutin.** |
-| **File `/srv/layanan-pensiunan/deploy.sh` (Belum Dinilai — Bukan Perintah Resmi)** | File `/srv/layanan-pensiunan/deploy.sh` ada di VPS, tetapi isi dan kesesuaiannya belum dinilai melalui audit 8 November 2026. **Jangan menganggap file itu perintah update resmi.** |
+| **Aktivasi Manual Awal `c76e823` (Catatan Historis 8 Nov 2026)** | Rilis produksi pertama `c76e823` diaktifkan secara manual sebelum jalur controller `lp-release` dipasang; kini sudah digantikan oleh rilis aktif `6a791a34b4f90111fabe3e5ce55fef08a8395913`. |
+| **Alat `ops/production_cutover.py` & Skrip Aktivasi Historis (Ditunda — Jangan Dipakai Ulang)** | Pemilik menunda riset/perbaikan alat transisi satu kali UAT→produksi ini. Pembersihan data uji dan penyiapan akun adalah pekerjaan sekali saat transisi awal, bukan langkah rutin update aplikasi. **Jangan menjalankan ulang `production_cutover.py` atau skrip aktivasi historis untuk update rutin.** |
+| **File `/srv/layanan-pensiunan/deploy.sh` (Belum Dinilai — Bukan Perintah Resmi)** | File `/srv/layanan-pensiunan/deploy.sh` ada di VPS, tetapi isi dan kesesuaiannya belum dinilai melalui audit. **Jangan menganggap file itu perintah update resmi.** |
 
 ---
 
@@ -237,3 +242,38 @@ Sesuai arahan teknis `Blue_Print/command.md` (9 November 2026) dan hasil temuan 
   pada RUNBOOK. Pemasangan/VPS belum diklaim berhasil; hasil doctor terbaru dari
   operator diminta sebelum aktivasi. Konfigurasi secret GitHub dan deployment
   nyata pertama tetap membutuhkan bukti dari server.
+
+---
+
+## 8. Penyelarasan Baseline Produksi & Pengembangan Kalkulator BNI Lokal (15–17 November 2026)
+
+### A. Penyelarasan Baseline Rilis Produksi Terverifikasi
+- **Commit Baseline Produksi Terverifikasi (15 November 2026):** `6a791a34b4f90111fabe3e5ce55fef08a8395913` (`origin/feat/repeatable-deployment-20261109`), dengan status controller VPS `status=active_verified`, `alignment=aligned`, `database_healthy=true`.
+- **Posisi `origin/main`:** `52ac0b883d903bca2dd35c3dd3ca43a8243d662f` (branch lama; jangan dipakai sebagai baseline).
+- **Hubungan Git Lokal:** Commit `8168589` adalah induk langsung (`parent`) dari `6a791a34b4f90111fabe3e5ce55fef08a8395913`. Pengembangan BNI dikerjakan pada branch terisolasi **`feat/calc-bni-20261115`** berbasis `6a791a34b4f90111fabe3e5ce55fef08a8395913` agar pekerjaan lokal lain tetap terjaga.
+- **Ruang Lingkup Terpisah:** **Taspen / Si EMan ditunda**, **landing page dikerjakan terpisah**, dan otomasi deployment maupun perombakan UI umum tidak dicampurkan ke branch BNI ini. Seluruh pengembangan dan pengujian memakai database SQLite lokal terpisah serta data sintetis (data, akun, parameter, dan konfigurasi produksi tetap dipertahankan utuh; file Excel asli disimpan privat dan tidak masuk Git).
+
+### B. Penelusuran Workbook Excel BNI (`Kalkulator BNI MKSA  v4_Jul26.xlsx`)
+Telah dilakukan audit sel pasif terhadap seluruh 15 sheet, validasi data, matriks aktuaria AJK, dan tabel underwriting, memisahkan fakta Excel dari kebijakan yang masih membutuhkan konfirmasi klien:
+
+| Topik Audit | Temuan Fakta Sheet/Sel Excel | Kebijakan Menunggu Konfirmasi Klien |
+| --- | --- | --- |
+| **1. Lookup Kode Produk 2** | `Kalkulator!B14` mencantumkan `"Kode Produk (Isi 1 / 2 / 3/ 4)"` dan `D15 = VLOOKUP(D14, J13:K16, 2, 0)`. Namun `J13:K16` hanya berisi `1` (`BNI Fleksi Reguler`), `4` (`BNI Fleksi Pra Purna`), `3` (`BNI Fleksi Grace Period Kombinasi`), `4` (duplikat); Kode `2` (`BNI Fleksi Grace Period`) tertinggal di `J21:K21`, dan data validation `D14` menunjuk `$J$13:$J$14`. Akibatnya `D14=2` menghasilkan `#N/A`. Di sisi lain `PROD!B3:E5` hanya berisi `1, 2, 3` sehingga `Simulasi Asuransi!C15` (approximate lookup) salah membaca `4` sebagai `3`. | Konfirmasi struktur kode produk resmi (`1/2/3/4`) serta aktivasi Produk 2 (`BNI Fleksi Grace Period`) beserta aturan lengkapnya. |
+| **2. Biaya Produk 2 dan 3** | `Kalkulator!B29` menampilkan label `"Biaya Admin 150rb, Provisi 1% & BTL 3.5%"` untuk non-Kode 1, tetapi rumus `Kalkulator!D29` hanya menangani `D14=1` (`Plafond*3.7% + 80.000`) dan `D14=4` (`Plafond*4.5% + 150.000`), sehingga mengembalikan `FALSE` untuk `D14=2` dan `3`. Sementara `Simulasi Asuransi!D23` memakai `IF((1%*Plafond)<250000,250000,1%*Plafond)+150000` tanpa BTL 3,5%. | Konfirmasi komponen biaya resmi (Admin, Provisi, minimal provisi, dan BTL) untuk Kode 2 & Kode 3. |
+| **3. Tumpang Tindih Rentang Bunga** | Pada `Kalkulator!L52:O61` (dan `L7:O16`), baris `L59:M59` mencakup `121–144` bulan (Pra Purna `10,85%`, Purna `12,00%`), sedangkan `L60:M60` mencakup `133–168` (`=144+24`) bulan (Pra Purna `10,85%`, Purna `12,10%`). Rentang `133–144` bulan tumpang tindih (`VLOOKUP` aproksimasi Excel menimpa `121–132` vs `133–168`). Pada Pra Purna (`Kode 4`) tarif sama-sama `10,85%`, tetapi pada Purna (`Kode 1`) berbeda (`12,00%` vs `12,10%`). | Konfirmasi resmi tarif bunga Purna (`Kode 1`) khusus rentang `133–144` bulan (`12,00%` vs `12,10%`). |
+| **4. Tarif Bulan 181–240** | `Kalkulator!L52:O61` berhenti eksplisit pada `M61=180` bulan (`169–180`), namun `D18`/`D28` mengizinkan tenor s.d. `240` bln untuk Pra Purna (dan `VLOOKUP` aproksimasi menarik tarif baris 61 ke `181–240`), sementara tabel AJK `AJK UP MENURUN BFP REG!Q2:U56` memiliki kolom tenor `16–20` tahun (terisi bila `usia + tenor_thn <= 75`). | Konfirmasi apakah tenor `181–240` bln Pra Purna berlaku dan memakai bunga tetap `10,85%` atau tier bunga tersendiri. |
+| **5. Batas Tenor & Rumus Skema Kombinasi** | `Kalkulator!N33` mencantumkan masa asuransi `1–6` tahun, `Kalkulator!D28` membatasi non-Pra-Purna `≤ 180` bulan, sedangkan `Simulasi Asuransi!H12` & `Sheet1!E7` menyebut `Maks 240 Bulan` (dengan Grace Period maks `60` bln). Selain itu `AJK UP MENURUN BFP GP KOMB!B1` & `AJK UP TURUN IBR!B1` memulai kolom tahun ke-2 (bug indeks +1 tahun pada `B62`), dan `Kalkulator!BN42:BN43` salah merujuk sel `B66/B67` bukan `B73/B74`. | Konfirmasi aturan tenor kredit vs tenor GP vs tenor asuransi serta rumus premi & BNI subsidy untuk skema `Kombinasi`, `GP Murni`, dan `IBR`. |
+
+### C. Arsitektur Modul BNI Terisolasi & Aturan Implementasi Lokal
+- **Konfigurasi & Matriks Aktuaria:** `backend/src/config/bni-product-config.js` (memuat tabel bunga `L52:O61`, matriks penuh 55 usia × 20 tahun `AJK UP MENURUN BFP REG`, matriks underwriting `Y2:CC22`, definisi produk/skema, dan daftar gap kebijakan).
+- **Mesin Hitung Lokal:** `backend/src/engines/bni-calc-engine.js` dipakai konsisten oleh `calculateMax`, `/api/calc/preview`, `POST /api/simulations`, PDF/SVG export, dan ringkasan AI.
+  - **Aturan Aktif Terkonfirmasi:** Produk `1` (`BNI Fleksi Reguler`, tenor `1–132` & `145–180` bln) dan Produk `4` (`BNI Fleksi Pra Purna`, tenor `1–180` bln) dengan `Kredit BFP Skema Menurun` (`AJK UP MENURUN BFP REG`).
+  - **Penanganan Aturan Belum Tersedia:** Kode `2`, Kode `3`, skema AJK non-Menurun (`IBR`, `GP_MURNI`, `GP_KOMBINASI`), tenor `133–144` bln pada Kode `1`, serta tenor `181–240` bln mengembalikan status `UNAVAILABLE` (`processable: false`, `overall_ok: false`) lengkap dengan alasan & sel sumber Excel (dan ditolak `400` bila dicoba disimpan ke `/api/simulations`).
+  - **Satuan, Usia, Tenor & Pembulatan:** Bunga efektif `% p.a.`; premi AJK `‰` (permil per `1.000` UP) dengan subsidi BNI maks `150‰` (`min(rate, 150)‰` BNI, `max(0, rate - 150)‰` nasabah); usia masuk `DATEDIF(dob, procDate, "Y")` (`20..74`); batas usia 75 thn `EDATE(dob, 900)` & sisa bulan `DATEDIF(procDate, age75Date, "M")`; tanggal jatuh tempo `EOMONTH(procDate, tenor)`; tenor AJK `ceil(tenor/12)` (`ROUNDUP(tenor/12, 0)`); seluruh kalkulasi intermediate mempertahankan presisi IEEE-754 penuh tanpa pembulatan antara, dengan `Math.floor` saat auto-pilih plafond maks PV dan `Math.round` hanya pada tampilan ringkasan akhir.
+
+### D. Hasil Pengujian Lokal & Skrip Reproduksi (Branch Review `review/bni-audit-20261117`)
+- **Suite Backend Lengkap (`npm.cmd --prefix backend test`, Node `v24.22.1`):** **77/77 lulus (`0` gagal, `0` skipped)** meliputi regresi PP3/PP10/PENSIUN/BSI, skenario unit & acuan numerik BNI (`Kode 1` & `Kode 4`), validasi jatuh tempo akhir bulan `EOMONTH <= EDATE(birth_date, 900)`, penolakan parameter hilang (`MISSING_BNI_CONFIG`) & input negatif/`NaN`/non-kalender (`INVALID`), penolakan `UNAVAILABLE`, integrasi HTTP BNI (`preview`–simpan, `bank_scope`, isolasi Multi-SM, PDF, `/api/simulations/:id/png`, AI summary, proteksi parameter matriks `bank_bni`), migrasi idempoten store `6a791a3` di mode `production`, `production-readiness.test.mjs`, fitur operasional, isolasi Multi-SM, dan otomasi rilis.
+- **Skrip Probe & UI E2E Reproducible (Data Sintetis + DB Disposable):**
+  - `node backend/tests/bni-audit-probe.mjs`: memverifikasi `BNI-01` (tanggal uji `2026-11-17`), `BNI-02`, batas jatuh tempo vs ulang tahun ke-75, serta kegagalan eksplisit parameter hilang/cacat pada fungsi aktual `calculateMax` & `calculatePreview`.
+  - `node backend/tests/bni-ui-e2e.mjs`: menguji UI React penuh (login, `Contoh Uji` sintetis BNI-01, simpan simulasi, banner `UNAVAILABLE` Kode 2, isolasi Multi-SM, penyembunyian BNI untuk `bsi_only`, dan panel `/pengaturan` `Bank BNI`).
+- **Build Produksi Frontend & Keamanan API:** `$env:VITE_BACKEND_URL=""; npm.cmd --prefix frontend run build` (`2599 modul`), `backend/tests/security-and-api.test.mjs` (`5/5` tahap pada server disposable), serta smoke startup mode `production` lulus. Status eksekusi CI Linux (`.github/workflows/validate.yml`) dipantau terpisah pada commit branch review.

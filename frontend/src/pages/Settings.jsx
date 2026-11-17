@@ -250,8 +250,16 @@ function DynamicPartnerParams({ user }) {
         return;
       }
 
+      const updatesPayload =
+        selectedKey === "bank_bni"
+          ? {
+              maxInstallmentRatio: Number(draft.maxInstallmentRatio ?? 90),
+              subsidyPermilCap: Number(draft.subsidyPermilCap ?? 150),
+            }
+          : draft;
+
       const { data: res } = await api.put(`/calc/params/${selectedKey}`, {
-        updates: draft,
+        updates: updatesPayload,
         reason: reason || `Penyesuaian aturan mitra ${draft.shortName}`,
       });
       toast.success(res.message);
@@ -905,8 +913,67 @@ function DynamicPartnerParams({ user }) {
             </div>
           )}
 
+          {/* 2c. BANK BNI — BNI FLEKSI PENSIUN & PRA PURNA (MKSA v4 Jul26) */}
+          {selectedKey === "bank_bni" && (
+            <div className="space-y-4" data-testid="bni-params-panel">
+              <div className="rounded-xl border border-teal-200 bg-teal-50/70 p-4 text-xs text-teal-950 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-bold text-sm text-[#0D6E6D]">
+                    Parameter Matriks BNI Fleksi (MKSA v4 Jul26)
+                  </p>
+                  <span className="rounded-full bg-white px-2.5 py-0.5 font-mono text-[11px] font-bold text-[#0D6E6D] ring-1 ring-teal-200">
+                    Policy: {draft.policyVersion || "bni-fleksi-jul26-v1"}
+                  </span>
+                </div>
+                <p>
+                  Tabel suku bunga efektif, biaya produk Kode 1 (3,7% + Rp80rb) &amp; Kode 4 (4,5% + Rp150rb), serta matriks aktuaria AJK CAR Skema Menurun dikunci mengikuti sumber workbook terkonfirmasi. Kombinasi yang belum dikonfirmasi klien berstatus <b>Belum Tersedia</b>.
+                </p>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <Label>Batas DBR Default (%)</Label>
+                  <Input
+                    type="number"
+                    step="1"
+                    min="10"
+                    max="100"
+                    disabled={!canEdit}
+                    value={draft.maxInstallmentRatio ?? 90}
+                    onChange={(e) => setNum("maxInstallmentRatio", e.target.value)}
+                    className="lp-num"
+                    data-testid="bni-param-dbr-input"
+                  />
+                </div>
+                <div>
+                  <Label>Batas Subsidi Premi AJK BNI (‰)</Label>
+                  <Input
+                    type="number"
+                    step="1"
+                    min="0"
+                    max="500"
+                    disabled={!canEdit}
+                    value={draft.subsidyPermilCap ?? 150}
+                    onChange={(e) => setNum("subsidyPermilCap", e.target.value)}
+                    className="lp-num"
+                    data-testid="bni-param-subsidy-input"
+                  />
+                </div>
+              </div>
+              {Array.isArray(draft.auditAndOpenPolicies) && draft.auditAndOpenPolicies.length > 0 && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-4 text-xs text-amber-950 space-y-1.5">
+                  <p className="font-bold">Aturan Belum Tersedia (Menunggu Konfirmasi Klien):</p>
+                  <ul className="list-disc pl-4 space-y-1">
+                    {draft.auditAndOpenPolicies.map((g) => (
+                      <li key={g.id}><b>{g.topic}:</b> {g.finding}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* 3. MITRA BANK KONVENSIONAL */}
-          {selectedKey !== "ams2" && selectedKey !== "bsi_prapen" && selectedKey !== "bank_mestika" && (
+          {selectedKey !== "ams2" && selectedKey !== "bsi_prapen" && selectedKey !== "bank_mestika" && selectedKey !== "bank_bni" && (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <div><Label>Suku Bunga (% per tahun)</Label><Input type="number" step="0.05" disabled={!canEdit} value={draft.interestRateAnnual} onChange={(e) => setNum("interestRateAnnual", e.target.value)} className="lp-num" data-testid="param-interest-input" /></div>
               <div><Label>DSR / Rasio Angsuran Maks (%)</Label><Input type="number" step="0.5" disabled={!canEdit} value={draft.maxInstallmentRatio} onChange={(e) => setNum("maxInstallmentRatio", e.target.value)} className="lp-num" /></div>

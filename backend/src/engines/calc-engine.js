@@ -22,6 +22,7 @@ import {
   medicalStatus as simasPensiunMedicalStatus,
   payment as pensiunPayment
 } from "./bsi-pensiun-preview.js";
+import { evaluateBniMax, evaluateBniPreview } from "./bni-calc-engine.js";
 
 const REGISTERED_PRODUCT_KEYS = new Set(Object.keys(DEFAULT_PARTNER_PARAMETERS).filter((key) => {
   const cfg = DEFAULT_PARTNER_PARAMETERS[key];
@@ -2786,7 +2787,12 @@ export function calculateMax(body, allParams) {
     };
   }
 
-  // 4. Mitra Bank Konvensional (Mandiri Taspen, Bank MNC, BNI, Mestika)
+  // 3c. Bank BNI — BNI Fleksi Pensiun & Pra Purna (MKSA v4 Jul26)
+  if (bankKey === "bank_bni" || cfg.engine === "bni_fleksi") {
+    return evaluateBniMax(body, cfg, processDate);
+  }
+
+  // 4. Mitra Bank Konvensional (Mandiri Taspen, Bank MNC, dll.)
   if (age >= (cfg.maxEntryAgeYears || 78)) {
     return {
       processable: false,
@@ -2870,6 +2876,12 @@ export function calculatePreview(body, allParams) {
       scen.bsi_details.recommended_max_plafond = searchRes.maxPlafond;
     }
     return scen;
+  }
+
+  // 2b. Bank BNI — BNI Fleksi Pensiun & Pra Purna (MKSA v4 Jul26)
+  // Ditangani langsung lewat modul terisolasi evaluateBniPreview agar sumber preview & simpan konsisten.
+  if (bankKey === "bank_bni" || cfg.engine === "bni_fleksi") {
+    return evaluateBniPreview(body, cfg, new Date().toISOString().slice(0, 10));
   }
 
   const mx = calculateMax(body, allParams);
@@ -3462,10 +3474,12 @@ function fmtDateId(isoStr) {
 export function generateSimulationPdfBuffer(sim) {
   const r = sim.result || {};
   const isBsi = r.bank_key === "bsi_prapen" || !!r.bsi_details;
+  const isBniFleksi = r.bank_key === "bank_bni" || !!r.bni_details;
   const isCapital = r.bank_key === "bank_capital" || !!r.capital_details;
   const isMestika = r.bank_key === "bank_mestika" || !!r.mestika_details;
   const isAms2 = r.bank_key === "ams2";
   const bsi = r.bsi_details || {};
+  const bni = r.bni_details || {};
   const cap = r.capital_details || {};
   const mst = r.mestika_details || {};
   const lines = [];
@@ -3846,18 +3860,44 @@ export function generateSimulationPdfBuffer(sim) {
     ? "APLIKASI CALC CAPITAL - DASA CIPTA BERKARYA (PS3 CAPITAL)"
     : isMestika
     ? "SIMULASI DASA GROUP - TIGA BERMUDA AMANAH • BANK MESTIKA (TBA-MSTK 1.0)"
+    : isBniFleksi
+    ? "SIMULASI BANK BNI - BNI FLEKSI PENSIUN & PRA PURNA (MKSA v4)"
     : isAms2
     ? "LAYANAN PENSIUNAN - HASIL SIMULASI KOPERASI AMS2"
     : `LAYANAN PENSIUNAN - HASIL SIMULASI ${(r.bank_name || "").toUpperCase()}`;
 
-  const headerBg = isCapital ? "0.027 0.533 0.494" : isMestika ? "0.118 0.494 0.204" : "0.208 0.063 0.502";
+  const headerBg = isCapital ? "0.027 0.533 0.494" : isMestika ? "0.118 0.494 0.204" : isBniFleksi ? "0.051 0.431 0.427" : "0.208 0.063 0.502";
   lines.push(`q ${headerBg} rg 0 760 595 82 re f Q`);
   lines.push(`BT /F2 13 Tf 1 1 1 rg 40 805 Td (${pdfEscape(headerTitle)}) Tj ET`);
-  lines.push(`BT /F1 9 Tf 0.9 0.9 0.95 rg 40 785 Td (No. Simulasi: ${pdfEscape(sim.sim_no)}   |   Tanggal Proses: ${pdfEscape(isCapital || isMestika ? fmtDateId(r.process_date) : r.process_date)}   |   Petugas: ${pdfEscape(sim.created_by_name)}) Tj ET`);
+  lines.push(`BT /F1 9 Tf 0.9 0.9 0.95 rg 40 785 Td (No. Simulasi: ${pdfEscape(sim.sim_no)}   |   Tanggal Proses: ${pdfEscape(isCapital || isMestika || isBniFleksi ? fmtDateId(r.process_date) : r.process_date)}   |   Petugas: ${pdfEscape(sim.created_by_name)}) Tj ET`);
 
   let rows = [];
 
-  if (isMestika) {
+  if (isBniFleksi) {
+    rows = [
+      ["IDENTITAS & PRODUK BNI FLEKSI", ""],
+      ["Nama Calon Debitur", r.name || "-"],
+      ["Tgl Lahir / Usia Aplikasi", `${fmtDateId(r.birth_date)} (${bni.age_exact_text || `${r.age} Tahun`})`],
+      ["Produk & Skema Asuransi", `${bni.product_name || "BNI Fleksi"} (Kode ${bni.product_code || "-"}) • ${bni.insurance_scheme_label || "Skema Menurun"}`],
+      ["Jatuh Tempo / Sisa Usia 75", `${fmtDateId(bni.maturity_date)} (Sisa masa usia ${bni.remaining_service_months ?? "-"} bln)`],
+      ["Gaji & Batas DBR", `${fmtRp(r.salary)} (DBR ${bni.dbr_pct ?? 90}% = ${fmtRp(bni.max_installment)})`],
+      ["PARAMETER PEMBIAYAAN & ANGSURAN", ""],
+      ["Plafond Maksimal / Diajukan", `${fmtRp(bni.max_plafond)} / ${fmtRp(r.plafond)}`],
+      ["Tenor / Bunga Efektif", `${r.tenor} bulan (${bni.insurance_tenor_years || Math.ceil((r.tenor || 0) / 12)} thn AJK) • ${r.bank_rate}% p.a.`],
+      ["Angsuran per Bulan", `${fmtRp(r.coop_installment)} (DSR Aktual ${r.ratio_pct}%)`],
+      ["BIAYA BANK & ASURANSI AJK CAR", ""],
+      [`Biaya Bank (Admin + Prov ${bni.provisi_pct ?? 0}% + BTL ${bni.btl_pct ?? 3.5}%)`, fmtRp(bni.bank_fees)],
+      [`Premi AJK Gross / Subsidi BNI (s.d. ${bni.subsidy_cap_permil ?? 150}‰)`, `${fmtRp(bni.gross_ajk_premium)} / -${fmtRp(bni.bni_subsidy_premium)}`],
+      [`Premi AJK Ditanggung Nasabah (${bni.customer_ajk_permil ?? 0}‰)`, fmtRp(bni.customer_ajk_premium)],
+      ["Status Underwriting Medis", `${bni.underwriting_code || "-"} (${bni.underwriting_desc || "-"})`],
+      ["BLOKIR, TAKE OVER & PENCAIRAN", ""],
+      ["Pencairan Bersih Sebelum Blokir", fmtRp(bni.net_before_blokir)],
+      [`Blokir Angsuran (${bni.blokir_angsuran_count ?? 3}x) & Tabungan (${bni.blokir_tabungan_count ?? 1}x)`, `${fmtRp(bni.blokir_angsuran)} + ${fmtRp(bni.blokir_tabungan)}`],
+      [`Blokir Prapensiun (${bni.blokir_prapensiun_count ?? 0}x) / TO`, `${fmtRp(bni.blokir_prapensiun)} / ${fmtRp(r.take_over || 0)}`],
+      ["TERIMA BERSIH SETELAH TO", fmtRp(r.net_disbursement)],
+      ["SISA GAJI PER BULAN", fmtRp(r.remaining_salary)]
+    ];
+  } else if (isMestika) {
     rows = [
       ["INPUT DATA DEBITUR (TBA-MSTK 1.0)", ""],
       ["Nama Debitur", r.name || "-"],
@@ -4143,12 +4183,58 @@ export function generateSimulationPdfBuffer(sim) {
 export function generateSimulationSvgBuffer(sim) {
   const r = sim.result || {};
   const isBsi = r.bank_key === "bsi_prapen" || !!r.bsi_details;
+  const isBniFleksi = r.bank_key === "bank_bni" || !!r.bni_details;
   const isCapital = r.bank_key === "bank_capital" || !!r.capital_details;
   const isMestika = r.bank_key === "bank_mestika" || !!r.mestika_details;
   const isAms2 = r.bank_key === "ams2";
   const bsi = r.bsi_details || {};
+  const bni = r.bni_details || {};
   const cap = r.capital_details || {};
   const mst = r.mestika_details || {};
+
+  if (isBniFleksi) {
+    const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="620" viewBox="0 0 900 620">
+  <rect width="900" height="620" fill="#F3F8F8" rx="18"/>
+  <rect width="900" height="105" fill="#0D6E6D" rx="18"/>
+  <text x="40" y="45" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="20" font-weight="bold">BANK BNI — BNI FLEKSI PENSIUN &amp; PRA PURNA</text>
+  <text x="40" y="75" fill="#CCFBF1" font-family="Arial, sans-serif" font-size="13">${sim.sim_no} • ${r.name || "-"} • Kode ${bni.product_code || "-"} (${bni.product_name || "-"}) • ${r.bank_rate}% p.a.</text>
+  <rect x="40" y="125" width="400" height="340" fill="#FFFFFF" stroke="#CBE5E4" rx="12"/>
+  <text x="60" y="158" fill="#0D6E6D" font-family="Arial, sans-serif" font-size="14" font-weight="bold">DATA DEBITUR &amp; KREDIT</text>
+  <text x="60" y="192" fill="#5F706E" font-family="Arial, sans-serif" font-size="13">Tanggal Lahir / Usia:</text>
+  <text x="415" y="192" text-anchor="end" fill="#132A29" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtDateId(r.birth_date)} (${r.age} tahun)</text>
+  <text x="60" y="222" fill="#5F706E" font-family="Arial, sans-serif" font-size="13">Gaji / DBR (${bni.dbr_pct ?? 90}%):</text>
+  <text x="415" y="222" text-anchor="end" fill="#132A29" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.salary)}</text>
+  <text x="60" y="252" fill="#5F706E" font-family="Arial, sans-serif" font-size="13">Plafond / Tenor:</text>
+  <text x="415" y="252" text-anchor="end" fill="#0D6E6D" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.plafond)} / ${r.tenor} bln</text>
+  <text x="60" y="282" fill="#5F706E" font-family="Arial, sans-serif" font-size="13">Angsuran per Bulan:</text>
+  <text x="415" y="282" text-anchor="end" fill="#132A29" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.coop_installment)} (${r.ratio_pct}%)</text>
+  <text x="60" y="312" fill="#5F706E" font-family="Arial, sans-serif" font-size="13">Jatuh Tempo Kredit:</text>
+  <text x="415" y="312" text-anchor="end" fill="#132A29" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtDateId(bni.maturity_date)}</text>
+  <text x="60" y="342" fill="#5F706E" font-family="Arial, sans-serif" font-size="13">Underwriting Medis:</text>
+  <text x="415" y="342" text-anchor="end" fill="#132A29" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${bni.underwriting_code || "-"}</text>
+  <rect x="460" y="125" width="400" height="340" fill="#FFFFFF" stroke="#CBE5E4" rx="12"/>
+  <text x="480" y="158" fill="#0D6E6D" font-family="Arial, sans-serif" font-size="14" font-weight="bold">BIAYA, SUBSIDI AJK &amp; BLOKIR</text>
+  <text x="480" y="192" fill="#5F706E" font-family="Arial, sans-serif" font-size="13">Biaya Bank (Adm+Prov+BTL):</text>
+  <text x="835" y="192" text-anchor="end" fill="#132A29" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(bni.bank_fees)}</text>
+  <text x="480" y="222" fill="#5F706E" font-family="Arial, sans-serif" font-size="13">AJK CAR (${bni.ajk_rate_permil ?? 0}‰ Gross):</text>
+  <text x="835" y="222" text-anchor="end" fill="#132A29" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(bni.gross_ajk_premium)}</text>
+  <text x="480" y="252" fill="#5F706E" font-family="Arial, sans-serif" font-size="13">Subsidi BNI (s.d. 150‰):</text>
+  <text x="835" y="252" text-anchor="end" fill="#0D6E6D" font-family="Arial, sans-serif" font-size="13" font-weight="bold">-${fmtRp(bni.bni_subsidy_premium)}</text>
+  <text x="480" y="282" fill="#5F706E" font-family="Arial, sans-serif" font-size="13">AJK Ditanggung Nasabah:</text>
+  <text x="835" y="282" text-anchor="end" fill="#132A29" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(bni.customer_ajk_premium)}</text>
+  <text x="480" y="312" fill="#5F706E" font-family="Arial, sans-serif" font-size="13">Total Blokir (${bni.total_blokir_count ?? 0}x):</text>
+  <text x="835" y="312" text-anchor="end" fill="#132A29" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.retention)}</text>
+  <text x="480" y="342" fill="#5F706E" font-family="Arial, sans-serif" font-size="13">Take Over (TO):</text>
+  <text x="835" y="342" text-anchor="end" fill="#132A29" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.take_over || 0)}</text>
+  <rect x="40" y="485" width="820" height="95" fill="#0D6E6D" rx="14"/>
+  <text x="65" y="520" fill="#CCFBF1" font-family="Arial, sans-serif" font-size="13">TERIMA BERSIH SETELAH TO</text>
+  <text x="65" y="558" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="28" font-weight="bold">${fmtRp(r.net_disbursement)}</text>
+  <text x="500" y="520" fill="#CCFBF1" font-family="Arial, sans-serif" font-size="13">SISA GAJI PER BULAN</text>
+  <text x="500" y="558" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="28" font-weight="bold">${fmtRp(r.remaining_salary)}</text>
+</svg>`;
+    return Buffer.from(svg, "utf8");
+  }
 
   if (isMestika) {
     const svg = `<?xml version="1.0" encoding="UTF-8"?>

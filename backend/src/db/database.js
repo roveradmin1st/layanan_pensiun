@@ -810,9 +810,40 @@ function createInitialState() {
 
 let stateCache = null;
 
+/** Memigrasikan parameter bank_bni lama ke skema bni_fleksi secara idempoten dengan snapshot rollback. */
+function ensureBniParameterUpgrade(state) {
+  if (
+    state.partner_parameters?.bank_bni &&
+    state.partner_parameters.bank_bni.engine === "bni_fleksi"
+  ) {
+    return false;
+  }
+  state.partner_parameters = state.partner_parameters || {};
+  if (!Array.isArray(state.parameter_migration_snapshots)) {
+    state.parameter_migration_snapshots = [];
+  }
+  if (
+    state.partner_parameters.bank_bni &&
+    !state.parameter_migration_snapshots.some((s) => s.migration_id === "bni-fleksi-jul26-v1")
+  ) {
+    state.parameter_migration_snapshots.push({
+      migration_id: "bni-fleksi-jul26-v1",
+      partner_key: "bank_bni",
+      migrated_at: new Date().toISOString(),
+      before_snapshot: structuredClone(state.partner_parameters.bank_bni)
+    });
+  }
+  state.partner_parameters.bank_bni = structuredClone(DEFAULT_PARTNER_PARAMETERS.bank_bni);
+  return true;
+}
+
 export function ensureStoreUpgrades(state) {
   // Demo fixture upgrades are never allowed to create accounts/transactions in production.
-  if (IS_PROD) { validateState(state, { production: true }); return false; }
+  // Hanya migrasi skema parameter bank_bni yang aman & idempoten (berbasis snapshot) yang berjalan di produksi.
+  if (IS_PROD) {
+    validateState(state, { production: true });
+    return ensureBniParameterUpgrade(state);
+  }
   let changed = false;
   const defaultPwdHash = demoPasswordHash("Password123!");
   const legacySeedHashes = new Set([
@@ -986,7 +1017,16 @@ export function ensureStoreUpgrades(state) {
     changed = true;
   }
 
-  for (const inactiveKey of ["bank_mantap", "bank_mnc", "bank_bni"]) {
+  if (!Array.isArray(state.parameter_migration_snapshots)) {
+    state.parameter_migration_snapshots = [];
+    changed = true;
+  }
+
+  if (ensureBniParameterUpgrade(state)) {
+    changed = true;
+  }
+
+  for (const inactiveKey of ["bank_mantap", "bank_mnc"]) {
     if (state.partner_parameters?.[inactiveKey] && state.partner_parameters[inactiveKey].active !== false) {
       state.partner_parameters[inactiveKey].active = false;
       changed = true;
@@ -997,10 +1037,6 @@ export function ensureStoreUpgrades(state) {
   state.partner_parameters = state.partner_parameters || {};
   if (state.partner_parameters.schemaVersion !== BSI_SCHEMA_VERSION) {
     state.partner_parameters.schemaVersion = BSI_SCHEMA_VERSION;
-    changed = true;
-  }
-  if (!Array.isArray(state.parameter_migration_snapshots)) {
-    state.parameter_migration_snapshots = [];
     changed = true;
   }
   const currentBsi = state.partner_parameters.bsi_prapen;

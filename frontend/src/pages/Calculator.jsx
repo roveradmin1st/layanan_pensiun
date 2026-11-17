@@ -1025,6 +1025,17 @@ export default function CalculatorPage() {
     mestika_dependent_type: "istri", // "istri" | "istri_anak_1" | "istri_anak_2" | "istri_anak_3"
     mestika_req_loan: "",
     mestika_req_tenor: "",
+    // Bank BNI Fleksi Pensiun & Pra Purna (MKSA v4 Jul26):
+    bni_birth_iso: "",
+    bni_process_iso: todayIsoLocal(),
+    bni_product_code: "4",
+    bni_insurance_scheme: "MENURUN",
+    bni_dbr_pct: "90",
+    bni_req_loan: "",
+    bni_req_tenor: "",
+    bni_blokir_angsuran: "3",
+    bni_blokir_tabungan: "1",
+    bni_blokir_prapensiun: "10",
   });
   const [mx, setMx] = useState(null);
   const [tl, setTl] = useState("3.5");
@@ -1036,6 +1047,7 @@ export default function CalculatorPage() {
   const [ams2Error, setAms2Error] = useState("");
   const [capError, setCapError] = useState("");
   const [mestikaError, setMestikaError] = useState("");
+  const [bniError, setBniError] = useState("");
   const [bsiError, setBsiError] = useState("");
   const [showExistingOblig, setShowExistingOblig] = useState(false);
   const [bsiChoiceOpen, setBsiChoiceOpen] = useState(false);
@@ -1128,6 +1140,7 @@ export default function CalculatorPage() {
         bsi_birth_iso: data.birth_date ? data.birth_date.slice(0, 10) : "",
         capital_birth_iso: data.birth_date ? data.birth_date.slice(0, 10) : "",
         mestika_birth_iso: data.birth_date ? data.birth_date.slice(0, 10) : "",
+        bni_birth_iso: data.birth_date ? data.birth_date.slice(0, 10) : "",
       }))
     ).catch(() => toast.error("Leads tidak ditemukan atau bukan milik Anda"));
   }, [leadId]);
@@ -1136,6 +1149,7 @@ export default function CalculatorPage() {
   const isAms2 = bankKey === "ams2";
   const isCapital = bankKey === "bank_capital";
   const isMestika = bankKey === "bank_mestika";
+  const isBniFleksi = bankKey === "bank_bni";
 
   const base = () => ({
     bank_key: bankKey,
@@ -1144,6 +1158,8 @@ export default function CalculatorPage() {
       ? d.capital_birth_iso
       : isMestika
       ? d.mestika_birth_iso
+      : isBniFleksi
+      ? d.bni_birth_iso
       : isBsi
       ? d.bsi_birth_iso
       : isAms2
@@ -1203,6 +1219,8 @@ export default function CalculatorPage() {
     capital_gp_manual: d.capital_product === "pensiun" ? "" : d.capital_gp_manual,
     process_date: isMestika
       ? d.mestika_process_iso
+      : isBniFleksi
+      ? d.bni_process_iso
       : isBsi
       ? (d.bsi_sub_product === "PENSIUN" ? (d.bsi_process_iso || d.bsi_proyeksi_cair || todayIsoLocal()) : (d.bsi_proyeksi_cair || todayIsoLocal()))
       : isAms2
@@ -1212,6 +1230,13 @@ export default function CalculatorPage() {
     mestika_salary_type: d.mestika_salary_type,
     mestika_has_dependents: d.mestika_has_dependents,
     mestika_dependent_type: d.mestika_has_dependents === "ada" ? d.mestika_dependent_type : "",
+    // Bank BNI Fleksi (MKSA v4 Jul26) fields:
+    bni_product_code: isBniFleksi ? d.bni_product_code : undefined,
+    bni_insurance_scheme: isBniFleksi ? d.bni_insurance_scheme : undefined,
+    bni_dbr_pct: isBniFleksi ? Number(d.bni_dbr_pct || 90) : undefined,
+    blokir_angsuran_count: isBniFleksi && String(d.bni_blokir_angsuran ?? "").trim() !== "" ? Number(d.bni_blokir_angsuran) : undefined,
+    blokir_tabungan_count: isBniFleksi && String(d.bni_blokir_tabungan ?? "").trim() !== "" ? Number(d.bni_blokir_tabungan) : undefined,
+    blokir_prapensiun_count: isBniFleksi && String(d.bni_blokir_prapensiun ?? "").trim() !== "" ? Number(d.bni_blokir_prapensiun) : undefined,
   });
 
   const reset = () => {
@@ -1223,6 +1248,7 @@ export default function CalculatorPage() {
     setAms2Error("");
     setCapError("");
     setMestikaError("");
+    setBniError("");
     setBsiError("");
   };
 
@@ -1334,6 +1360,16 @@ export default function CalculatorPage() {
         dapem: dapem || null,
         plafond: d.mestika_req_loan ? Number(d.mestika_req_loan) : "",
         tenor: d.mestika_req_tenor ? Number(d.mestika_req_tenor) : "",
+      };
+    }
+    if (isBniFleksi) {
+      return {
+        ...base(),
+        lead_id: leadId || null,
+        bank_key: bankKey,
+        dapem: dapem || null,
+        plafond: d.bni_req_loan ? Number(d.bni_req_loan) : "",
+        tenor: d.bni_req_tenor ? Number(d.bni_req_tenor) : "",
       };
     }
     return {
@@ -1790,6 +1826,7 @@ export default function CalculatorPage() {
     if (isBsi) return resetBsiForm();
     if (isCapital) return resetCapitalForm();
     if (isMestika) return resetMestikaForm();
+    if (isBniFleksi) return resetBniFleksiForm();
     setD({ ...d, name: "", birth: "", salary: "", take_over: 0 });
     setTl("3.5");
     setMode("max");
@@ -1797,6 +1834,96 @@ export default function CalculatorPage() {
     reset();
     setViewStage("workspace");
     window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const resetBniFleksiForm = () => {
+    setD({
+      ...d,
+      name: "",
+      salary: "",
+      take_over: 0,
+      bni_birth_iso: "",
+      bni_process_iso: todayIsoLocal(),
+      bni_product_code: "4",
+      bni_insurance_scheme: "MENURUN",
+      bni_dbr_pct: "90",
+      bni_req_loan: "",
+      bni_req_tenor: "",
+      bni_blokir_angsuran: "3",
+      bni_blokir_tabungan: "1",
+      bni_blokir_prapensiun: "10",
+    });
+    reset();
+    setViewStage("workspace");
+  };
+
+  const prefillBniExcelCase = () => {
+    setD({
+      ...d,
+      name: "CONTOH DEBITUR SINTETIS BNI-01",
+      bni_birth_iso: "1969-01-15",
+      bni_process_iso: "2026-11-17",
+      bni_product_code: "4",
+      bni_insurance_scheme: "MENURUN",
+      bni_dbr_pct: "90",
+      salary: 3759100,
+      bni_req_loan: 100000000,
+      bni_req_tenor: "50",
+      bni_blokir_angsuran: "3",
+      bni_blokir_tabungan: "1",
+      bni_blokir_prapensiun: "10",
+      take_over: 0,
+    });
+    reset();
+    toast.info("Contoh uji acuan sintetis BNI-01 (Pra Purna, Rp100 Jt • 50 bln) dimuat.");
+  };
+
+  const calcBniFleksiSubmit = async (e) => {
+    if (e) e.preventDefault();
+    setBniError("");
+    const isConfirmedProd = d.bni_product_code === "1" || d.bni_product_code === "4";
+    const isConfirmedScheme = d.bni_insurance_scheme === "MENURUN";
+    if (isConfirmedProd && isConfirmedScheme) {
+      const errs = [];
+      if (!d.name?.trim()) errs.push("Nama Calon Debitur wajib diisi.");
+      if (!parseIsoDateLocal(d.bni_birth_iso)) errs.push("Tanggal Lahir wajib diisi.");
+      if (!parseIsoDateLocal(d.bni_process_iso)) errs.push("Tanggal Aplikasi wajib diisi.");
+      if (!d.salary || Number(d.salary) <= 0) errs.push("Gaji Bulanan wajib diisi dan lebih dari Rp0.");
+      if (String(d.bni_req_loan || "").trim() !== "" && Number(d.bni_req_loan) <= 0) {
+        errs.push("Plafond Pinjaman yang diajukan harus lebih dari Rp0.");
+      }
+      if (
+        String(d.bni_req_tenor || "").trim() !== "" &&
+        (!Number.isInteger(Number(d.bni_req_tenor)) || Number(d.bni_req_tenor) < 1 || Number(d.bni_req_tenor) > 240)
+      ) {
+        errs.push("Tenor (bulan) harus berupa bilangan bulat antara 1 hingga 240 bulan.");
+      }
+      if (errs.length > 0) {
+        setBniError(errs.join(" "));
+        toast.error(errs[0]);
+        return;
+      }
+    }
+
+    setBusy("final");
+    setSim(null);
+    try {
+      const pld = payload();
+      const [maxResp, prevResp] = await Promise.all([
+        api.post("/calc/max", pld),
+        api.post("/calc/preview", pld),
+      ]);
+      setMx(maxResp.data);
+      setRes(prevResp.data);
+      setViewStage("result");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (err) {
+      const msg = errMsg(err);
+      setBniError(msg);
+      toast.error(msg);
+    } finally {
+      setBusy("");
+    }
   };
 
   const save = async () => {
@@ -2423,6 +2550,303 @@ export default function CalculatorPage() {
                     )}
                   </div>
                 </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {viewStage === "workspace" && bank && isBniFleksi && (
+        <div className="grid gap-6 xl:grid-cols-[460px_1fr]" data-testid="bni-calculator-layout">
+          <div className="space-y-6">
+            <Step n="1" title="Data Debitur &amp; Produk BNI Fleksi" testid="bni-step-1">
+              <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-3">
+                  <PartnerLogo bankKey="bank_bni" size="md" />
+                  <div>
+                    <h3 className="font-display text-sm font-bold text-[#17223B]">
+                      BANK BNI — FLEKSI PENSIUN &amp; PRA PURNA
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      MKSA v4 Jul26 • Reguler (Kode 1) &amp; Pra Purna (Kode 4)
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={prefillBniExcelCase}
+                  className="rounded-md border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-100"
+                  data-testid="bni-prefill-btn"
+                >
+                  Contoh Uji
+                </button>
+              </div>
+
+              <form onSubmit={calcBniFleksiSubmit} className="space-y-4" noValidate>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <Label htmlFor="bni-name" className="text-xs font-bold text-[#17223B]">Nama Calon Debitur</Label>
+                    <Input
+                      id="bni-name"
+                      required
+                      placeholder="Nama sesuai KTP / SK Pensiun"
+                      className="h-10 border-slate-200"
+                      value={d.name}
+                      onChange={(e) => { setD({ ...d, name: e.target.value }); setBniError(""); }}
+                      data-testid="bni-name-input"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="bni-birth" className="text-xs font-bold text-[#17223B]">Tanggal Lahir</Label>
+                    <Input
+                      id="bni-birth"
+                      type="date"
+                      required
+                      className="h-10 border-slate-200 lp-num"
+                      value={d.bni_birth_iso}
+                      onChange={(e) => { setD({ ...d, bni_birth_iso: e.target.value }); setBniError(""); }}
+                      data-testid="bni-birth-input"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="bni-proc" className="text-xs font-bold text-[#17223B]">Tanggal Aplikasi</Label>
+                    <Input
+                      id="bni-proc"
+                      type="date"
+                      required
+                      className="h-10 border-slate-200 lp-num"
+                      value={d.bni_process_iso}
+                      onChange={(e) => { setD({ ...d, bni_process_iso: e.target.value }); setBniError(""); }}
+                      data-testid="bni-process-date-input"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <Label htmlFor="bni-product" className="text-xs font-bold text-[#17223B]">Kode &amp; Produk Kredit BNI</Label>
+                    <select
+                      id="bni-product"
+                      className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-[#17223B]"
+                      value={d.bni_product_code}
+                      onChange={(e) => {
+                        const code = e.target.value;
+                        setD({
+                          ...d,
+                          bni_product_code: code,
+                          bni_blokir_prapensiun: code === "1" ? "0" : "10",
+                        });
+                        setBniError("");
+                        reset();
+                      }}
+                      data-testid="bni-product-select"
+                    >
+                      <option value="1">Kode 1 — BNI Fleksi Reguler (Purna)</option>
+                      <option value="4">Kode 4 — BNI Fleksi Pra Purna</option>
+                      <option value="2">Kode 2 — BNI Fleksi Grace Period (Belum Tersedia)</option>
+                      <option value="3">Kode 3 — BNI Fleksi Grace Period Kombinasi (Belum Tersedia)</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <Label htmlFor="bni-scheme" className="text-xs font-bold text-[#17223B]">Skema Asuransi AJK</Label>
+                    <select
+                      id="bni-scheme"
+                      className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-[#17223B]"
+                      value={d.bni_insurance_scheme}
+                      onChange={(e) => {
+                        setD({ ...d, bni_insurance_scheme: e.target.value });
+                        setBniError("");
+                        reset();
+                      }}
+                      data-testid="bni-scheme-select"
+                    >
+                      <option value="MENURUN">Kredit BFP Skema Menurun (CAR — Tersedia)</option>
+                      <option value="IBR">Kredit BFP Skema IBR (Belum Tersedia)</option>
+                      <option value="GP_MURNI">Kredit BFP Skema Grace Period Murni (Belum Tersedia)</option>
+                      <option value="GP_KOMBINASI">Kredit BFP Skema Grace Period Kombinasi (Belum Tersedia)</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-bold text-[#17223B]">Gaji Bulanan (Rp)</Label>
+                    <CurrencyInput
+                      required
+                      placeholder="Contoh: 3.759.100"
+                      value={d.salary}
+                      onChange={(v) => { setD({ ...d, salary: v }); setBniError(""); }}
+                      data-testid="bni-salary-input"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="bni-dbr" className="text-xs font-bold text-[#17223B]">Batas DBR (%)</Label>
+                    <select
+                      id="bni-dbr"
+                      className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-[#17223B] lp-num"
+                      value={d.bni_dbr_pct}
+                      onChange={(e) => { setD({ ...d, bni_dbr_pct: e.target.value }); setBniError(""); }}
+                      data-testid="bni-dbr-select"
+                    >
+                      <option value="90">90%</option>
+                      <option value="85">85%</option>
+                      <option value="80">80%</option>
+                      <option value="70">70%</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="border-t border-slate-100 pt-4 space-y-3">
+                  <p className="text-[11px] font-extrabold uppercase tracking-wider text-[#0D6E6D]">
+                    Plafond, Tenor, Blokir &amp; Take Over
+                  </p>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-bold text-[#17223B]">Plafond Pinjaman (Rp)</Label>
+                      <CurrencyInput
+                        placeholder="Kosongkan = Plafond Maks"
+                        value={d.bni_req_loan}
+                        onChange={(v) => { setD({ ...d, bni_req_loan: v }); setBniError(""); }}
+                        data-testid="bni-loan-input"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="bni-tenor" className="text-xs font-bold text-[#17223B]">Tenor (Bulan)</Label>
+                      <Input
+                        id="bni-tenor"
+                        type="number"
+                        min="1"
+                        max="240"
+                        placeholder="Kosongkan = Maks"
+                        className="h-10 border-slate-200 lp-num"
+                        value={d.bni_req_tenor}
+                        onChange={(e) => { setD({ ...d, bni_req_tenor: e.target.value.replace(/\D/g, "") }); setBniError(""); }}
+                        data-testid="bni-tenor-input"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="space-y-1">
+                      <Label htmlFor="bni-blk-angs" className="text-[11px] font-semibold text-slate-600">Blokir Angs (x)</Label>
+                      <Input
+                        id="bni-blk-angs"
+                        type="number"
+                        min="0"
+                        className="h-9 text-xs lp-num"
+                        value={d.bni_blokir_angsuran}
+                        onChange={(e) => setD({ ...d, bni_blokir_angsuran: e.target.value.replace(/\D/g, "") })}
+                        data-testid="bni-blokir-angsuran-input"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="bni-blk-tab" className="text-[11px] font-semibold text-slate-600">Blokir Tab (x)</Label>
+                      <Input
+                        id="bni-blk-tab"
+                        type="number"
+                        min="0"
+                        className="h-9 text-xs lp-num"
+                        value={d.bni_blokir_tabungan}
+                        onChange={(e) => setD({ ...d, bni_blokir_tabungan: e.target.value.replace(/\D/g, "") })}
+                        data-testid="bni-blokir-tabungan-input"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="bni-blk-pra" className="text-[11px] font-semibold text-slate-600">Blokir Prapen (x)</Label>
+                      <Input
+                        id="bni-blk-pra"
+                        type="number"
+                        min="0"
+                        className="h-9 text-xs lp-num"
+                        value={d.bni_blokir_prapensiun}
+                        onChange={(e) => setD({ ...d, bni_blokir_prapensiun: e.target.value.replace(/\D/g, "") })}
+                        data-testid="bni-blokir-prapensiun-input"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-bold text-[#17223B]">Take Over / Pelunasan (Rp)</Label>
+                    <CurrencyInput
+                      placeholder="0"
+                      value={d.take_over}
+                      onChange={(v) => setD({ ...d, take_over: v })}
+                      data-testid="bni-takeover-input"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2.5 pt-2">
+                  <Button
+                    type="submit"
+                    disabled={busy === "final"}
+                    className="h-11 flex-1 bg-[#0D6E6D] font-bold text-white hover:bg-[#095352]"
+                    data-testid="bni-submit-button"
+                  >
+                    {busy === "final" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    Hitung Simulasi BNI Fleksi
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={resetBniFleksiForm}
+                    className="h-11 border-slate-200 text-slate-600 hover:bg-slate-50 font-semibold"
+                    data-testid="bni-reset-button"
+                  >
+                    Atur Ulang
+                  </Button>
+                </div>
+              </form>
+            </Step>
+          </div>
+
+          <div className="space-y-6">
+            <section className="rounded-2xl bg-gradient-to-br from-[#0D6E6D] to-[#115E59] p-5 sm:p-6 text-white shadow-sm" data-testid="bni-info-panel">
+              <div className="flex items-center gap-3 border-b border-white/15 pb-3">
+                <PartnerLogo bankKey="bank_bni" size="sm" className="ring-2 ring-white/25" />
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-teal-200">
+                    PANDUAN ATURAN TERKONFIRMASI &amp; STATUS BELUM TERSEDIA
+                  </p>
+                  <h2 className="font-display text-base font-bold text-white">
+                    Cakupan Mesin Hitung Lokal BNI Fleksi
+                  </h2>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 text-xs">
+                <div className="rounded-xl border border-white/15 bg-white/10 p-3.5 space-y-1">
+                  <p className="font-bold text-teal-100">Aktif &amp; Tervalidasi:</p>
+                  <ul className="list-disc pl-4 space-y-1 text-teal-50/90">
+                    <li>Kode 1 (BNI Fleksi Reguler): 1–132 &amp; 145–180 bln</li>
+                    <li>Kode 4 (BNI Fleksi Pra Purna): 1–180 bln</li>
+                    <li>AJK CAR Skema Menurun (usia 20–74, subsidi BNI 150‰)</li>
+                  </ul>
+                </div>
+                <div className="rounded-xl border border-amber-300/30 bg-amber-950/25 p-3.5 space-y-1">
+                  <p className="font-bold text-amber-200">Status Belum Tersedia (Konfirmasi Klien):</p>
+                  <ul className="list-disc pl-4 space-y-1 text-amber-100/90">
+                    <li>Kode 2 (Grace Period) &amp; Kode 3 (Kombinasi)</li>
+                    <li>Skema AJK IBR, GP Murni, &amp; GP Kombinasi</li>
+                    <li>Tenor 133–144 bln Kode 1 &amp; tenor 181–240 bln</li>
+                  </ul>
+                </div>
+              </div>
+            </section>
+
+            {bniError && (
+              <div className="flex gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-xs sm:text-sm font-medium text-red-700" data-testid="bni-error-box">
+                <AlertTriangle className="h-5 w-5 shrink-0 text-red-600" />
+                <div>{bniError}</div>
+              </div>
+            )}
+
+            <div className="lp-card p-5 sm:p-6">
+              {!res ? (
+                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/70 p-8 text-center text-sm text-slate-500">
+                  Isi formulir BNI Fleksi di sebelah kiri atau klik <b>Contoh Uji</b>, lalu tekan <b>Hitung Simulasi BNI Fleksi</b>.
+                </div>
+              ) : (
+                <ResultView r={res} />
               )}
             </div>
           </div>
@@ -5171,7 +5595,7 @@ export default function CalculatorPage() {
         </div>
       )}
 
-      {viewStage === "workspace" && bank && !isCapital && !isMestika && !isBsi && !isAms2 && (
+      {viewStage === "workspace" && bank && !isCapital && !isMestika && !isBniFleksi && !isBsi && !isAms2 && (
         <div className="grid gap-6 xl:grid-cols-[440px_1fr] lp-fade">
           <div className="space-y-6">
             <Step
@@ -5451,21 +5875,23 @@ export default function CalculatorPage() {
             <div className="mt-6 space-y-4 border-t border-slate-200/80 pt-5">
               {!sim && (
                 <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-                  <Button
-                    onClick={save}
-                    disabled={busy === "save"}
-                    className="h-11 w-full bg-[#078D67] font-bold text-white hover:bg-[#067455] shadow-xs"
-                    data-testid="calc-save-button"
-                  >
-                    {busy === "save" ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <>
-                        <Save className="mr-2 h-4 w-4" />
-                        Simpan &amp; Unduh PDF Simulasi
-                      </>
-                    )}
-                  </Button>
+                  {res.status !== "UNAVAILABLE" && (
+                    <Button
+                      onClick={save}
+                      disabled={busy === "save"}
+                      className="h-11 w-full bg-[#078D67] font-bold text-white hover:bg-[#067455] shadow-xs"
+                      data-testid="calc-save-button"
+                    >
+                      {busy === "save" ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <>
+                          <Save className="mr-2 h-4 w-4" />
+                          Simpan &amp; Unduh PDF Simulasi
+                        </>
+                      )}
+                    </Button>
+                  )}
                   <Button
                     type="button"
                     variant="outline"

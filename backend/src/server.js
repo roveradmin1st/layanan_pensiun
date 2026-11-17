@@ -1082,6 +1082,23 @@ app.get("/api/calc/limits", requireAuth, (req, res) => {
             PENSIUN: pensiunSummary
           }
         };
+      } else if (key === "bank_bni" && partner.engine === "bni_fleksi") {
+        limits[key] = {
+          name: partner.name || key,
+          engine: partner.engine,
+          policyVersion: partner.policyVersion,
+          maxTenorMonths: partner.maxTenorMonths,
+          maxEndAgeYears: partner.maxEndAgeYears,
+          maxEndAgeMonths: partner.maxEndAgeMonths,
+          maxPlafondAbsolute: partner.maxPlafondAbsolute,
+          minEntryAgeYears: partner.minEntryAgeYears,
+          maxEntryAgeYears: partner.maxEntryAgeYears,
+          maxInstallmentRatio: partner.maxInstallmentRatio,
+          dbrPresets: partner.dbrPresets || [90, 85, 80, 70],
+          subsidyPermilCap: partner.subsidyPermilCap ?? 150,
+          products: partner.products,
+          insuranceSchemes: partner.insuranceSchemes
+        };
       } else {
         limits[key] = {
           name: partner.name || key,
@@ -1248,6 +1265,36 @@ app.post("/api/calc/params/bsi_prapen/products/:productCode/reset", requireAuth,
   });
 });
 
+function sanitizeBniParamUpdates(updates) {
+  const allowedBniKeys = new Set(["maxInstallmentRatio", "subsidyPermilCap"]);
+  const sanitized = {};
+  for (const [k, v] of Object.entries(updates || {})) {
+    if (!allowedBniKeys.has(k)) {
+      return {
+        ok: false,
+        status: 400,
+        errorCode: "BNI_PARAM_MANAGED_BY_MATRIX",
+        detail: `Parameter '${k}' pada BNI Fleksi dikunci mengikuti matriks workbook MKSA v4 Jul26. Field yang dapat diubah: maxInstallmentRatio, subsidyPermilCap.`
+      };
+    }
+    const num = Number(v);
+    if (!Number.isFinite(num)) {
+      return { ok: false, status: 400, detail: `Nilai '${k}' harus berupa angka valid.` };
+    }
+    if (k === "maxInstallmentRatio" && (num < 10 || num > 100)) {
+      return { ok: false, status: 400, detail: "Batas DBR default BNI harus antara 10% s.d. 100%." };
+    }
+    if (k === "subsidyPermilCap" && (num < 0 || num > 500)) {
+      return { ok: false, status: 400, detail: "Batas subsidi premi AJK BNI harus antara 0‰ s.d. 500‰." };
+    }
+    sanitized[k] = num;
+  }
+  if (Object.keys(sanitized).length === 0) {
+    return { ok: false, status: 400, detail: "Tidak ada parameter BNI yang diubah." };
+  }
+  return { ok: true, updates: sanitized };
+}
+
 app.put("/api/calc/params/:partnerKey", requireAuth, requireRoles("super_admin", "admin_ops"), (req, res) => {
   const { partnerKey } = req.params;
   const { updates, reason, product_key, productCode, expectedPolicyVersion } = req.body || {};
@@ -1282,6 +1329,52 @@ app.put("/api/calc/params/:partnerKey", requireAuth, requireRoles("super_admin",
       reason,
       expectedPolicyVersion
     );
+  }
+
+  // Untuk BNI Fleksi, hanya izinkan pembaruan parameter terstruktur yang tervalidasi (jaga matriks & produk terkonfirmasi)
+  if (partnerKey === "bank_bni" && target.engine === "bni_fleksi") {
+    const bniValidation = sanitizeBniParamUpdates(updates);
+    if (!bniValidation.ok) {
+      return res.status(bniValidation.status || 400).json({
+        ...(bniValidation.errorCode ? { error_code: bniValidation.errorCode } : {}),
+        detail: bniValidation.detail
+      });
+    }
+    const sanitizedBniUpdates = bniValidation.updates;
+    if (req.user.role === "admin_ops") {
+      const prop = withTransaction(() => {
+        const createdProp = {
+          id: `prop-${Date.now()}`,
+          partner_key: partnerKey,
+          partner_name: target.name,
+          proposed_by_id: req.user.id,
+          proposed_by_name: `${req.user.name} (Admin Operasional)`,
+          created_at: new Date().toISOString(),
+          status: "PENDING",
+          reason: reason || "Usulan penyesuaian batas BNI Fleksi",
+          changes: sanitizedBniUpdates
+        };
+        store.parameter_proposals.unshift(createdProp);
+        addAuditLog(req.user, "propose_param_change", partnerKey, `Mengusulkan perubahan parameter ${target.name}`, req.ip);
+        return createdProp;
+      });
+      return res.json({
+        mode: "proposed",
+        message: "Usulan perubahan parameter BNI dikirim ke Super Admin untuk persetujuan (Dual Control).",
+        proposal: prop
+      });
+    }
+    withTransaction(() => {
+      Object.assign(target, sanitizedBniUpdates);
+      store.partner_parameters.lastUpdated = new Date().toISOString();
+      store.partner_parameters.updatedBy = `${req.user.name} (Super Admin)`;
+      addAuditLog(req.user, "update_partner_params", partnerKey, `Memperbarui parameter BNI Fleksi`, req.ip);
+    });
+    return res.json({
+      mode: "applied",
+      message: `Parameter ${target.name} berhasil diperbarui secara real-time.`,
+      partner: target
+    });
   }
 
   // Dual Control: Admin Operasional creates proposal; Super Admin applies directly
@@ -1405,7 +1498,16 @@ app.post("/api/calc/params/proposals/:id/decide", requireAuth, requireRoles("sup
     prop.decided_at = new Date().toISOString();
 
     if (decision === "APPROVE" && store.partner_parameters[prop.partner_key] && prop.partner_key !== "bsi_prapen") {
-      Object.assign(store.partner_parameters[prop.partner_key], prop.changes);
+      const targetPartner = store.partner_parameters[prop.partner_key];
+      let approvedChanges = prop.changes;
+      if (prop.partner_key === "bank_bni" && targetPartner.engine === "bni_fleksi") {
+        const bniCheck = sanitizeBniParamUpdates(prop.changes);
+        if (!bniCheck.ok) {
+          throw new Error(bniCheck.detail);
+        }
+        approvedChanges = bniCheck.updates;
+      }
+      Object.assign(targetPartner, approvedChanges);
       store.partner_parameters.lastUpdated = new Date().toISOString();
       store.partner_parameters.updatedBy = `${req.user.name} (Super Admin)`;
     }
@@ -1441,6 +1543,9 @@ const CALC_NON_NEGATIVE_FIELDS = [
   "pelunasan_lama",
   "ongoing_installments",
   "blokir_count",
+  "blokir_angsuran_count",
+  "blokir_tabungan_count",
+  "blokir_prapensiun_count",
   "blokir_1_override",
   "blokir_2_override",
   "blokir_3_override"
@@ -1451,7 +1556,10 @@ function isInvalidProductErrorCode(code) {
     code === "UNKNOWN_PRODUCT" ||
     code === "UNKNOWN_BSI_PRODUCT" ||
     code === "MISSING_BSI_PRODUCT_CONFIG" ||
-    code === "MISSING_BSI_PARTNER_CONFIG"
+    code === "MISSING_BSI_PARTNER_CONFIG" ||
+    code === "MISSING_BNI_CONFIG" ||
+    code === "BNI_PRODUCT_UNKNOWN" ||
+    code === "BNI_INSURANCE_SCHEME_UNKNOWN"
   );
 }
 
@@ -1527,6 +1635,18 @@ app.post("/api/simulations", requireAuth, (req, res) => {
   }
 
   const result = calculatePreview(body, store.partner_parameters);
+  if (result.status === "UNAVAILABLE") {
+    return res.status(400).json({
+      error_code: result.error_code || "BNI_RULE_UNAVAILABLE",
+      detail: result.unavailable_reason || "Kombinasi produk atau tenor ini belum tersedia untuk disimpan."
+    });
+  }
+  if (result.status === "INVALID" || isInvalidProductErrorCode(result.error_code)) {
+    return res.status(400).json({
+      error_code: result.error_code || "BNI_INVALID_INPUT",
+      detail: result.stop_reason || (result.issues && result.issues[0]) || "Parameter atau input simulasi tidak valid."
+    });
+  }
   if (
     !Number.isFinite(result.plafond) ||
     result.plafond <= 0 ||
@@ -1622,15 +1742,29 @@ app.post("/api/simulations/:id/ai-summary", requireAuth, (req, res) => {
   }
   const r = sim.result;
   const isBsi = r.bank_key === "bsi_prapen" || !!r.bsi_details;
+  const isBniFleksi = r.bank_key === "bank_bni" || !!r.bni_details;
   const isCapital = r.bank_key === "bank_capital" || !!r.capital_details;
   const isMestika = r.bank_key === "bank_mestika" || !!r.mestika_details;
   const isAms2 = r.bank_key === "ams2";
   const bsi = r.bsi_details || {};
+  const bni = r.bni_details || {};
   const cap = r.capital_details || {};
   const mst = r.mestika_details || {};
 
   let summary = "";
-  if (isMestika) {
+  if (isBniFleksi) {
+    summary = [
+      `RINGKASAN EKSEKUTIF SIMULASI BANK BNI FLEKSI PENSIUN (${sim.sim_no})`,
+      `• Debitur: ${r.name || "-"} (Usia Aplikasi ${bni.age_exact_text || `${r.age} tahun`}) — Produk ${bni.product_name || "BNI Fleksi"} (Kode ${bni.product_code || "-"}) • ${bni.insurance_scheme_label || "Skema Menurun"}.`,
+      `• Gaji & Batas DBR: Rp${r.salary.toLocaleString("id-ID")} (DBR ${bni.dbr_pct ?? 90}% = Maks Angsuran Rp${(bni.max_installment ?? 0).toLocaleString("id-ID")}/bln).`,
+      `• Plafond & Tenor: Plafond Rp${r.plafond.toLocaleString("id-ID")} (Maks Rp${(bni.max_plafond ?? r.plafond).toLocaleString("id-ID")}) selama ${r.tenor} bulan (${bni.insurance_tenor_years || Math.ceil((r.tenor || 0) / 12)} thn AJK) • Bunga Efektif ${r.bank_rate}% p.a.`,
+      `• Angsuran & Biaya Bank: Angsuran Rp${r.coop_installment.toLocaleString("id-ID")}/bln (DSR ${r.ratio_pct}%) • Biaya Bank (Admin Rp${(bni.admin_fee ?? 0).toLocaleString("id-ID")} + Provisi ${bni.provisi_pct ?? 0}% + BTL ${bni.btl_pct ?? 3.5}%) = Rp${(bni.bank_fees ?? 0).toLocaleString("id-ID")}.`,
+      `• Asuransi AJK CAR (${bni.ajk_rate_permil ?? 0}‰): Gross Rp${(bni.gross_ajk_premium ?? 0).toLocaleString("id-ID")}, Subsidi BNI (s.d. ${bni.subsidy_cap_permil ?? 150}‰) -Rp${(bni.bni_subsidy_premium ?? 0).toLocaleString("id-ID")}, Ditanggung Nasabah Rp${(bni.customer_ajk_premium ?? 0).toLocaleString("id-ID")} (Underwriting: ${bni.underwriting_code || "-"}).`,
+      `• Blokir & Take Over: Blokir Angsuran (${bni.blokir_angsuran_count ?? 3}x), Tabungan (${bni.blokir_tabungan_count ?? 1}x), Prapensiun (${bni.blokir_prapensiun_count ?? 0}x) = Rp${r.retention.toLocaleString("id-ID")}${r.take_over > 0 ? `, Take Over Rp${r.take_over.toLocaleString("id-ID")}` : ""}.`,
+      `• Hasil Akhir: Terima Bersih Rp${r.net_disbursement.toLocaleString("id-ID")} dengan Sisa Gaji Rp${r.remaining_salary.toLocaleString("id-ID")}/bln.`,
+      `• Status Validasi: ${r.overall_ok ? "PASSED — Seluruh ketentuan BNI Fleksi & AJK CAR terpenuhi." : (r.issues || []).join(" ") || "NOT PASSED — Periksa catatan validasi."}`
+    ].join("\n");
+  } else if (isMestika) {
     const gajiDesc = mst.salary_type === "pensiun"
       ? `Sesuai Gaji Pensiun Rp${(mst.salary_input ?? r.salary).toLocaleString("id-ID")} (Estimasi Gaji Pokok -${mst.pension_deduction_pct ?? 13}% = Rp${(mst.basic_salary ?? r.salary).toLocaleString("id-ID")})`
       : `Sesuai Gaji IDPB Rp${(mst.basic_salary ?? r.salary).toLocaleString("id-ID")}`;

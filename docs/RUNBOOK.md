@@ -53,19 +53,21 @@ Environment `production` dikonfigurasi dengan `DEPLOY_SSH_KEY`,
 dibatasi. Jangan membagikan key/password melalui chat. Sampai konfigurasi itu
 selesai dan diuji, gunakan controller yang sama melalui terminal operator.
 
-## Status Operasional Penting (Acuan Audit 8 November 2026)
+## Status Operasional Penting (Sinkronisasi 15 November 2026)
 
-1. **Rilis Produksi Sudah Aktif (`c76e823`):**
-   - Symlink `/srv/layanan-pensiunan/current` dan proses aktif (`lpapp`, 1 instance *fork* pada `127.0.0.1:4000`, Node `24.22.2`) telah menjalankan `/srv/layanan-pensiunan/releases/layanan-pensiunan-c76e823-production` (commit `c76e823db5a047807bea77ad6c03f2985e62560b`) dengan database `/srv/layanan-pensiunan/shared/data/enterprise.sqlite` (+ `-wal`, `-shm`).
+1. **Rilis Produksi Aktif & Terverifikasi (`6a791a34b4f90111fabe3e5ce55fef08a8395913`):**
+   - Pemeriksaan GitHub & controller VPS (`lp-release`) pada **15 November 2026** mengonfirmasi baseline produksi aktif menunjuk commit `6a791a34b4f90111fabe3e5ce55fef08a8395913` (branch `feat/repeatable-deployment-20261109`) dengan hasil `status=active_verified`, `alignment=aligned`, dan `database_healthy=true`.
+   - Proses aktif (`lpapp`, 1 instance *fork* pada `127.0.0.1:4000`, Node `24.22.2`) menggunakan `/srv/layanan-pensiunan/shared/data/enterprise.sqlite` (+ `-wal`, `-shm`).
+   - `origin/main` masih menunjuk `52ac0b883d903bca2dd35c3dd3ca43a8243d662f` (legacy; jangan dijadikan baseline). Rilis awal `c76e823` (8 Nov 2026) dan `fe1025a` (9 Nov 2026) adalah milestone historis sebelum aktivasi `6a791a34b4f90111fabe3e5ce55fef08a8395913`.
 2. **Alur Update Berikutnya (Baku):**
    - **`pengembangan → pengujian → GitHub → CI berhasil → deployment saat diminta pemilik → verifikasi → catat versi`**
-   - Setiap update wajib mempertahankan seluruh data, akun, password, role, status aktif, relasi SM–Marketing, wilayah, cakupan bank, parameter bank, dan dokumen BLOB yang sudah ada.
-3. **Batas Prosedur yang Terbukti vs. Rencana Otomasi / Alat Historis:**
-   - **Sudah Terbukti Bekerja:** Validasi lokal/CI (`python3 ops/ci.py` pada database sementara), pemeriksaan kandidat/rilis pada salinan sementara (`ops/check_candidate.py`, `ops/check_staged_release.py`), snapshot backup SQLite konsisten sebagai `lpapp`, enkripsi GPG ke laptop, dan aktivasi rilis manual terkendali.
+   - Setiap update wajib mempertahankan seluruh data, akun, password, role, status aktif, relasi SM–Marketing, wilayah, cakupan bank, parameter bank, konfigurasi produksi, dan dokumen BLOB yang sudah ada.
+3. **Batas Prosedur yang Terbukti vs. Alat Historis:**
+   - **Sudah Terbukti Bekerja:** Controller rilis rutin `/usr/local/bin/lp-release` (`ops/server_release.py` + `ops/package_release.py`), validasi lokal/CI (`python3 ops/ci.py` pada database sementara), pemeriksaan kandidat/rilis pada salinan sementara (`ops/check_candidate.py`, `ops/check_staged_release.py`), snapshot backup SQLite konsisten sebagai `lpapp`, dan enkripsi GPG ke laptop.
    - **Ditunda / Jangan Dijalankan Ulang untuk Update Rutin:**
-     - `ops/production_cutover.py`: Pernah gagal saat aktivasi transisi UAT→produksi (aktivasi kemudian diselesaikan secara manual atas izin pemilik). Pemilik menunda riset/perbaikan alat ini. **Jangan menjalankan ulang `production_cutover.py` atau skrip aktivasi historis untuk update rutin.**
+     - `ops/production_cutover.py`: Alat transisi satu kali UAT→produksi yang pernah gagal saat aktivasi awal 8 November 2026 (kemudian diselesaikan manual dan kini digantikan `lp-release` untuk update rutin). Pemilik menunda riset/perbaikan `production_cutover.py`. **Jangan menjalankan ulang `production_cutover.py` atau skrip aktivasi historis untuk update rutin.**
      - `/srv/layanan-pensiunan/deploy.sh`: Ada di VPS, namun isi dan kesesuaiannya belum dinilai dalam audit 8 November 2026. **Jangan menganggap file ini sebagai perintah update resmi.**
-     - **Deployment rutin satu tombol:** Baru merupakan sasaran perbaikan berikutnya dan belum tersedia/tervalidasi untuk produksi. Setiap `git push` tidak otomatis memperbarui VPS.
+     - Setiap `git push` ke branch fitur tidak otomatis memperbarui VPS; rilis tetap harus dipicu/diverifikasi melalui jalur yang disetujui.
 
 ---
 
