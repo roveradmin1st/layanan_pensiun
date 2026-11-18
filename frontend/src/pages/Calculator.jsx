@@ -1030,7 +1030,7 @@ export default function CalculatorPage() {
     bni_process_iso: todayIsoLocal(),
     bni_product_code: "4",
     bni_insurance_scheme: "MENURUN",
-    bni_dbr_pct: "90",
+    bni_dbr_pct: "",
     bni_req_loan: "",
     bni_req_tenor: "",
     bni_blokir_angsuran: "3",
@@ -1053,9 +1053,17 @@ export default function CalculatorPage() {
   const [bsiChoiceOpen, setBsiChoiceOpen] = useState(false);
   const bsiReqSeqRef = useRef(0);
 
+  const refreshBniLimits = () => {
+    api.get("/calc/limits").then(({ data }) => {
+      const limits = data.limits?.bank_bni;
+      if (limits) setPartnerParams((prev) => ({ ...prev, bank_bni: limits }));
+    }).catch(() => {});
+  };
+
   const handleSelectBank = (targetKey, bsiInitialSubProduct = null) => {
     setTransitionBankKey(targetKey);
     setBankKey(targetKey);
+    if (targetKey === "bank_bni") refreshBniLimits();
     if (targetKey === "bsi_prapen" && bsiInitialSubProduct) {
       const today = todayIsoLocal();
       setD((prev) => ({
@@ -1150,6 +1158,10 @@ export default function CalculatorPage() {
   const isCapital = bankKey === "bank_capital";
   const isMestika = bankKey === "bank_mestika";
   const isBniFleksi = bankKey === "bank_bni";
+  const bniDefaultDbr = String(partnerParams?.bank_bni?.maxInstallmentRatio ?? "");
+  const bniDbrOptions = [...new Set([
+    bniDefaultDbr, ...(partnerParams?.bank_bni?.dbrPresets || [90, 85, 80, 70]).map(String), d.bni_dbr_pct
+  ])].filter((value) => value !== "" || bniDefaultDbr === "");
 
   const base = () => ({
     bank_key: bankKey,
@@ -1233,7 +1245,7 @@ export default function CalculatorPage() {
     // Bank BNI Fleksi (MKSA v4 Jul26) fields:
     bni_product_code: isBniFleksi ? d.bni_product_code : undefined,
     bni_insurance_scheme: isBniFleksi ? d.bni_insurance_scheme : undefined,
-    bni_dbr_pct: isBniFleksi ? Number(d.bni_dbr_pct || 90) : undefined,
+    bni_dbr_pct: isBniFleksi && d.bni_dbr_pct !== "" ? Number(d.bni_dbr_pct) : undefined,
     blokir_angsuran_count: isBniFleksi && String(d.bni_blokir_angsuran ?? "").trim() !== "" ? Number(d.bni_blokir_angsuran) : undefined,
     blokir_tabungan_count: isBniFleksi && String(d.bni_blokir_tabungan ?? "").trim() !== "" ? Number(d.bni_blokir_tabungan) : undefined,
     blokir_prapensiun_count: isBniFleksi && String(d.bni_blokir_prapensiun ?? "").trim() !== "" ? Number(d.bni_blokir_prapensiun) : undefined,
@@ -1846,7 +1858,7 @@ export default function CalculatorPage() {
       bni_process_iso: todayIsoLocal(),
       bni_product_code: "4",
       bni_insurance_scheme: "MENURUN",
-      bni_dbr_pct: "90",
+      bni_dbr_pct: "",
       bni_req_loan: "",
       bni_req_tenor: "",
       bni_blokir_angsuran: "3",
@@ -1854,6 +1866,7 @@ export default function CalculatorPage() {
       bni_blokir_prapensiun: "10",
     });
     reset();
+    refreshBniLimits();
     setViewStage("workspace");
   };
 
@@ -1908,13 +1921,8 @@ export default function CalculatorPage() {
     setBusy("final");
     setSim(null);
     try {
-      const pld = payload();
-      const [maxResp, prevResp] = await Promise.all([
-        api.post("/calc/max", pld),
-        api.post("/calc/preview", pld),
-      ]);
-      setMx(maxResp.data);
-      setRes(prevResp.data);
+      const { data } = await api.post("/calc/preview", payload());
+      setRes(data);
       setViewStage("result");
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err) {
@@ -1929,7 +1937,9 @@ export default function CalculatorPage() {
   const save = async () => {
     setBusy("save");
     try {
-      const { data } = await api.post("/simulations", payload());
+      const inputs = payload();
+      if (isBniFleksi) inputs.expected_bni_policy_revision = res?.bni_policy_revision;
+      const { data } = await api.post("/simulations", inputs);
       setSim(data);
       toast.success(`Simulasi ${data.sim_no} tersimpan`);
     } catch (err) { toast.error(errMsg(err)); } finally { setBusy(""); }
@@ -2680,18 +2690,22 @@ export default function CalculatorPage() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label htmlFor="bni-dbr" className="text-xs font-bold text-[#17223B]">Batas DBR (%)</Label>
+                    <Label htmlFor="bni-dbr" className="text-xs font-bold text-[#17223B]">DBR Simulasi (%)</Label>
                     <select
                       id="bni-dbr"
                       className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-[#17223B] lp-num"
-                      value={d.bni_dbr_pct}
-                      onChange={(e) => { setD({ ...d, bni_dbr_pct: e.target.value }); setBniError(""); }}
+                      value={d.bni_dbr_pct || bniDefaultDbr}
+                      onChange={(e) => {
+                        setD({ ...d, bni_dbr_pct: e.target.value === bniDefaultDbr ? "" : e.target.value });
+                        setBniError("");
+                      }}
                       data-testid="bni-dbr-select"
                     >
-                      <option value="90">90%</option>
-                      <option value="85">85%</option>
-                      <option value="80">80%</option>
-                      <option value="70">70%</option>
+                      {bniDbrOptions.map((value) => (
+                        <option key={value} value={value}>
+                          {value ? `${value}%` : "Pengaturan bank"}{value && value === bniDefaultDbr ? " (default)" : ""}
+                        </option>
+                      ))}
                     </select>
                   </div>
                 </div>
@@ -5875,7 +5889,7 @@ export default function CalculatorPage() {
             <div className="mt-6 space-y-4 border-t border-slate-200/80 pt-5">
               {!sim && (
                 <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-                  {res.status !== "UNAVAILABLE" && (
+                  {res.status !== "UNAVAILABLE" && (!isBniFleksi || res.status !== "INVALID") && (
                     <Button
                       onClick={save}
                       disabled={busy === "save"}
@@ -5887,7 +5901,7 @@ export default function CalculatorPage() {
                       ) : (
                         <>
                           <Save className="mr-2 h-4 w-4" />
-                          Simpan &amp; Unduh PDF Simulasi
+                          {isBniFleksi ? "Simpan Simulasi" : "Simpan & Unduh PDF Simulasi"}
                         </>
                       )}
                     </Button>
@@ -5913,6 +5927,10 @@ export default function CalculatorPage() {
                     {simStatus === "dibatalkan" ? (
                       <p className="mt-2 text-sm text-slate-500" data-testid="sim-cancelled">
                         Pengajuan dibatalkan.
+                      </p>
+                    ) : isBniFleksi && !sim.result?.overall_ok ? (
+                      <p className="mt-2 text-sm text-slate-500" data-testid="bni-approval-hold">
+                        Periksa catatan validasi sebelum membuat pengajuan.
                       </p>
                     ) : (
                       <>

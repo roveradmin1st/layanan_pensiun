@@ -1283,6 +1283,7 @@ export function MestikaResultView({ r }) {
 // ============================================================================
 export function BniResultView({ r }) {
   const bni = r.bni_details || {};
+  const needsUnderwritingReview = bni.underwriting_requires_verification;
   if (r.status === "UNAVAILABLE" || bni.status === "UNAVAILABLE") {
     return (
       <div className="space-y-4" data-testid="final-result">
@@ -1333,12 +1334,14 @@ export function BniResultView({ r }) {
         <div className="sm:self-center">
           <span
             className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold ${
-              r.overall_ok ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
+              needsUnderwritingReview ? "bg-amber-50 text-amber-800" :
+                r.overall_ok ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
             }`}
             data-testid="bni-result-status"
           >
-            {r.overall_ok ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
-            {r.overall_ok ? "PASSED — Layak Diproses" : "NOT PASSED — Periksa Validasi"}
+            {r.overall_ok && !needsUnderwritingReview ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
+            {needsUnderwritingReview ? "Perlu verifikasi aturan asuransi" :
+              r.overall_ok ? "PASSED — Layak Diproses" : "NOT PASSED — Periksa Validasi"}
           </span>
         </div>
       </div>
@@ -1359,7 +1362,7 @@ export function BniResultView({ r }) {
           <Block title="Parameter Kredit & Angsuran" accent="#F28A19">
             <Row k="Gaji Bulanan" v={rp(r.salary)} />
             <Row k={`Batas Angsuran (DBR ${bni.dbr_pct ?? 90}%)`} v={`Rp ${fmtExcelDec2(bni.max_installment_exact ?? bni.max_installment)}`} />
-            <Row k="Plafond Maksimal (PV)" v={`Rp ${fmtExcelDec2(bni.max_plafond_exact ?? bni.max_plafond)}`} strong />
+            <Row k="Plafon Maksimum" v={`Rp ${fmtExcelDec2(bni.max_plafond_exact ?? bni.max_plafond)}`} strong />
             <Row k="Plafond Pinjaman Diajukan" v={rp(r.plafond)} strong testid="result-plafond" />
             <Row k="Tenor Pinjaman / Masa AJK" v={`${r.tenor} bulan (${bni.insurance_tenor_years || Math.ceil((r.tenor || 0) / 12)} tahun AJK)`} />
             <Row k="Bunga Efektif (% p.a.)" v={`${pct(r.bank_rate)} per tahun`} strong />

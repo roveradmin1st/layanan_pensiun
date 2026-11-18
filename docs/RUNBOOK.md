@@ -53,6 +53,13 @@ Environment `production` dikonfigurasi dengan `DEPLOY_SSH_KEY`,
 dibatasi. Jangan membagikan key/password melalui chat. Sampai konfigurasi itu
 selesai dan diuji, gunakan controller yang sama melalui terminal operator.
 
+## Demo dan aktivasi BNI Fleksi
+
+Gunakan [panduan demo BNI](BNI-DEMO.md) untuk melatih aktivasi Super Admin,
+memeriksa data sintetis sebelum dan sesudah aktivasi, serta menguji kalkulator
+bank yang sudah dipakai. Aktivasi BNI terjadi di dalam aplikasi setelah kode
+berjalan dan memiliki catatan audit tersendiri.
+
 ## Status Operasional Penting (Sinkronisasi 15 November 2026)
 
 1. **Rilis Produksi Aktif & Terverifikasi (`6a791a34b4f90111fabe3e5ce55fef08a8395913`):**

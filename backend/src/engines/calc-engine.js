@@ -2391,6 +2391,7 @@ function findBsiMaxPrincipal(body, resolved, core, tenorForCap) {
 export function calculateMax(body, allParams) {
   const bankKey = body.bank_key ?? "ams2";
   const cfg = registeredPartner(allParams, bankKey);
+  if (bankKey === "bank_bni") return evaluateBniMax(body, cfg, new Date().toISOString().slice(0, 10));
   if (!cfg) return rejectUnknownPartner(bankKey);
   const processDate = new Date().toISOString().slice(0, 10);
   const ageObj = computeAgeDetail(body.birth_date, processDate);
@@ -2787,11 +2788,6 @@ export function calculateMax(body, allParams) {
     };
   }
 
-  // 3c. Bank BNI — BNI Fleksi Pensiun & Pra Purna (MKSA v4 Jul26)
-  if (bankKey === "bank_bni" || cfg.engine === "bni_fleksi") {
-    return evaluateBniMax(body, cfg, processDate);
-  }
-
   // 4. Mitra Bank Konvensional (Mandiri Taspen, Bank MNC, dll.)
   if (age >= (cfg.maxEntryAgeYears || 78)) {
     return {
@@ -2840,6 +2836,7 @@ export function calculateMax(body, allParams) {
 export function calculatePreview(body, allParams) {
   const bankKey = body.bank_key ?? "ams2";
   const cfg = registeredPartner(allParams, bankKey);
+  if (bankKey === "bank_bni") return evaluateBniPreview(body, cfg, new Date().toISOString().slice(0, 10));
   if (!cfg) return rejectUnknownPartner(bankKey);
 
   // 2. BSI Mitraguna Prima+ Prapensiun (PP10/PP3) & BSI Pensiun Berkah + Simas Jiwa
@@ -2876,12 +2873,6 @@ export function calculatePreview(body, allParams) {
       scen.bsi_details.recommended_max_plafond = searchRes.maxPlafond;
     }
     return scen;
-  }
-
-  // 2b. Bank BNI — BNI Fleksi Pensiun & Pra Purna (MKSA v4 Jul26)
-  // Ditangani langsung lewat modul terisolasi evaluateBniPreview agar sumber preview & simpan konsisten.
-  if (bankKey === "bank_bni" || cfg.engine === "bni_fleksi") {
-    return evaluateBniPreview(body, cfg, new Date().toISOString().slice(0, 10));
   }
 
   const mx = calculateMax(body, allParams);
@@ -3434,6 +3425,20 @@ function pdfEscape(str) {
     .replace(/[^\x20-\x7E]/g, " ");
 }
 
+function escapeXml(value) {
+  return String(value ?? "")
+    .replace(/[^\t\n\r\u0020-\uD7FF\uE000-\uFFFD\u{10000}-\u{10FFFF}]/gu, "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function svgXml(strings, ...values) {
+  return values.reduce((xml, value, i) => xml + escapeXml(value) + strings[i + 1], strings[0]);
+}
+
 function fmtRp(n) {
   return "Rp " + Math.round(Number(n || 0)).toLocaleString("id-ID");
 }
@@ -3890,6 +3895,7 @@ export function generateSimulationPdfBuffer(sim) {
       [`Premi AJK Gross / Subsidi BNI (s.d. ${bni.subsidy_cap_permil ?? 150}‰)`, `${fmtRp(bni.gross_ajk_premium)} / -${fmtRp(bni.bni_subsidy_premium)}`],
       [`Premi AJK Ditanggung Nasabah (${bni.customer_ajk_permil ?? 0}‰)`, fmtRp(bni.customer_ajk_premium)],
       ["Status Underwriting Medis", `${bni.underwriting_code || "-"} (${bni.underwriting_desc || "-"})`],
+      ...(bni.underwriting_requires_verification ? [["Catatan", "Perlu verifikasi aturan asuransi sebelum pengajuan"]] : []),
       ["BLOKIR, TAKE OVER & PENCAIRAN", ""],
       ["Pencairan Bersih Sebelum Blokir", fmtRp(bni.net_before_blokir)],
       [`Blokir Angsuran (${bni.blokir_angsuran_count ?? 3}x) & Tabungan (${bni.blokir_tabungan_count ?? 1}x)`, `${fmtRp(bni.blokir_angsuran)} + ${fmtRp(bni.blokir_tabungan)}`],
@@ -4193,7 +4199,7 @@ export function generateSimulationSvgBuffer(sim) {
   const mst = r.mestika_details || {};
 
   if (isBniFleksi) {
-    const svg = `<?xml version="1.0" encoding="UTF-8"?>
+    const svg = svgXml`<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="620" viewBox="0 0 900 620">
   <rect width="900" height="620" fill="#F3F8F8" rx="18"/>
   <rect width="900" height="105" fill="#0D6E6D" rx="18"/>
@@ -4219,7 +4225,7 @@ export function generateSimulationSvgBuffer(sim) {
   <text x="835" y="192" text-anchor="end" fill="#132A29" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(bni.bank_fees)}</text>
   <text x="480" y="222" fill="#5F706E" font-family="Arial, sans-serif" font-size="13">AJK CAR (${bni.ajk_rate_permil ?? 0}‰ Gross):</text>
   <text x="835" y="222" text-anchor="end" fill="#132A29" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(bni.gross_ajk_premium)}</text>
-  <text x="480" y="252" fill="#5F706E" font-family="Arial, sans-serif" font-size="13">Subsidi BNI (s.d. 150‰):</text>
+  <text x="480" y="252" fill="#5F706E" font-family="Arial, sans-serif" font-size="13">Subsidi BNI (s.d. ${bni.subsidy_cap_permil ?? 150}‰):</text>
   <text x="835" y="252" text-anchor="end" fill="#0D6E6D" font-family="Arial, sans-serif" font-size="13" font-weight="bold">-${fmtRp(bni.bni_subsidy_premium)}</text>
   <text x="480" y="282" fill="#5F706E" font-family="Arial, sans-serif" font-size="13">AJK Ditanggung Nasabah:</text>
   <text x="835" y="282" text-anchor="end" fill="#132A29" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(bni.customer_ajk_premium)}</text>
@@ -4227,6 +4233,7 @@ export function generateSimulationSvgBuffer(sim) {
   <text x="835" y="312" text-anchor="end" fill="#132A29" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.retention)}</text>
   <text x="480" y="342" fill="#5F706E" font-family="Arial, sans-serif" font-size="13">Take Over (TO):</text>
   <text x="835" y="342" text-anchor="end" fill="#132A29" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.take_over || 0)}</text>
+  <text x="60" y="391" fill="#92400E" font-family="Arial, sans-serif" font-size="13">${bni.underwriting_requires_verification ? "Perlu verifikasi aturan asuransi" : ""}</text>
   <rect x="40" y="485" width="820" height="95" fill="#0D6E6D" rx="14"/>
   <text x="65" y="520" fill="#CCFBF1" font-family="Arial, sans-serif" font-size="13">TERIMA BERSIH SETELAH TO</text>
   <text x="65" y="558" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="28" font-weight="bold">${fmtRp(r.net_disbursement)}</text>
@@ -4237,7 +4244,7 @@ export function generateSimulationSvgBuffer(sim) {
   }
 
   if (isMestika) {
-    const svg = `<?xml version="1.0" encoding="UTF-8"?>
+    const svg = svgXml`<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="620" viewBox="0 0 900 620">
   <rect width="900" height="620" fill="#F4F9F4" rx="18"/>
   <rect width="900" height="105" fill="#165B26" rx="18"/>
@@ -4288,7 +4295,7 @@ export function generateSimulationSvgBuffer(sim) {
     const maxTenorVal = cap.max_credit_months || cap.credit_months || r.tenor || 0;
     const reqTenorVal = cap.credit_months ?? r.tenor ?? 0;
     const retRowLabel = isCapPensiun ? "Total Retensi (2x Angsuran):" : "Total Retensi:";
-    const svg = `<?xml version="1.0" encoding="UTF-8"?>
+    const svg = svgXml`<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="620" viewBox="0 0 900 620">
   <rect width="900" height="620" fill="#F4F8F6" rx="18"/>
   <rect width="900" height="105" fill="#123D39" rx="18"/>
@@ -4451,26 +4458,26 @@ export function generateSimulationSvgBuffer(sim) {
 
         let content = "";
         if (row.type === "header") {
-          content = `<text x="${boxX + 14}" y="${textY}" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="14" font-weight="bold">${row.label}</text>`;
+          content = `<text x="${boxX + 14}" y="${textY}" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="14" font-weight="bold">${escapeXml(row.label)}</text>`;
         } else if (row.type === "section") {
-          content = `<text x="${boxX + 14}" y="${textY}" fill="#065F46" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${row.label}</text>`;
+          content = `<text x="${boxX + 14}" y="${textY}" fill="#065F46" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(row.label)}</text>`;
         } else if (row.type === "text") {
           content =
-            `<text x="${boxX + 14}" y="${textY}" fill="#334155" font-family="Arial, sans-serif" font-size="13">${row.label}</text>` +
+            `<text x="${boxX + 14}" y="${textY}" fill="#334155" font-family="Arial, sans-serif" font-size="13">${escapeXml(row.label)}</text>` +
             `<text x="${boxX + col1W + 6}" y="${textY}" fill="#64748B" font-family="Arial, sans-serif" font-size="13">:</text>` +
-            `<text x="${boxX + col1W + col2W + 6}" y="${textY}" fill="#0F172A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${row.val}</text>`;
+            `<text x="${boxX + col1W + col2W + 6}" y="${textY}" fill="#0F172A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(row.val)}</text>`;
         } else if (row.type === "num") {
           const isDash = row.val === "-";
           const valX = isDash ? boxX + boxW - 32 : boxX + boxW - 14;
           content =
-            `<text x="${boxX + 14}" y="${textY}" fill="#334155" font-family="Arial, sans-serif" font-size="13">${row.label}</text>` +
+            `<text x="${boxX + 14}" y="${textY}" fill="#334155" font-family="Arial, sans-serif" font-size="13">${escapeXml(row.label)}</text>` +
             `<text x="${boxX + col1W + 6}" y="${textY}" fill="#64748B" font-family="Arial, sans-serif" font-size="13">:</text>` +
-            `<text x="${valX}" y="${textY}" text-anchor="end" fill="#0F172A" font-family="Arial, sans-serif" font-size="13"${row.boldVal ? ' font-weight="bold"' : ""}>${row.val}</text>`;
+            `<text x="${valX}" y="${textY}" text-anchor="end" fill="#0F172A" font-family="Arial, sans-serif" font-size="13"${row.boldVal ? ' font-weight="bold"' : ""}>${escapeXml(row.val)}</text>`;
         } else if (row.type === "footer") {
           content =
-            `<text x="${boxX + 14}" y="${textY}" fill="#065F46" font-family="Arial, sans-serif" font-size="14" font-weight="bold">${row.label}</text>` +
+            `<text x="${boxX + 14}" y="${textY}" fill="#065F46" font-family="Arial, sans-serif" font-size="14" font-weight="bold">${escapeXml(row.label)}</text>` +
             `<text x="${boxX + col1W + 6}" y="${textY}" fill="#065F46" font-family="Arial, sans-serif" font-size="14" font-weight="bold">:</text>` +
-            `<text x="${boxX + boxW - 14}" y="${textY}" text-anchor="end" fill="#065F46" font-family="Arial, sans-serif" font-size="15" font-weight="bold">${row.val}</text>`;
+            `<text x="${boxX + boxW - 14}" y="${textY}" text-anchor="end" fill="#065F46" font-family="Arial, sans-serif" font-size="15" font-weight="bold">${escapeXml(row.val)}</text>`;
         }
         return `${bg}${hLine}${content}`;
       })
@@ -4488,7 +4495,7 @@ export function generateSimulationSvgBuffer(sim) {
 
   // Template AMS2 & Mitra Bank
   const ams = r.ams2_details || {};
-  const svg = `<?xml version="1.0" encoding="UTF-8"?>
+  const svg = svgXml`<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="620" viewBox="0 0 900 620">
   <rect width="900" height="620" fill="#F8F9FC" rx="18"/>
   <rect width="900" height="105" fill="#12264D" rx="18"/>

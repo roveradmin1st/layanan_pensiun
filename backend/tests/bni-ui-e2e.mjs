@@ -13,10 +13,12 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { disposableBackend, runFixture, startFixture } from "./helpers/disposable.mjs";
+import { LEGACY_BNI } from "./helpers/legacy-bni.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const FRONTEND_DIST = path.join(REPO_ROOT, "frontend", "dist");
+const PASSWORD = "Bni-Browser-Synthetic-2026!";
 assert.ok(fs.existsSync(path.join(FRONTEND_DIST, "index.html")), "frontend/dist/index.html belum tersedia; jalankan `npm --prefix frontend run build`.");
 
 async function loadPlaywrightOrNull() {
@@ -178,7 +180,14 @@ try {
   fs.cpSync(FRONTEND_DIST, fixtureDist, { recursive: true });
 
   const setupRes = runFixture(fixture, `import { getStore, saveStore, db } from './src/db/database.js';
+import { hashPassword } from './src/security/passwords.js';
 const state = getStore();
+const hash = await hashPassword(${JSON.stringify(PASSWORD)});
+for (const user of state.users) {
+  user.password_hash = hash;
+  user.must_change_password = false;
+}
+state.partner_parameters.bank_bni = ${JSON.stringify(LEGACY_BNI)};
 const uMkt1 = state.users.find(u => u.email === 'marketing@layananpensiunan.id');
 const uSm1 = state.users.find(u => u.email === 'salesmanager@layananpensiunan.id');
 uMkt1.manager_id = uSm1.id;
@@ -192,10 +201,10 @@ saveStore();
 db.close();`);
   assert.equal(setupRes.status, 0, setupRes.stderr);
 
-  running = await startFixture(fixture, "development");
+  running = await startFixture(fixture, "production");
   driver = await createBrowserDriver();
 
-  async function uiLogin(email, password) {
+  async function uiLogin(email) {
     await driver.resetSession(running.base);
     await waitFor(driver, `Boolean(document.querySelector('[data-testid="login-email-input"]'))`);
     await driver.eval(`(() => {
@@ -206,19 +215,45 @@ db.close();`);
         el.dispatchEvent(new Event('change', { bubbles: true }));
       };
       setVal(document.querySelector('[data-testid="login-email-input"]'), ${JSON.stringify(email)});
-      setVal(document.querySelector('[data-testid="login-password-input"]'), ${JSON.stringify(password)});
+      setVal(document.querySelector('[data-testid="login-password-input"]'), ${JSON.stringify(PASSWORD)});
       document.querySelector('[data-testid="login-submit-button"]').click();
       return true;
     })()`);
     await waitFor(driver, `!location.pathname.includes('/login') && Boolean(document.querySelector('nav'))`);
   }
 
+  const openBni = async (page, selector) => {
+    await driver.goto(`${running.base}/${page}`);
+    await waitFor(driver, `Array.from(document.querySelectorAll('button')).some(el => el.innerText.includes('Bank BNI'))`);
+    await driver.eval(`Array.from(document.querySelectorAll('button')).find(el => el.innerText.includes('Bank BNI')).click()`);
+    await waitFor(driver, `Boolean(document.querySelector(${JSON.stringify(selector)}))`);
+  };
+
+  // Aktivasi lewat UI pada baseline lama, memakai backend mode production.
+  await uiLogin("superadmin@layananpensiunan.id");
+  await openBni("pengaturan", '[data-testid="activate-bni-button"]');
+  await driver.eval(`(() => {
+    const confirm = window.confirm;
+    window.confirm = () => true;
+    try { document.querySelector('[data-testid="activate-bni-button"]').click(); }
+    finally { window.confirm = confirm; }
+  })()`);
+  await waitFor(driver, `Boolean(document.querySelector('[data-testid="bni-params-panel"]'))`);
+  assert.match(await driver.eval(`document.querySelector('[data-testid="bni-params-panel"]').innerText`), /bni-fleksi-jul26-v1/);
+  assert.equal(await driver.eval(`document.querySelector('[data-testid="bni-param-dbr-input"]').value`), "85");
+
   // 1. Marketing: Kalkulator BNI-01 -> Simpan -> Kode 2 UNAVAILABLE
-  await uiLogin("marketing@layananpensiunan.id", "Password123!");
-  await driver.goto(`${running.base}/kalkulator`);
-  await waitFor(driver, `document.body.innerText.includes('Bank BNI')`);
-  await driver.eval(`Array.from(document.querySelectorAll('button')).find(el => el.innerText.includes('Bank BNI')).click()`);
-  await waitFor(driver, `Boolean(document.querySelector('[data-testid="bni-prefill-btn"]'))`);
+  await uiLogin("marketing@layananpensiunan.id");
+  await openBni("kalkulator", '[data-testid="bni-prefill-btn"]');
+  await waitFor(driver, `document.querySelector('[data-testid="bni-dbr-select"]')?.value === '85'`);
+  await driver.eval(`(() => {
+    const select = document.querySelector('[data-testid="bni-dbr-select"]');
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(select, '70');
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  assert.equal(await driver.eval(`document.querySelector('[data-testid="bni-dbr-select"]').value`), "70");
+  await driver.eval(`document.querySelector('[data-testid="bni-reset-button"]').click()`);
+  await waitFor(driver, `document.querySelector('[data-testid="bni-dbr-select"]')?.value === '85'`);
   await driver.eval(`document.querySelector('[data-testid="bni-prefill-btn"]').click()`);
   assert.equal(await driver.eval(`document.querySelector('[data-testid="bni-birth-input"]').value`), "1969-01-15");
   assert.equal(await driver.eval(`document.querySelector('[data-testid="bni-process-date-input"]').value`), "2026-11-17");
@@ -239,10 +274,25 @@ db.close();`);
   await driver.eval(`document.querySelector('[data-testid="calc-save-button"]').click()`);
   await waitFor(driver, `Boolean(document.querySelector('[data-testid="sim-approval-panel"]'))`);
 
-  await driver.goto(`${running.base}/kalkulator`);
-  await waitFor(driver, `document.body.innerText.includes('Bank BNI')`);
-  await driver.eval(`Array.from(document.querySelectorAll('button')).find(el => el.innerText.includes('Bank BNI')).click()`);
-  await waitFor(driver, `Boolean(document.querySelector('[data-testid="bni-product-select"]'))`);
+  await openBni("kalkulator", '[data-testid="bni-prefill-btn"]');
+  await driver.eval(`document.querySelector('[data-testid="bni-prefill-btn"]').click()`);
+  for (const [id, value] of [
+    ["bni-product-select", "1"], ["bni-birth-input", "1954-10-31"],
+    ["bni-loan-input", "30000000"], ["bni-tenor-input", "24"]
+  ]) {
+    await driver.eval(`(() => {
+      const el = document.querySelector('[data-testid="${id}"]');
+      Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value').set.call(el, ${JSON.stringify(value)});
+      el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
+    })()`);
+  }
+  await driver.eval(`document.querySelector('[data-testid="bni-submit-button"]').click()`);
+  await waitFor(driver, `document.querySelector('[data-testid="bni-result-status"]')?.innerText.includes('Perlu verifikasi aturan asuransi')`);
+  await driver.eval(`document.querySelector('[data-testid="calc-save-button"]').click()`);
+  await waitFor(driver, `Boolean(document.querySelector('[data-testid="bni-approval-hold"]'))`);
+  assert.equal(await driver.eval(`Boolean(document.querySelector('[data-testid="approve-sim-button"]'))`), false);
+
+  await openBni("kalkulator", '[data-testid="bni-product-select"]');
   await driver.eval(`(() => {
     const sel = document.querySelector('[data-testid="bni-product-select"]');
     Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(sel, '2');
@@ -253,18 +303,18 @@ db.close();`);
   assert.equal(await driver.eval(`Boolean(document.querySelector('[data-testid="calc-save-button"]'))`), false);
 
   // 2. Sales Manager vs SM lain di UI
-  await uiLogin("salesmanager@layananpensiunan.id", "Password123!");
+  await uiLogin("salesmanager@layananpensiunan.id");
   await driver.goto(`${running.base}/simulasi`);
   await waitFor(driver, `document.body.innerText.includes('CONTOH DEBITUR SINTETIS BNI-01')`);
 
-  await uiLogin("sm2.bni@synthetic.test", "Password123!");
+  await uiLogin("sm2.bni@synthetic.test");
   await driver.goto(`${running.base}/simulasi`);
   await waitFor(driver, `document.body.innerText.includes('Simulasi') || document.body.innerText.includes('Riwayat')`);
   await new Promise((r) => setTimeout(r, 700));
   assert.equal(await driver.eval(`document.body.innerText.includes('CONTOH DEBITUR SINTETIS BNI-01')`), false);
 
   // 3. Akun bsi_only di UI
-  await uiLogin("admincabang.bsi@layananpensiunan.id", "Password123!");
+  await uiLogin("admincabang.bsi@layananpensiunan.id");
   await driver.goto(`${running.base}/kalkulator`);
   await waitFor(driver, `document.body.innerText.includes('BSI') || document.body.innerText.includes('Bank Syariah')`);
   assert.equal(await driver.eval(`document.body.innerText.includes('Bank BNI') || document.body.innerText.includes('BNI Fleksi')`), false);
@@ -272,15 +322,7 @@ db.close();`);
   await new Promise((r) => setTimeout(r, 700));
   assert.equal(await driver.eval(`document.body.innerText.includes('CONTOH DEBITUR SINTETIS BNI-01')`), false);
 
-  // 4. Super Admin /pengaturan BNI
-  await uiLogin("superadmin@layananpensiunan.id", "Password123!");
-  await driver.goto(`${running.base}/pengaturan`);
-  await waitFor(driver, `document.body.innerText.includes('Bank BNI')`);
-  await driver.eval(`Array.from(document.querySelectorAll('button')).find(el => el.innerText.includes('Bank BNI')).click()`);
-  await waitFor(driver, `Boolean(document.querySelector('[data-testid="bni-params-panel"]'))`);
-  assert.match(await driver.eval(`document.querySelector('[data-testid="bni-params-panel"]').innerText`), /bni-fleksi-jul26-v1/);
-
-  console.log("BNI UI E2E PASSED:", JSON.stringify({ driver: driver.mode, ...resUi }));
+  console.log("BNI UI E2E PASSED:", JSON.stringify({ driver: driver.mode, productionActivation: true, defaultDbr: 85, underwritingHold: true, ...resUi }));
 } finally {
   if (driver) await driver.close();
   if (running) await running.stop();

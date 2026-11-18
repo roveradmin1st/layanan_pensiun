@@ -45,6 +45,7 @@ function DynamicPartnerParams({ user }) {
   const [busy, setBusy] = useState(false);
 
   const canEdit = user.role === "super_admin" || user.role === "admin_ops";
+  const bniNeedsActivation = selectedKey === "bank_bni" && (draft?.engine !== "bni_fleksi" || draft?.active !== true);
 
   const hydrateBsiProductDraft = useCallback((partnerObj, prodCode) => {
     const prod = partnerObj?.products?.[prodCode];
@@ -297,13 +298,27 @@ function DynamicPartnerParams({ user }) {
   };
 
   const resetAll = async () => {
-    if (!window.confirm("Reset seluruh parameter 7 mitra bank ke nilai default awal?")) return;
+    if (!window.confirm("Reset parameter mitra selain BNI ke nilai standar awal?")) return;
     try {
       await api.post("/calc/params/reset");
-      toast.success("Seluruh parameter mitra dikembalikan ke standar awal");
+      toast.success("Parameter mitra selain BNI dikembalikan ke standar awal");
       load();
     } catch (err) {
       toast.error(errMsg(err));
+    }
+  };
+
+  const activateBni = async () => {
+    if (!window.confirm("Aktifkan kalkulator BNI Fleksi dengan DBR default, batas plafon, dan batas tenor dari profil BNI lama?")) return;
+    setBusy(true);
+    try {
+      await api.post("/calc/params/bank_bni/activate", { confirm: true });
+      toast.success("Kalkulator BNI Fleksi aktif");
+      load();
+    } catch (err) {
+      toast.error(errMsg(err));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -914,7 +929,19 @@ function DynamicPartnerParams({ user }) {
           )}
 
           {/* 2c. BANK BNI — BNI FLEKSI PENSIUN & PRA PURNA (MKSA v4 Jul26) */}
-          {selectedKey === "bank_bni" && (
+          {bniNeedsActivation && (
+            <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+              <p className="font-semibold">Kalkulator BNI Fleksi belum aktif.</p>
+              {data.bni_activation_available ? (
+                <Button type="button" onClick={activateBni} disabled={busy} data-testid="activate-bni-button">
+                  Aktifkan BNI Fleksi
+                </Button>
+              ) : (
+                <p>Hubungi Super Admin untuk memeriksa konfigurasi BNI.</p>
+              )}
+            </div>
+          )}
+          {selectedKey === "bank_bni" && !bniNeedsActivation && (
             <div className="space-y-4" data-testid="bni-params-panel">
               <div className="rounded-xl border border-teal-200 bg-teal-50/70 p-4 text-xs text-teal-950 space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -931,10 +958,10 @@ function DynamicPartnerParams({ user }) {
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <Label>Batas DBR Default (%)</Label>
+                    <Label>DBR Default (%)</Label>
                   <Input
                     type="number"
-                    step="1"
+                    step="any"
                     min="10"
                     max="100"
                     disabled={!canEdit}
@@ -948,7 +975,7 @@ function DynamicPartnerParams({ user }) {
                   <Label>Batas Subsidi Premi AJK BNI (‰)</Label>
                   <Input
                     type="number"
-                    step="1"
+                    step="any"
                     min="0"
                     max="500"
                     disabled={!canEdit}
@@ -988,7 +1015,7 @@ function DynamicPartnerParams({ user }) {
             </div>
           )}
 
-          {canEdit && (
+          {canEdit && !bniNeedsActivation && (
             <div className="flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-end">
               {user.role === "admin_ops" && (
                 <div className="flex-1">

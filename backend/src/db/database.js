@@ -9,6 +9,7 @@ import crypto from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_PARTNER_PARAMETERS, INDONESIA_PROVINCES } from "../config/default-parameters.js";
+import { BNI_POLICY_VERSION, canActivateLegacyBniFleksi, createDefaultBniConfig, getBniFleksiConfig } from "../config/bni-product-config.js";
 import {
   BSI_MIGRATION_ID,
   BSI_SCHEMA_VERSION,
@@ -810,31 +811,50 @@ function createInitialState() {
 
 let stateCache = null;
 
-/** Memigrasikan parameter bank_bni lama ke skema bni_fleksi secara idempoten dengan snapshot rollback. */
-function ensureBniParameterUpgrade(state) {
-  if (
-    state.partner_parameters?.bank_bni &&
-    state.partner_parameters.bank_bni.engine === "bni_fleksi"
-  ) {
-    return false;
-  }
-  state.partner_parameters = state.partner_parameters || {};
+function recordBniParameterSnapshot(state, legacy) {
   if (!Array.isArray(state.parameter_migration_snapshots)) {
     state.parameter_migration_snapshots = [];
   }
   if (
-    state.partner_parameters.bank_bni &&
-    !state.parameter_migration_snapshots.some((s) => s.migration_id === "bni-fleksi-jul26-v1")
+    legacy &&
+    !state.parameter_migration_snapshots.some((s) => s.partner_key === "bank_bni" && s.migration_id === BNI_POLICY_VERSION)
   ) {
     state.parameter_migration_snapshots.push({
-      migration_id: "bni-fleksi-jul26-v1",
+      migration_id: BNI_POLICY_VERSION,
       partner_key: "bank_bni",
       migrated_at: new Date().toISOString(),
-      before_snapshot: structuredClone(state.partner_parameters.bank_bni)
+      before_snapshot: structuredClone(legacy)
     });
   }
+}
+
+/** Upgrade fixture development. Production boot tetap hanya memvalidasi state. */
+function ensureBniParameterUpgrade(state) {
+  if (getBniFleksiConfig(state.partner_parameters?.bank_bni)) return false;
+  state.partner_parameters = state.partner_parameters || {};
+  recordBniParameterSnapshot(state, state.partner_parameters.bank_bni);
   state.partner_parameters.bank_bni = structuredClone(DEFAULT_PARTNER_PARAMETERS.bank_bni);
   return true;
+}
+
+/** Aktivasi oleh proses API penulis tunggal setelah tindakan Super Admin. */
+export function activateLegacyBniFleksi(user, ip) {
+  const legacy = getStore().partner_parameters.bank_bni;
+  const existing = getBniFleksiConfig(legacy);
+  if (existing?.active === true) return { mode: "already_active", partner: existing };
+  if (!canActivateLegacyBniFleksi(legacy)) return null;
+
+  const partner = createDefaultBniConfig();
+  partner.maxInstallmentRatio = legacy.maxInstallmentRatio;
+  partner.maxPlafondAbsolute = Math.min(partner.maxPlafondAbsolute, legacy.maxPlafondAbsolute);
+  partner.maxTenorMonths = Math.min(partner.maxTenorMonths, legacy.maxTenorMonths);
+  return withTransaction((state) => {
+    recordBniParameterSnapshot(state, legacy);
+    // Release lama tetap membaca parameter asli, termasuk active=false.
+    legacy.fleksi = partner;
+    addAuditLog(user, "activate_bni_fleksi", "bank_bni", `Aktivasi kalkulator BNI Fleksi ${partner.policyVersion}`, ip);
+    return { mode: "activated", partner };
+  });
 }
 
 export function ensureStoreUpgrades(state) {

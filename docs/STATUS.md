@@ -277,3 +277,12 @@ Telah dilakukan audit sel pasif terhadap seluruh 15 sheet, validasi data, matrik
   - `node backend/tests/bni-audit-probe.mjs`: memverifikasi `BNI-01` (tanggal uji `2026-11-17`), `BNI-02`, batas jatuh tempo vs ulang tahun ke-75, serta kegagalan eksplisit parameter hilang/cacat pada fungsi aktual `calculateMax` & `calculatePreview`.
   - `node backend/tests/bni-ui-e2e.mjs`: menguji UI React penuh (login, `Contoh Uji` sintetis BNI-01, simpan simulasi, banner `UNAVAILABLE` Kode 2, isolasi Multi-SM, penyembunyian BNI untuk `bsi_only`, dan panel `/pengaturan` `Bank BNI`).
 - **Build Produksi Frontend & Keamanan API:** `$env:VITE_BACKEND_URL=""; npm.cmd --prefix frontend run build` (`2599 modul`), `backend/tests/security-and-api.test.mjs` (`5/5` tahap pada server disposable), serta smoke startup mode `production` lulus. Status eksekusi CI Linux (`.github/workflows/validate.yml`) dipantau terpisah pada commit branch review.
+
+---
+
+## 9. Perbaikan kalkulator BNI untuk demo (18 November 2026 WIB)
+
+- Branch `fix/bni-demo-compat-20261118` berawal dari `862d2ae`. Aktivasi BNI oleh Super Admin menyimpan konfigurasi Fleksi bersama snapshot tanpa mengganti profil BNI lama. Boot production tetap hanya memvalidasi state. DBR default, batas plafon dan tenor yang kompatibel dibawa dari profil asal.
+- Validasi lokal dengan Node 24.22.2 lulus. Hasilnya mencakup 79 tes backend, 46 tes operasional, suite keamanan dan RBAC, build, serta dua cold start paket rilis. Chromium menjalankan aktivasi BNI pada SQLite sintetis, default dan reset DBR 85%, simpan hasil, status underwriting, dan pembatasan BNI untuk akun BSI.
+- Pemeriksaan acuan independen mengulang 2.786 kasus numerik dan 1.100 sel premi. Penanda verifikasi mencakup 54 kombinasi yang berbeda antara kategori pada header tabel dan rumus B68 Excel. Pada 16 skenario bank lama, hasil maksimum dan preview sama dengan `6a791a3`. Modul database baseline berhasil membuka salinan setelah aktivasi BNI, termasuk simulasi baru dan BLOB.
+- Langkah demo dan keputusan kebijakan yang masih dibutuhkan tercatat di [BNI-DEMO.md](BNI-DEMO.md). Bukti ini berasal dari pengujian lokal. Status VPS terakhir tetap mengacu pada catatan 15 November 2026.

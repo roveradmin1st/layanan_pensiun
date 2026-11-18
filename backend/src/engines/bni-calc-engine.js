@@ -31,8 +31,12 @@ import {
   BNI_POLICY_VERSION,
   BNI_SUBSIDY_PERMIL,
   BNI_UNDERWRITING_DESCRIPTIONS,
+  BNI_UNDERWRITING_MAX_PLAFOND,
+  BNI_UNDERWRITING_REVIEW_MESSAGE,
+  getBniFleksiConfig,
   normalizeBniInsuranceScheme,
   normalizeBniProductCode,
+  requiresBniUnderwritingReview,
   resolveBniUnderwritingCode
 } from "../config/bni-product-config.js";
 
@@ -142,12 +146,13 @@ function fmtRpId(n) {
   return "Rp " + Math.round(Number(n || 0)).toLocaleString("id-ID");
 }
 
-function validateAndResolveBniConfig(rawCfg) {
-  if (!rawCfg || typeof rawCfg !== "object" || rawCfg.engine !== "bni_fleksi") {
+function validateAndResolveBniConfig(partner) {
+  const rawCfg = getBniFleksiConfig(partner);
+  if (!rawCfg || rawCfg.active === false) {
     return {
       ok: false,
       errorCode: "MISSING_BNI_CONFIG",
-      reason: "Konfigurasi mitra Bank BNI ('bni_fleksi') tidak ditemukan atau tidak valid."
+      reason: "Kalkulator BNI Fleksi belum aktif atau konfigurasinya tidak tersedia."
     };
   }
   if (!rawCfg.products || typeof rawCfg.products !== "object") {
@@ -182,6 +187,16 @@ function validateAndResolveBniConfig(rawCfg) {
       reason: "Matriks tarif AJK CAR Skema Menurun ('ajkMenurunRegRates') hilang atau kosong."
     };
   }
+  const maxPlafondAbsolute = Number(rawCfg.maxPlafondAbsolute ?? BNI_UNDERWRITING_MAX_PLAFOND);
+  const maxTenorMonths = Number(rawCfg.maxTenorMonths ?? BNI_CONFIRMED_MAX_TENOR_MONTHS);
+  const revision = rawCfg.revision ?? 1;
+  if (
+    !Number.isSafeInteger(maxPlafondAbsolute) || maxPlafondAbsolute <= 0 ||
+    !Number.isSafeInteger(maxTenorMonths) || maxTenorMonths <= 0 ||
+    !Number.isSafeInteger(revision) || revision < 1
+  ) {
+    return { ok: false, errorCode: "MISSING_BNI_CONFIG", reason: "Batas plafon, tenor, atau versi parameter BNI tidak valid." };
+  }
   return {
     ok: true,
     cfg: {
@@ -192,16 +207,20 @@ function validateAndResolveBniConfig(rawCfg) {
       maxInstallmentRatio: Number.isFinite(Number(rawCfg.maxInstallmentRatio))
         ? Number(rawCfg.maxInstallmentRatio)
         : 90,
+      maxPlafondAbsolute: Math.min(maxPlafondAbsolute, BNI_UNDERWRITING_MAX_PLAFOND),
+      maxTenorMonths: Math.min(maxTenorMonths, BNI_CONFIRMED_MAX_TENOR_MONTHS),
+      revision,
       underwritingDescriptions: rawCfg.underwritingDescriptions || { ...BNI_UNDERWRITING_DESCRIPTIONS }
     }
   };
 }
 
 function parseOptionalNonNegNumber(raw, { integerOnly = false, fallback = null } = {}) {
-  const provided = raw !== undefined && raw !== null && String(raw).trim() !== "";
+  const provided = raw != null && !(typeof raw === "string" && raw.trim() === "");
   if (!provided) return { provided: false, valid: true, value: fallback };
+  if (typeof raw !== "number" && typeof raw !== "string") return { provided: true, valid: false, value: 0 };
   const num = Number(raw);
-  if (!Number.isFinite(num) || num < 0) return { provided: true, valid: false, value: 0 };
+  if (!Number.isFinite(num) || num < 0 || num > Number.MAX_SAFE_INTEGER) return { provided: true, valid: false, value: 0 };
   if (integerOnly && !Number.isInteger(num)) return { provided: true, valid: false, value: 0 };
   return { provided: true, valid: true, value: num };
 }
@@ -457,9 +476,10 @@ export function lookupBniAjkRate(entryAgeYears, insuranceTenorYears, cfg) {
 
 function buildCoreContext(body, rawCfg, defaultProcessDate) {
   const cfgCheck = validateAndResolveBniConfig(rawCfg);
-  const procStr = String(body.process_date || defaultProcessDate || new Date().toISOString().slice(0, 10)).trim().slice(0, 10);
+  const rawProcessDate = body.process_date || defaultProcessDate || new Date().toISOString().slice(0, 10);
+  const procStr = typeof rawProcessDate === "string" ? rawProcessDate.trim().slice(0, 10) : "";
   const procDate = parseUtcDate(procStr);
-  const dobStr = String(body.birth_date || "").trim().slice(0, 10);
+  const dobStr = typeof body.birth_date === "string" ? body.birth_date.trim().slice(0, 10) : "";
   const dobDate = parseUtcDate(dobStr);
 
   if (!cfgCheck.ok) {
@@ -571,6 +591,7 @@ function buildCoreContext(body, rawCfg, defaultProcessDate) {
     dobStr,
     dobDate,
     rawProdCode,
+    rawName: body.name || "",
     productCode,
     productDef,
     rawScheme,
@@ -604,7 +625,7 @@ function checkAvailability(ctx, tenorForCheck, plafondForCheck) {
     return makeUnavailableResponse({
       cfg: ctx.cfg,
       body: { name: ctx.rawName, birth_date: ctx.dobStr, take_over: ctx.takeOver, bni_product_code: ctx.rawProdCode },
-      productCode: String(ctx.rawProdCode),
+      productCode: ctx.rawProdCode,
       productDef: null,
       schemeCode: ctx.schemeCode,
       schemeDef: ctx.schemeDef,
@@ -614,7 +635,7 @@ function checkAvailability(ctx, tenorForCheck, plafondForCheck) {
       tenor: tenorForCheck,
       plafond: plafondForCheck,
       errorCode: "BNI_PRODUCT_UNKNOWN",
-      reason: `Kode produk BNI '${ctx.rawProdCode}' tidak dikenali. Gunakan Kode 1 (BNI Fleksi Reguler) atau Kode 4 (BNI Fleksi Pra Purna).`
+      reason: "Kode produk BNI tidak dikenali. Gunakan Kode 1 (BNI Fleksi Reguler) atau Kode 4 (BNI Fleksi Pra Purna)."
     });
   }
 
@@ -643,7 +664,7 @@ function checkAvailability(ctx, tenorForCheck, plafondForCheck) {
       body: { name: ctx.rawName, birth_date: ctx.dobStr, take_over: ctx.takeOver },
       productCode: ctx.productCode,
       productDef: ctx.productDef,
-      schemeCode: String(ctx.rawScheme),
+      schemeCode: ctx.rawScheme,
       schemeDef: null,
       processDateStr: ctx.procStr,
       ageYears: ctx.entryAgeYears ?? 0,
@@ -651,7 +672,7 @@ function checkAvailability(ctx, tenorForCheck, plafondForCheck) {
       tenor: tenorForCheck,
       plafond: plafondForCheck,
       errorCode: "BNI_INSURANCE_SCHEME_UNKNOWN",
-      reason: `Skema asuransi '${ctx.rawScheme}' tidak dikenali. Saat ini hanya 'Kredit BFP Skema Menurun' (MENURUN) yang tersedia.`
+      reason: "Skema asuransi BNI tidak dikenali. Saat ini skema Menurun (MENURUN) tersedia."
     });
   }
 
@@ -688,16 +709,17 @@ function computeConfirmedMaxTenor(ctx) {
       maturitySafeMonths -= 1;
     }
   }
-  let maxConfirmedTenor = Math.min(BNI_CONFIRMED_MAX_TENOR_MONTHS, maturitySafeMonths);
+  let maxConfirmedTenor = Math.min(ctx.cfg.maxTenorMonths, maturitySafeMonths);
   let maxTenorNote = null;
 
-  if (rawByService > BNI_CONFIRMED_MAX_TENOR_MONTHS) {
-    maxTenorNote =
-      "Dibatasi pada 180 bulan (rentang 181–240 bulan berstatus Belum Tersedia karena tabel suku bunga Kalkulator!L52:O61 berhenti di 180 bulan).";
-  } else if (ctx.productCode === "1" && maxConfirmedTenor >= 133 && maxConfirmedTenor <= 144) {
+  if (ctx.productCode === "1" && maxConfirmedTenor >= 133 && maxConfirmedTenor <= 144) {
     maxConfirmedTenor = 132;
     maxTenorNote =
       "Tenor maksimal terkonfirmasi diposisikan di 132 bulan karena rentang 133–144 bulan pada Kode 1 berstatus Belum Tersedia akibat tumpang tindih tabel bunga (12,00% vs 12,10%).";
+  } else if (maturitySafeMonths > ctx.cfg.maxTenorMonths) {
+    maxTenorNote = ctx.cfg.maxTenorMonths < BNI_CONFIRMED_MAX_TENOR_MONTHS
+      ? `Tenor dibatasi oleh parameter BNI pada ${ctx.cfg.maxTenorMonths} bulan.`
+      : "Dibatasi pada 180 bulan (rentang 181–240 bulan berstatus Belum Tersedia karena tabel suku bunga Kalkulator!L52:O61 berhenti di 180 bulan).";
   } else if (maturitySafeMonths < rawByService) {
     maxTenorNote =
       `Dibatasi ke ${maxConfirmedTenor} bulan agar tanggal jatuh tempo akhir bulan (EOMONTH) tidak melewati batas usia 75 tahun (${ctx.age75DateStr}).`;
@@ -706,10 +728,13 @@ function computeConfirmedMaxTenor(ctx) {
 }
 
 export function evaluateBniMax(body, rawCfg, defaultProcessDate) {
-  const ctx = buildCoreContext(body, rawCfg, defaultProcessDate);
+  return evaluateBniMaxWithContext(body, buildCoreContext(body, rawCfg, defaultProcessDate));
+}
+
+function evaluateBniMaxWithContext(body, ctx) {
   if (!ctx.configOk) {
     return makeInvalidBniResponse({
-      cfg: rawCfg,
+      cfg: ctx.cfg,
       body,
       processDateStr: ctx.procStr,
       errorCode: ctx.configError.errorCode,
@@ -717,10 +742,7 @@ export function evaluateBniMax(body, rawCfg, defaultProcessDate) {
       available: false
     });
   }
-  ctx.rawName = body.name || "";
-
-  const reqTenor = ctx.tenorParse.provided ? Number(body.tenor) : null;
-  const availStop = checkAvailability(ctx, reqTenor || 0, body.plafond || 0);
+  const availStop = checkAvailability(ctx, ctx.tenorParse.value || 0, ctx.plafondParse.value || 0);
   if (availStop) return availStop;
 
   const errors = [];
@@ -767,6 +789,9 @@ export function evaluateBniMax(body, rawCfg, defaultProcessDate) {
           reason: rateCheck.reason,
           available: rateCheck.errorCode !== "MISSING_BNI_CONFIG"
         });
+      }
+      if (ctx.tenorParse.value > ctx.cfg.maxTenorMonths) {
+        errors.push(`Tenor pengajuan melebihi batas parameter BNI (${ctx.cfg.maxTenorMonths} bulan).`);
       }
     }
   }
@@ -846,7 +871,7 @@ export function evaluateBniMax(body, rawCfg, defaultProcessDate) {
   const monthlyRate = effectiveRateAnnual / 100 / 12;
   const maxPlafondExact =
     errors.length === 0 && rateRes.ok && evalTenor > 0 && maxInstallmentExact > 0
-      ? pv(monthlyRate, evalTenor, maxInstallmentExact)
+      ? Math.min(pv(monthlyRate, evalTenor, maxInstallmentExact), ctx.cfg.maxPlafondAbsolute)
       : 0;
   const maxPlafondRoundedDown = Math.floor(maxPlafondExact);
 
@@ -885,6 +910,7 @@ export function evaluateBniMax(body, rawCfg, defaultProcessDate) {
     bank_key: "bank_bni",
     bank_name: ctx.cfg.name,
     policy_version: ctx.cfg.policyVersion || BNI_POLICY_VERSION,
+    bni_policy_revision: ctx.cfg.revision,
     name: body.name || "",
     birth_date: ctx.dobStr,
     process_date: ctx.procStr,
@@ -930,8 +956,6 @@ export function evaluateBniPreview(body, rawCfg, defaultProcessDate) {
       available: false
     });
   }
-  ctx.rawName = body.name || "";
-
   const availStop = checkAvailability(
     ctx,
     ctx.tenorParse.provided ? ctx.tenorParse.value : 0,
@@ -956,7 +980,7 @@ export function evaluateBniPreview(body, rawCfg, defaultProcessDate) {
     });
   }
 
-  const maxRes = evaluateBniMax(body, rawCfg, defaultProcessDate);
+  const maxRes = evaluateBniMaxWithContext(body, ctx);
   if (
     maxRes.status === "UNAVAILABLE" ||
     maxRes.error_code === "MISSING_BNI_CONFIG" ||
@@ -1026,7 +1050,8 @@ export function evaluateBniPreview(body, rawCfg, defaultProcessDate) {
   const effectiveRateAnnual = rateRes.rateAnnual;
   const monthlyRate = effectiveRateAnnual / 100 / 12;
   const maxInstallmentExact = ctx.salaryValid && ctx.dbrValid ? ctx.salary * (ctx.dbrPct / 100) : 0;
-  const maxPlafondExact = tenor > 0 && maxInstallmentExact > 0 ? pv(monthlyRate, tenor, maxInstallmentExact) : 0;
+  const maxPlafondPvExact = pv(monthlyRate, tenor, maxInstallmentExact);
+  const maxPlafondExact = Math.min(maxPlafondPvExact, ctx.cfg.maxPlafondAbsolute);
 
   const plafond = ctx.plafondParse.provided ? ctx.plafondParse.value : Math.floor(maxPlafondExact);
   const maturityDate = ctx.procDate ? eomonthUtc(ctx.procDate, tenor) : null;
@@ -1121,6 +1146,7 @@ export function evaluateBniPreview(body, rawCfg, defaultProcessDate) {
   const underwritingDesc = underwritingCode
     ? (ctx.cfg.underwritingDescriptions?.[underwritingCode] || underwritingCode)
     : "TIDAK DICOVER ASURANSI";
+  const underwritingRequiresVerification = ajkLookup.covered && requiresBniUnderwritingReview(ctx.entryAgeYears, plafond, underwritingCode);
 
   const totalFeesExact = bankFeesExact + customerAjkPremiumExact;
   const netBeforeBlokirExact = plafond - totalFeesExact;
@@ -1143,8 +1169,9 @@ export function evaluateBniPreview(body, rawCfg, defaultProcessDate) {
   const entryAgeOk = ctx.entryAgeYears !== null && ctx.entryAgeYears >= 20 && ctx.entryAgeYears <= 74;
   const serviceTenorOk = ctx.remainingServiceMonths > 0 && tenor <= ctx.remainingServiceMonths;
   const maturityWithinAge75 = Boolean(maturityDate && ctx.age75Date && maturityDate <= ctx.age75Date);
+  const withinTenorLimit = tenor <= ctx.cfg.maxTenorMonths;
   const ajkCoverOk = ajkLookup.covered === true;
-  const underwritingOk = Boolean(underwritingCode && ajkCoverOk);
+  const underwritingOk = Boolean(underwritingCode && ajkCoverOk && !underwritingRequiresVerification);
   const plafondOk = plafond > 0 && plafond <= maxPlafondExact + 1e-6;
   const dbrOk = monthlyInstallmentExact > 0 && monthlyInstallmentExact <= maxInstallmentExact + 1e-6;
   const netOk = terimaBersihAfterToExact > 0;
@@ -1162,10 +1189,12 @@ export function evaluateBniPreview(body, rawCfg, defaultProcessDate) {
     },
     {
       key: "tenor_service",
-      label: maturityWithinAge75
+      label: !withinTenorLimit
+        ? `Tenor (${tenor} bulan) melewati batas parameter BNI (${ctx.cfg.maxTenorMonths} bulan).`
+        : maturityWithinAge75
         ? `Tenor (${tenor} bln) ≤ sisa masa usia 75 thn (${ctx.remainingServiceMonths} bln) & jatuh tempo (${maturityDateStr}) ≤ ${ctx.age75DateStr}`
         : `Tanggal jatuh tempo (${maturityDateStr}) melewati batas usia ${BNI_MAX_AGE_LIMIT_YEARS} tahun (${ctx.age75DateStr})`,
-      ok: serviceTenorOk && maturityWithinAge75 && tenor <= BNI_CONFIRMED_MAX_TENOR_MONTHS
+      ok: serviceTenorOk && maturityWithinAge75 && withinTenorLimit
     },
     {
       key: "ajk_cover",
@@ -1176,14 +1205,16 @@ export function evaluateBniPreview(body, rawCfg, defaultProcessDate) {
     },
     {
       key: "underwriting",
-      label: underwritingOk
+      label: underwritingRequiresVerification
+        ? BNI_UNDERWRITING_REVIEW_MESSAGE
+        : underwritingOk
         ? `Underwriting Medis: ${underwritingCode} (${underwritingDesc})`
-        : "Plafond / usia melebihi batas underwriting CAR (maks Rp10 M)",
+        : "Plafon atau usia berada di luar cakupan underwriting CAR.",
       ok: underwritingOk
     },
     {
       key: "plafond",
-      label: `Plafond (${fmtRpId(plafond)}) ≤ Plafond Maksimal (${fmtRpId(maxPlafondExact)})`,
+      label: `Plafon (${fmtRpId(plafond)}) ≤ plafon maksimum (${fmtRpId(maxPlafondExact)})`,
       ok: plafondOk
     },
     {
@@ -1207,7 +1238,7 @@ export function evaluateBniPreview(body, rawCfg, defaultProcessDate) {
   const issues = validations.filter((v) => !v.ok && v.key !== "overall").map((v) => v.label);
 
   const excelD28Status =
-    serviceTenorOk && plafond > 0 && plafond <= maxPlafondExact + 1e-6 && tenor <= BNI_CONFIRMED_MAX_TENOR_MONTHS && inputDateValid
+    serviceTenorOk && plafond > 0 && plafond <= maxPlafondPvExact + 1e-6 && tenor <= BNI_CONFIRMED_MAX_TENOR_MONTHS && inputDateValid
       ? "PASSED"
       : "NOT PASSED";
 
@@ -1219,6 +1250,7 @@ export function evaluateBniPreview(body, rawCfg, defaultProcessDate) {
     bank_key: "bank_bni",
     bank_name: ctx.cfg.name,
     policy_version: ctx.cfg.policyVersion || BNI_POLICY_VERSION,
+    bni_policy_revision: ctx.cfg.revision,
     name: body.name || "",
     birth_date: ctx.dobStr,
     process_date: ctx.procStr,
@@ -1270,6 +1302,7 @@ export function evaluateBniPreview(body, rawCfg, defaultProcessDate) {
       max_installment: Math.round(maxInstallmentExact),
       max_plafond_exact: maxPlafondExact,
       max_plafond: Math.floor(maxPlafondExact),
+      max_plafond_absolute: ctx.cfg.maxPlafondAbsolute,
       effective_rate_annual_pct: effectiveRateAnnual,
       monthly_installment_exact: monthlyInstallmentExact,
       monthly_installment: Math.round(monthlyInstallmentExact),
@@ -1297,6 +1330,8 @@ export function evaluateBniPreview(body, rawCfg, defaultProcessDate) {
       customer_ajk_premium: Math.round(customerAjkPremiumExact),
       underwriting_code: underwritingCode || "NOT_COVERED",
       underwriting_desc: underwritingDesc,
+      underwriting_requires_verification: underwritingRequiresVerification,
+      underwriting_review_reason: underwritingRequiresVerification ? BNI_UNDERWRITING_REVIEW_MESSAGE : null,
       total_fees_exact: totalFeesExact,
       total_fees: Math.round(totalFeesExact),
       net_before_blokir_exact: netBeforeBlokirExact,

@@ -5,12 +5,34 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import { DEFAULT_PARTNER_PARAMETERS } from "../src/config/default-parameters.js";
 import { calculateMax, calculatePreview } from "../src/engines/calc-engine.js";
 import { datedifYMD, edateUtc, eomonthUtc, formatUtcDate, parseUtcDate } from "../src/engines/bni-calc-engine.js";
 import { disposableBackend, runFixture, startFixture } from "./helpers/disposable.mjs";
+import { LEGACY_BNI } from "./helpers/legacy-bni.mjs";
 
 const PASSWORD = "Bni-Synthetic-Test-Password-2026!";
+
+test("BNI: rekomendasi dan preview menerapkan batas plafon produk dan underwriting", () => {
+  const params = structuredClone(DEFAULT_PARTNER_PARAMETERS);
+  const input = {
+    bank_key: "bank_bni", name: "SYNTHETIC MAX", birth_date: "1971-11-18",
+    process_date: "2026-11-18", bni_product_code: "4", salary: 1000000000, tenor: 120
+  };
+  for (const [configuredCap, effectiveCap] of [[20000000000, 10000000000], [500000000, 500000000]]) {
+    params.bank_bni.maxPlafondAbsolute = configuredCap;
+    const max = calculateMax(input, params);
+    const preview = calculatePreview(input, params);
+    assert.equal(max.max_plafond, effectiveCap);
+    assert.equal(preview.plafond, max.max_plafond);
+    assert.ok(preview.overall_ok);
+    const aboveCap = calculatePreview({ ...input, plafond: effectiveCap + 1 }, params);
+    assert.equal(aboveCap.validations.find(({ key }) => key === "plafond").ok, false);
+  }
+  assert.equal(calculatePreview({ ...input, salary: [1000000000] }, params).status, "INVALID");
+  assert.equal(calculatePreview({ ...input, bni_insurance_scheme: "GP_KOMBINASI MENURUN" }, params).error_code, "BNI_INSURANCE_SCHEME_UNKNOWN");
+});
 
 test("BNI Fleksi: Kasus acuan Excel BNI-01 (Pra Purna Kode 4, 17 Nov 2026) & BNI-02 (120 Jt, 120 bln, 12%)", () => {
   const params = structuredClone(DEFAULT_PARTNER_PARAMETERS);
@@ -181,7 +203,9 @@ test("BNI Fleksi: Batas usia (19, 20, 74, 75), tanggal akhir bulan (EOMONTH/EDAT
   assert.equal(age74Ok.bni_details.remaining_service_months, 11);
   assert.equal(age74Ok.bni_details.maturity_date, "2027-06-30");
   assert.equal(age74Ok.bni_details.ajk_rate_permil, 35.33);
-  assert.equal(age74Ok.overall_ok, true);
+  assert.equal(age74Ok.validations.find((check) => check.key === "tenor_service").ok, true);
+  assert.equal(age74Ok.bni_details.underwriting_requires_verification, true);
+  assert.equal(age74Ok.overall_ok, false);
 
   // Jatuh tempo EOMONTH melewati ulang tahun ke-75 meski tenor <= remainingServiceMonths
   const age74EomonthFail = calculatePreview({
@@ -604,7 +628,7 @@ db.close();`);
     // 2. User bsi_only (Admin Cabang BSI & Marketing BSI) ditolak 403 untuk BNI
     const validPayload = {
       bank_key: "bank_bni",
-      name: "SYNTHETIC BNI CLIENT",
+      name: "SYNTHETIC ÉLISA & < > ' \"",
       birth_date: "1969-01-15",
       process_date: "2026-11-17",
       bni_product_code: "4",
@@ -629,9 +653,13 @@ db.close();`);
     assert.equal(prevResp.status, 200);
     assert.equal(prevResp.data.net_disbursement, 60659406);
 
-    const saveResp = await api("POST", "/api/simulations", { token: tMkt1, body: validPayload });
+    const saveResp = await api("POST", "/api/simulations", {
+      token: tMkt1,
+      body: { ...validPayload, expected_bni_policy_revision: prevResp.data.bni_policy_revision, ignored_field: "synthetic" }
+    });
     assert.equal(saveResp.status, 200);
     assert.deepEqual(saveResp.data.result, prevResp.data, "Hasil tersimpan harus identik dengan hasil preview");
+    assert.equal(Object.hasOwn(saveResp.data.input, "ignored_field"), false);
     const simId = saveResp.data.id;
 
     // 4. Penolakan simpan saat status UNAVAILABLE atau INVALID
@@ -692,8 +720,13 @@ db.close();`);
       headers: { Authorization: `Bearer ${tMkt1}` }
     });
     assert.equal(svgRes.status, 200);
+    assert.equal(svgRes.headers.get("cache-control"), "no-store");
+    assert.equal(svgRes.headers.get("x-content-type-options"), "nosniff");
     const svgText = await svgRes.text();
     assert.match(svgText, /BANK BNI — BNI FLEKSI PENSIUN/);
+    assert.ok(svgText.includes("SYNTHETIC ÉLISA &amp; &lt; &gt; &apos; &quot;"));
+    assert.equal((await api("GET", `/api/simulations/${simId}/png`, { token: tSm2 })).status, 403);
+    assert.equal((await api("GET", `/api/simulations/${simId}/pdf`, { token: tMktBsi })).status, 403);
 
     // 7. Proteksi endpoint parameter bank_bni (RBAC & Matrix Guard)
     assert.equal((await api("PUT", "/api/calc/params/bank_bni", { token: tMkt1, body: { updates: { maxInstallmentRatio: 85 } } })).status, 403);
@@ -710,6 +743,24 @@ db.close();`);
     });
     assert.equal(okBniParam.status, 200);
     assert.equal(okBniParam.data.partner.maxInstallmentRatio, 85);
+    const stale = await api("POST", "/api/simulations", {
+      token: tMkt1, body: { ...validPayload, expected_bni_policy_revision: prevResp.data.bni_policy_revision }
+    });
+    assert.equal(stale.status, 409);
+    assert.equal(stale.data.error_code, "BNI_PREVIEW_STALE");
+    const flagged = await api("POST", "/api/simulations", {
+      token: tMkt1,
+      body: {
+        ...validPayload, bni_product_code: "1", birth_date: "1954-10-31",
+        tenor: 24, plafond: 30000000, bni_dbr_pct: undefined, blokir_prapensiun_count: 0
+      }
+    });
+    assert.equal(flagged.status, 200);
+    assert.equal(flagged.data.result.bni_details.dbr_pct, 85);
+    assert.equal(flagged.data.result.bni_details.underwriting_requires_verification, true);
+    const held = await api("POST", `/api/simulations/${flagged.data.id}/approve`, { token: tMkt1, body: {} });
+    assert.equal(held.status, 409);
+    assert.equal(held.data.error_code, "BNI_UNDERWRITING_REVIEW_REQUIRED");
   } finally {
     if (running) await running.stop();
     fixture.cleanup();
@@ -814,6 +865,147 @@ console.log(db.prepare("SELECT payload FROM kv_store WHERE collection='enterpris
 db.close();`, 'development').stdout.trim();
     assert.equal(minAfter, minBefore, "Boot production pada store tanpa bank_bni tidak boleh menyisipkan key baru");
   } finally {
+    fixture.cleanup();
+  }
+});
+
+test("BNI: aktivasi eksplisit pada SQLite production lama menjaga data dan kompatibilitas rollback", { timeout: 60000 }, async () => {
+  const fixture = disposableBackend();
+  let running;
+  const copyProfile = () => {
+    const db = new DatabaseSync(fixture.database, { readOnly: true });
+    try {
+      return {
+        row: db.prepare("SELECT payload,updated_at FROM kv_store WHERE collection='enterprise_state'").get(),
+        files: db.prepare("SELECT id,filename,mime_type,data,created_at FROM uploaded_files ORDER BY id").all()
+      };
+    } finally {
+      db.close();
+    }
+  };
+  const api = async (route, { token, body, method = body ? "POST" : "GET" } = {}) => {
+    const response = await fetch(running.base + route, {
+      method,
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined
+    });
+    return { status: response.status, data: await response.json() };
+  };
+  const login = async (email) => {
+    const response = await api("/api/auth/login", { body: { email, password: PASSWORD } });
+    assert.equal(response.status, 200);
+    return response.data.access_token;
+  };
+  const activatePath = "/api/calc/params/bank_bni/activate";
+  const quote = {
+    bank_key: "bank_bni", name: "SYNTHETIC PRODUCTION", birth_date: "1969-01-15",
+    process_date: "2026-11-17", bni_product_code: "4", salary: 3759100, plafond: 100000000, tenor: 50
+  };
+  const baselineQuote = {
+    bank_key: "ams2", name: "SYNTHETIC BASELINE", birth_date: "1969-01-15",
+    process_date: "2026-11-17", salary: 5600000, plafond: 100000000, tenor: 60
+  };
+  try {
+    const setup = runFixture(fixture, `
+import { getStore, saveStore, saveUploadedFile, db } from './src/db/database.js';
+import { hashPassword } from './src/security/passwords.js';
+const state = getStore();
+const hash = await hashPassword(${JSON.stringify(PASSWORD)});
+for (const user of state.users) {
+  user.password_hash = hash;
+  user.auth_version = 2;
+  user.must_change_password = false;
+}
+state.users.push({
+  ...state.users.find(u => u.role === 'super_admin'),
+  id: 'synthetic-bsi-super', email: 'bsi-super@synthetic.test', bank_scope: 'bsi_only'
+});
+state.partner_parameters.bsi_prapen.products.PP10.loan.maxPlafondAbsolute = 432000000;
+state.partner_parameters.bank_bni = ${JSON.stringify(LEGACY_BNI)};
+state.parameter_migration_snapshots = [{ partner_key: "bsi_prapen", migration_id: "synthetic-test-migration" }];
+saveUploadedFile('doc-fixture', 'synthetic.pdf', 'application/pdf', Buffer.from('%PDF-1.4 synthetic bytes'));
+saveStore();
+db.close();`);
+    assert.equal(setup.status, 0, setup.stderr);
+    const beforeBoot = copyProfile();
+    running = await startFixture(fixture, "production");
+    assert.deepEqual(copyProfile(), beforeBoot, "Boot production tidak menulis SQLite");
+
+    const superToken = await login("superadmin@layananpensiunan.id");
+    const opsToken = await login("adminops@layananpensiunan.id");
+    const marketingToken = await login("marketing@layananpensiunan.id");
+    const scopedSuperToken = await login("bsi-super@synthetic.test");
+    const banks = () => api("/api/banks", { token: marketingToken });
+    const getParams = () => api("/api/calc/params", { token: superToken });
+    assert.equal((await banks()).data.banks.find(b => b.key === "bank_bni").supported, false);
+    assert.equal((await getParams()).data.bni_activation_available, true);
+    assert.equal((await api("/api/calc/preview", { token: marketingToken, body: quote })).data.error_code, "MISSING_BNI_CONFIG");
+    const beforeCalc = await api("/api/calc/preview", { token: marketingToken, body: baselineQuote });
+    assert.equal(beforeCalc.status, 200);
+    const beforeActivation = copyProfile();
+
+    assert.equal((await api(activatePath, { body: { confirm: true } })).status, 401);
+    for (const token of [opsToken, marketingToken, scopedSuperToken]) {
+      assert.equal((await api(activatePath, { token, body: { confirm: true } })).status, 403);
+    }
+    assert.equal((await api(activatePath, { token: superToken, body: {} })).status, 400);
+    assert.deepEqual(copyProfile(), beforeActivation);
+
+    const response = await api(activatePath, { token: superToken, body: { confirm: true } });
+    assert.equal(response.status, 200);
+    assert.equal(response.data.mode, "activated");
+    assert.equal(response.data.partner.maxInstallmentRatio, 85);
+    assert.equal(response.data.partner.maxPlafondAbsolute, 500000000);
+    assert.equal((await banks()).data.banks.find(b => b.key === "bank_bni").supported, true);
+    assert.equal((await getParams()).data.bni_activation_available, false);
+    const scopedParams = await api("/api/calc/params", { token: scopedSuperToken });
+    assert.equal(Object.hasOwn(scopedParams.data.partners, "bank_bni"), false);
+    const estimate = await api("/api/calc/preview", { token: marketingToken, body: quote });
+    assert.equal(estimate.status, 200);
+    assert.equal(estimate.data.bni_details.dbr_pct, 85);
+    assert.equal(estimate.data.net_disbursement, 60659406);
+    assert.deepEqual(await api("/api/calc/preview", { token: marketingToken, body: baselineQuote }), beforeCalc);
+
+    const afterActivation = copyProfile();
+    assert.deepEqual(afterActivation.files, beforeActivation.files);
+    const before = JSON.parse(beforeActivation.row.payload);
+    const after = JSON.parse(afterActivation.row.payload);
+    const { fleksi, ...legacy } = after.partner_parameters.bank_bni;
+    assert.deepEqual(legacy, before.partner_parameters.bank_bni);
+    assert.equal(fleksi.engine, "bni_fleksi");
+    assert.equal(fleksi.active, true);
+    const snapshot = after.parameter_migration_snapshots.pop();
+    assert.equal(snapshot.partner_key, "bank_bni");
+    assert.deepEqual(snapshot.before_snapshot, legacy);
+    assert.equal(after.audit_logs.shift().action, "activate_bni_fleksi");
+    after.partner_parameters.bank_bni = legacy;
+    assert.deepEqual(after, before, "Hanya konfigurasi BNI, snapshot dan audit aktivasi yang berubah");
+
+    assert.equal((await api(activatePath, { token: superToken, body: { confirm: true } })).data.mode, "already_active");
+    assert.deepEqual(copyProfile(), afterActivation);
+    await running.stop();
+    running = await startFixture(fixture, "production");
+    assert.deepEqual(copyProfile(), afterActivation, "Restart production mempertahankan state hasil aktivasi");
+    const reopenedToken = await login("marketing@layananpensiunan.id");
+    assert.deepEqual(await api("/api/calc/preview", { token: reopenedToken, body: quote }), estimate);
+
+    const proposal = await api("/api/calc/params/bank_bni", {
+      method: "PUT", token: opsToken, body: { updates: { maxInstallmentRatio: 82.5 } }
+    });
+    assert.equal(proposal.data.mode, "proposed");
+    assert.equal((await getParams()).data.partners.bank_bni.maxInstallmentRatio, 85);
+    const decisionPath = `/api/calc/params/proposals/${proposal.data.proposal.id}/decide`;
+    assert.equal((await api(decisionPath, { token: scopedSuperToken, body: { decision: "APPROVE" } })).status, 403);
+    const approved = await api(decisionPath, { token: superToken, body: { decision: "APPROVE" } });
+    assert.equal(approved.status, 200);
+    assert.equal(approved.data.partners.bank_bni.maxInstallmentRatio, 82.5);
+    assert.equal(approved.data.partners.bank_bni.revision, 2);
+
+    const reset = await api("/api/calc/params/reset", { token: superToken, body: {} });
+    assert.equal(reset.status, 200);
+    assert.deepEqual(reset.data.partners.bank_bni, approved.data.partners.bank_bni);
+  } finally {
+    if (running) await running.stop();
     fixture.cleanup();
   }
 });

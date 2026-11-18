@@ -15,7 +15,9 @@ export const BNI_POLICY_VERSION = "bni-fleksi-jul26-v1";
 export const BNI_SUBSIDY_PERMIL = 150;
 export const BNI_MAX_AGE_LIMIT_YEARS = 75;
 export const BNI_CONFIRMED_MAX_TENOR_MONTHS = 180;
+export const BNI_UNDERWRITING_MAX_PLAFOND = 10000000000;
 export const BNI_DBR_PRESETS = [90, 85, 80, 70];
+export const BNI_UNDERWRITING_REVIEW_MESSAGE = "Perlu verifikasi aturan asuransi. Kategori berdasarkan tabel usia berbeda dari hasil rumus Excel.";
 
 export const BNI_PRODUCT_DEFINITIONS = {
   "1": {
@@ -249,10 +251,18 @@ export const BNI_AUDIT_AND_OPEN_POLICIES = [
     finding:
       "Batas tenor Kombinasi berkonflik antar sheet (1–6 thn di N33 vs 180 bln di D28 vs 240 bln di Simulasi Asuransi!H12 & Sheet1!E7). Header AJK UP MENURUN BFP GP KOMB!B1 dan AJK UP TURUN IBR!B1 dimulai dari 2 tahun sehingga VLOOKUP B62 bergeser +1 tahun, serta Kalkulator!BN42:BN43 salah merujuk sel B66/B67.",
     status: "UNCONFIRMED"
+  },
+  {
+    id: "BNI-GAP-06",
+    topic: "Acuan kategori underwriting",
+    excelSource: "AJK UP MENURUN BFP REG!B68, AA1:CC1",
+    finding: "Rumus B68 membaca kategori pada kolom usia tiga tahun lebih tinggi. Hasil mengikuti header usia dan memerlukan verifikasi sebelum pengajuan jika kedua acuan berbeda.",
+    status: "UNCONFIRMED"
   }
 ];
 
 export function normalizeBniProductCode(raw) {
+  if (raw != null && typeof raw !== "string" && typeof raw !== "number") return null;
   const s = String(raw ?? "4").trim().toUpperCase();
   if (s === "1" || s === "REGULER" || s === "PURNA" || s === "BNI FLEKSI REGULER") return "1";
   if (s === "2" || s === "GP" || s === "GRACE_PERIOD" || s === "BNI FLEKSI GRACE PERIOD") return "2";
@@ -262,18 +272,18 @@ export function normalizeBniProductCode(raw) {
 }
 
 export function normalizeBniInsuranceScheme(raw) {
+  if (raw != null && typeof raw !== "string") return null;
   const s = String(raw ?? "MENURUN").trim().toUpperCase();
-  if (!s || s === "MENURUN" || s.includes("MENURUN")) return "MENURUN";
-  if (s === "IBR" || s.includes("IBR") || s.includes("INTEREST BEFORE")) return "IBR";
-  if (s === "GP_MURNI" || s.includes("GRACE PERIOD MURNI")) return "GP_MURNI";
-  if (s === "GP_KOMBINASI" || s.includes("KOMBINASI")) return "GP_KOMBINASI";
-  return null;
+  if (!s) return "MENURUN";
+  return Object.values(BNI_INSURANCE_SCHEMES).find(
+    (scheme) => s === scheme.code || s === scheme.label.toUpperCase()
+  )?.code ?? null;
 }
 
 export function resolveBniUnderwritingCode(ageYears, plafond) {
   const p = Number(plafond || 0);
   const age = Math.floor(Number(ageYears || 0));
-  if (!Number.isFinite(p) || p <= 0 || age < 20 || age > 74 || p > 10000000000) {
+  if (!Number.isFinite(p) || p <= 0 || !Number.isInteger(age) || age < 20 || age > 74 || p > BNI_UNDERWRITING_MAX_PLAFOND) {
     return null;
   }
   if (p <= 500000000) return "HD";
@@ -294,6 +304,27 @@ export function resolveBniUnderwritingCode(ageYears, plafond) {
   return "D";
 }
 
+export function requiresBniUnderwritingReview(age, plafond, tableCode = resolveBniUnderwritingCode(age, plafond)) {
+  // B68 selects three columns to the right of the age header. The last
+  // three ages select empty cells, represented by null here.
+  return Boolean(tableCode && tableCode !== resolveBniUnderwritingCode(Number(age) + 3, plafond));
+}
+
+export function getBniFleksiConfig(partner) {
+  if (partner?.engine === "bni_fleksi") return partner;
+  return partner?.fleksi?.engine === "bni_fleksi" ? partner.fleksi : null;
+}
+
+export function canActivateLegacyBniFleksi(partner) {
+  return partner?.id === "bank_bni" &&
+    partner.engine === "partner_bank" && partner.active === false &&
+    Number.isFinite(partner.maxInstallmentRatio) &&
+    partner.maxInstallmentRatio >= 10 && partner.maxInstallmentRatio <= 100 &&
+    Number.isSafeInteger(partner.maxPlafondAbsolute) && partner.maxPlafondAbsolute > 0 &&
+    Number.isSafeInteger(partner.maxTenorMonths) && partner.maxTenorMonths > 0 &&
+    !Object.hasOwn(partner, "fleksi");
+}
+
 export function createDefaultBniConfig() {
   return {
     id: "bank_bni",
@@ -304,6 +335,7 @@ export function createDefaultBniConfig() {
     engine: "bni_fleksi",
     schemaVersion: BNI_SCHEMA_VERSION,
     policyVersion: BNI_POLICY_VERSION,
+    revision: 1,
     active: true,
     badgeColor: "green",
     description:
@@ -312,7 +344,7 @@ export function createDefaultBniConfig() {
     interestMethod: "annuity",
     maxInstallmentRatio: 90.0,
     dbrPresets: [...BNI_DBR_PRESETS],
-    maxPlafondAbsolute: 10000000000,
+    maxPlafondAbsolute: BNI_UNDERWRITING_MAX_PLAFOND,
     maxTenorMonths: BNI_CONFIRMED_MAX_TENOR_MONTHS,
     maxEndAgeYears: BNI_MAX_AGE_LIMIT_YEARS,
     maxEndAgeMonths: 0,

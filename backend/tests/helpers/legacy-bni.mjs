@@ -1,0 +1,25 @@
+// Parameter BNI dari backend/src/config/default-parameters.js pada 6a791a3.
+export const LEGACY_BNI = {
+  id: "bank_bni",
+  code: "BNI-FLEKSI",
+  name: "Bank BNI — BNI Fleksi Pensiun",
+  shortName: "Bank BNI",
+  type: "bank_konvensional",
+  engine: "partner_bank",
+  active: false,
+  badgeColor: "green",
+  description: "Kredit lunak BNI Fleksi Pensiun & Prapensiun dengan suku bunga kompetitif.",
+  interestRateAnnual: 10.75,
+  interestMethod: "annuity",
+  maxInstallmentRatio: 85,
+  maxPlafondAbsolute: 500000000,
+  maxTenorMonths: 180,
+  maxEndAgeYears: 75,
+  maxEndAgeMonths: 0,
+  maxEntryAgeYears: 73,
+  provisionRatePercent: 1,
+  insuranceRatePercent: 8.5,
+  adminFee: 250000,
+  tataLaksanaRatePercent: 0,
+  retentionMultiplier: 1
+};
