@@ -1607,7 +1607,8 @@ const CALC_NON_NEGATIVE_FIELDS = [
 ];
 
 const BNI_CALC_INPUT_FIELDS = [
-  "bank_key", "name", "birth_date", "process_date", "salary", "take_over", "plafond", "tenor",
+  "bank_key", "name", "birth_date", "process_date", "bni_disbursement_date", "bni_tmt_pensiun_date",
+  "salary", "take_over", "plafond", "tenor",
   "bni_product_code", "product_code", "bni_insurance_scheme", "insurance_scheme", "bni_dbr_pct", "dbr_pct",
   "blokir_angsuran_count", "blokir_tabungan_count", "blokir_prapensiun_count", "lead_id", "dapem"
 ];
@@ -1624,6 +1625,12 @@ function validateCalcInput(body, bankKey) {
       const value = body[key];
       if (value != null && (typeof value !== "string" || value.length > 160)) {
         return `Parameter '${key}' harus berupa teks maksimal 160 karakter.`;
+      }
+    }
+    for (const key of ["bni_disbursement_date", "bni_tmt_pensiun_date"]) {
+      const value = body[key];
+      if (value != null && (typeof value !== "string" || value.length > 40)) {
+        return `Parameter '${key}' harus berupa tanggal kalender YYYY-MM-DD.`;
       }
     }
   }
@@ -1755,9 +1762,15 @@ app.post("/api/simulations", requireAuth, (req, res) => {
       : resolveSmForMarketing(store, mktUser, linkedLead?.sales_manager_id, linkedLead?.sales_manager_name);
 
   const input = bankKey === "bank_bni" ? {
-    ...Object.fromEntries(BNI_CALC_INPUT_FIELDS.filter((key) => Object.hasOwn(body, key)).map((key) => [key, body[key]])),
+    ...Object.fromEntries(
+      BNI_CALC_INPUT_FIELDS
+        .filter((key) => key !== "bni_disbursement_date" && key !== "bni_tmt_pensiun_date" && Object.hasOwn(body, key))
+        .map((key) => [key, body[key]])
+    ),
     process_date: result.process_date,
-    bni_dbr_pct: result.bni_details.dbr_pct
+    bni_dbr_pct: result.bni_details.dbr_pct,
+    ...(result.bni_details.bni_disbursement_date ? { bni_disbursement_date: result.bni_details.bni_disbursement_date } : {}),
+    ...(result.bni_details.bni_tmt_pensiun_date ? { bni_tmt_pensiun_date: result.bni_details.bni_tmt_pensiun_date } : {})
   } : body;
   const sim = withTransaction(() => {
     const seq = String(store.simulations.length + 1).padStart(4, "0");
@@ -1849,9 +1862,14 @@ app.post("/api/simulations/:id/ai-summary", requireAuth, (req, res) => {
 
   let summary = "";
   if (isBniFleksi) {
+    const praDatesLine =
+      bni.product_code === "4" && (bni.bni_disbursement_date || bni.bni_tmt_pensiun_date)
+        ? `• Jadwal Pra Purna: Tgl Aplikasi ${r.process_date || "-"}${bni.bni_disbursement_date ? `, Rencana Tgl Pencairan ${bni.bni_disbursement_date}` : ""}${bni.bni_tmt_pensiun_date ? `, TMT Pensiun ${bni.bni_tmt_pensiun_date}` : ""}.`
+        : null;
     summary = [
       `RINGKASAN EKSEKUTIF SIMULASI BANK BNI FLEKSI PENSIUN (${sim.sim_no})`,
       `• Debitur: ${r.name || "-"} (Usia Aplikasi ${bni.age_exact_text || `${r.age} tahun`}) — Produk ${bni.product_name || "BNI Fleksi"} (Kode ${bni.product_code || "-"}) • ${bni.insurance_scheme_label || "Skema Menurun"}.`,
+      ...(praDatesLine ? [praDatesLine] : []),
       `• Gaji & Batas DBR: Rp${r.salary.toLocaleString("id-ID")} (DBR ${bni.dbr_pct ?? 90}% = Maks Angsuran Rp${(bni.max_installment ?? 0).toLocaleString("id-ID")}/bln).`,
       `• Plafond & Tenor: Plafond Rp${r.plafond.toLocaleString("id-ID")} (Maks Rp${(bni.max_plafond ?? r.plafond).toLocaleString("id-ID")}) selama ${r.tenor} bulan (${bni.insurance_tenor_years || Math.ceil((r.tenor || 0) / 12)} thn AJK) • Bunga Efektif ${r.bank_rate}% p.a.`,
       `• Angsuran & Biaya Bank: Angsuran Rp${r.coop_installment.toLocaleString("id-ID")}/bln (DSR ${r.ratio_pct}%) • Biaya Bank (Admin Rp${(bni.admin_fee ?? 0).toLocaleString("id-ID")} + Provisi ${bni.provisi_pct ?? 0}% + BTL ${bni.btl_pct ?? 3.5}%) = Rp${(bni.bank_fees ?? 0).toLocaleString("id-ID")}.`,

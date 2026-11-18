@@ -91,6 +91,11 @@ async function createBrowserDriver() {
       },
       async goto(url) { await page.goto(url); },
       async eval(expr) { return page.evaluate(expr); },
+      async setViewport(width, height) { await page.setViewportSize({ width, height }); },
+      async screenshot(outPath) {
+        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+        await page.screenshot({ path: outPath, fullPage: true });
+      },
       async close() { await browser.close(); }
     };
   }
@@ -149,6 +154,19 @@ async function createBrowserDriver() {
     },
     async goto(url) { await cdp.send("Page.navigate", { url }); },
     async eval(expr) { return evalExpr(expr); },
+    async setViewport(width, height) {
+      await cdp.send("Emulation.setDeviceMetricsOverride", {
+        width,
+        height,
+        deviceScaleFactor: 1,
+        mobile: width < 640
+      });
+    },
+    async screenshot(outPath) {
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      const { data } = await cdp.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: true });
+      fs.writeFileSync(outPath, Buffer.from(data, "base64"));
+    },
     async close() {
       try { cdp.close(); } catch { /* ignore */ }
       try {
@@ -169,6 +187,9 @@ async function waitFor(driver, predicateExpr, timeoutMs = 12000) {
   }
   throw new Error(`waitFor timeout (${timeoutMs}ms): ${predicateExpr}`);
 }
+
+const captureArgIdx = process.argv.indexOf("--capture-dir");
+const CAPTURE_DIR = captureArgIdx >= 0 ? path.resolve(process.argv[captureArgIdx + 1] || "") : null;
 
 const fixture = disposableBackend();
 let running = null;
@@ -301,6 +322,189 @@ db.close();`);
   })()`);
   await waitFor(driver, `Boolean(document.querySelector('[data-testid="bni-unavailable-banner"]'))`);
   assert.equal(await driver.eval(`Boolean(document.querySelector('[data-testid="calc-save-button"]'))`), false);
+
+  // 1b. UI BNI Pra Purna: Jadwal dikelompokkan, auto POST /api/calc/max, Gunakan rekomendasi, respons usang diabaikan, Kasus CEO + Desktop/HP + PDF
+  await uiLogin("marketing@layananpensiunan.id");
+  await openBni("kalkulator", '[data-testid="bni-dates-group"]');
+  await driver.eval(`(() => {
+    window.__bniMaxRequests = [];
+    const origOpen = XMLHttpRequest.prototype.open;
+    const origSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+      this.__lpMethod = method;
+      this.__lpUrl = url;
+      return origOpen.call(this, method, url, ...rest);
+    };
+    XMLHttpRequest.prototype.send = function(body) {
+      if (this.__lpUrl && this.__lpUrl.includes('/api/calc/max')) {
+        try { window.__bniMaxRequests.push(JSON.parse(body || '{}')); } catch {}
+        if (window.__bniDelayOnce && !String(body || '').includes('"tenor":50')) {
+          window.__bniDelayOnce = false;
+          const self = this;
+          setTimeout(() => origSend.call(self, body), 500);
+          return;
+        }
+      }
+      return origSend.call(this, body);
+    };
+  })()`);
+
+  const setInput = async (testid, value) => {
+    await driver.eval(`(() => {
+      const el = document.querySelector('[data-testid="${testid}"]');
+      Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value').set.call(el, ${JSON.stringify(String(value))});
+      el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
+    })()`);
+  };
+
+  assert.equal(await driver.eval(`Boolean(document.querySelector('[data-testid="bni-dates-group"] [data-testid="bni-process-date-input"]'))`), true);
+  assert.equal(await driver.eval(`Boolean(document.querySelector('[data-testid="bni-dates-group"] [data-testid="bni-disbursement-date-input"]'))`), true);
+  assert.equal(await driver.eval(`Boolean(document.querySelector('[data-testid="bni-dates-group"] [data-testid="bni-tmt-pensiun-date-input"]'))`), true);
+  assert.match(await driver.eval(`document.querySelector('label[for="bni-blk-pra"]')?.innerText`), /Blokir Prapensiun \(kali angsuran\)/);
+
+  // Ubah tanggal tidak mengubah nilai blokir prapensiun yang sudah diisi
+  await setInput("bni-blokir-prapensiun-input", "7");
+  await setInput("bni-process-date-input", "2026-11-19");
+  await setInput("bni-disbursement-date-input", "2026-12-02");
+  await setInput("bni-tmt-pensiun-date-input", "2027-07-01");
+  assert.equal(await driver.eval(`document.querySelector('[data-testid="bni-blokir-prapensiun-input"]').value`), "7");
+
+  // Reguler Kode 1 menyembunyikan 2 tanggal baru, kembali ke Kode 4 memunculkannya lagi
+  await setInput("bni-product-select", "1");
+  assert.equal(await driver.eval(`Boolean(document.querySelector('[data-testid="bni-disbursement-date-input"]'))`), false);
+  await setInput("bni-product-select", "4");
+  assert.equal(await driver.eval(`Boolean(document.querySelector('[data-testid="bni-disbursement-date-input"]'))`), true);
+
+  // Rekomendasi batas awal (tanpa tenor & tanpa plafon manual) -> tampil sebelum klik Hitung
+  await setInput("bni-name-input", "DEBITUR SINTETIS UJI CEO");
+  await setInput("bni-birth-input", "1969-01-15");
+  await setInput("bni-salary-input", "3759100");
+  await setInput("bni-dbr-select", "90");
+  await setInput("bni-blokir-prapensiun-input", "7");
+  await waitFor(driver, `Boolean(document.querySelector('[data-testid="bni-rec-max-plafond"]')?.innerText.includes('Rp')) && !document.querySelector('[data-testid="bni-use-rec-btn"]').disabled`);
+
+  const firstMaxReq = await driver.eval(`window.__bniMaxRequests[window.__bniMaxRequests.length - 1]`);
+  assert.equal(Object.hasOwn(firstMaxReq, "tenor"), false, "Request batas awal /calc/max tidak boleh mengirim tenor");
+  assert.equal(Object.hasOwn(firstMaxReq, "plafond"), false, "Request batas awal /calc/max tidak boleh mengirim plafon manual");
+  assert.match(await driver.eval(`document.querySelector('[data-testid="bni-rec-max-tenor"]').innerText`), /bulan/);
+  assert.match(await driver.eval(`document.querySelector('[data-testid="bni-rec-eval-tenor"]').innerText`), /bulan/);
+
+  // Uji tenor tidak tersedia (Kode 1 + tenor 140) sebelum Hitung lalu pulihkan
+  await setInput("bni-product-select", "1");
+  await setInput("bni-tenor-input", "140");
+  await waitFor(driver, `Boolean(document.querySelector('[data-testid="bni-rec-unavailable"]'))`);
+  assert.equal(await driver.eval(`document.querySelector('[data-testid="bni-use-rec-btn"]').disabled`), true);
+
+  await setInput("bni-product-select", "4");
+  // Delay satu respons untuk tenor 40 lalu cepat pindah ke tenor 50 agar respons usang terabaikan
+  await driver.eval(`window.__bniDelayOnce = true;`);
+  await setInput("bni-tenor-input", "40");
+  await new Promise((r) => setTimeout(r, 220));
+  await setInput("bni-tenor-input", "50");
+  await waitFor(driver, `document.querySelector('[data-testid="bni-rec-eval-tenor"]')?.innerText === '50 bulan' && document.querySelector('[data-testid="bni-rec-max-plafond"]')?.innerText.includes('136.534.588') && !document.querySelector('[data-testid="bni-use-rec-btn"]').disabled`);
+  await new Promise((r) => setTimeout(r, 450));
+  assert.equal(await driver.eval(`document.querySelector('[data-testid="bni-rec-eval-tenor"]').innerText`), "50 bulan");
+  assert.match(await driver.eval(`document.querySelector('[data-testid="bni-rec-max-plafond"]').innerText`), /136\.534\.588/);
+
+  await driver.eval(`document.querySelector('[data-testid="bni-use-rec-btn"]').click()`);
+  await waitFor(driver, `document.querySelector('[data-testid="bni-loan-input"]')?.value === '136.534.588'`);
+  assert.equal(await driver.eval(`document.querySelector('[data-testid="bni-tenor-input"]').value`), "50");
+
+  // Kembalikan plafond uji CEO = 100.000.000, periksa Desktop & HP layout, lalu Hitung & Simpan
+  await setInput("bni-loan-input", "100000000");
+  await driver.setViewport(1440, 1000);
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(await driver.eval(`document.documentElement.scrollWidth <= window.innerWidth`), true, "Form BNI desktop tidak boleh overflow horizontal");
+  if (CAPTURE_DIR) await driver.screenshot(path.join(CAPTURE_DIR, "bni-form-desktop.png"));
+
+  await driver.setViewport(390, 844);
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(await driver.eval(`document.documentElement.scrollWidth <= window.innerWidth`), true, "Form BNI HP tidak boleh overflow horizontal");
+  if (CAPTURE_DIR) await driver.screenshot(path.join(CAPTURE_DIR, "bni-form-mobile.png"));
+
+  await driver.eval(`document.querySelector('[data-testid="bni-submit-button"]').click()`);
+  await waitFor(driver, `Boolean(document.querySelector('[data-testid="result-net"]'))`);
+  const ceoUi = await driver.eval(`({
+    status: document.querySelector('[data-testid="bni-result-status"]')?.innerText,
+    procDate: document.querySelector('[data-testid="bni-result-process-date"]')?.innerText,
+    disbDate: document.querySelector('[data-testid="bni-result-disbursement-date"]')?.innerText,
+    tmtDate: document.querySelector('[data-testid="bni-result-tmt-pensiun-date"]')?.innerText,
+    headerSchemeRect: document.querySelector('[data-testid="bni-result-header-scheme"]')?.getBoundingClientRect().toJSON(),
+    ajkScheme: document.querySelector('[data-testid="bni-result-ajk-scheme"]')?.innerText,
+    ajkCoverage: document.querySelector('[data-testid="bni-result-ajk-coverage"]')?.innerText,
+    ajkGross: document.querySelector('[data-testid="bni-result-ajk-gross"]')?.innerText,
+    ajkSubsidy: document.querySelector('[data-testid="bni-result-ajk-subsidy"]')?.innerText,
+    ajkCustomer: document.querySelector('[data-testid="result-risk"]')?.innerText,
+    uw: document.querySelector('[data-testid="bni-result-underwriting"]')?.innerText,
+    blokirPra: document.querySelector('[data-testid="bni-result-blokir-prapensiun"]')?.innerText,
+    retention: document.querySelector('[data-testid="result-retention"]')?.innerText,
+    installment: document.querySelector('[data-testid="result-coop-installment"]')?.innerText,
+    net: document.querySelector('[data-testid="result-net"]')?.innerText,
+    mobileNoOverflow: document.documentElement.scrollWidth <= window.innerWidth
+  })`);
+  assert.match(ceoUi.status, /PASSED/);
+  assert.match(ceoUi.procDate, /19\/11\/2026/);
+  assert.match(ceoUi.disbDate, /02\/12\/2026/);
+  assert.match(ceoUi.tmtDate, /01\/07\/2027/);
+  assert.ok(ceoUi.headerSchemeRect?.width > 80 && ceoUi.headerSchemeRect?.height > 0, "Nama skema AJK harus terbaca pada layar HP");
+  assert.match(ceoUi.ajkScheme, /Kredit BFP Skema Menurun/);
+  assert.match(ceoUi.ajkCoverage, /Dicover/);
+  assert.match(ceoUi.ajkGross, /5\.464\.000,00/);
+  assert.match(ceoUi.ajkSubsidy, /5\.464\.000,00/);
+  assert.match(ceoUi.ajkCustomer, /0,00/);
+  assert.match(ceoUi.uw, /HD/);
+  assert.match(ceoUi.blokirPra, /17\.345\.297,09/);
+  assert.match(ceoUi.retention, /27\.256\.895,43/);
+  assert.match(ceoUi.installment, /2\.477\.899,58/);
+  assert.match(ceoUi.net, /68\.093\.104,57/);
+  assert.equal(ceoUi.mobileNoOverflow, true, "Hasil BNI HP tidak boleh overflow horizontal");
+  if (CAPTURE_DIR) await driver.screenshot(path.join(CAPTURE_DIR, "bni-result-mobile.png"));
+
+  await driver.setViewport(1440, 1000);
+  await new Promise((r) => setTimeout(r, 200));
+  if (CAPTURE_DIR) await driver.screenshot(path.join(CAPTURE_DIR, "bni-result-desktop.png"));
+
+  await driver.eval(`document.querySelector('[data-testid="calc-save-button"]').click()`);
+  await waitFor(driver, `Boolean(document.querySelector('[data-testid="sim-approval-panel"]'))`);
+  const savedSimInfo = await driver.eval(`(async () => {
+    const token = sessionStorage.getItem('lp_access_token');
+    const simNo = document.querySelector('[data-testid="sim-number"]')?.innerText?.trim();
+    const listRes = await fetch('/api/simulations?q=' + encodeURIComponent(simNo || 'DEBITUR SINTETIS UJI CEO'), {
+      headers: { Authorization: 'Bearer ' + token }
+    });
+    const listJson = await listRes.json();
+    const sim = listJson.items?.[0];
+    const pdfRes = await fetch('/api/simulations/' + sim.id + '/pdf', {
+      headers: { Authorization: 'Bearer ' + token }
+    });
+    const pdfBytes = Array.from(new Uint8Array(await pdfRes.arrayBuffer()));
+    return { simNo: sim?.sim_no, status: pdfRes.status, pdfBytes };
+  })()`);
+  assert.equal(savedSimInfo.status, 200);
+  const pdfBuf = Buffer.from(savedSimInfo.pdfBytes);
+  const pdfTextUi = pdfBuf.toString("utf8");
+  assert.ok(pdfTextUi.startsWith("%PDF-1.4"));
+  assert.ok(pdfTextUi.includes("0.949 0.541 0.098"));
+  assert.match(pdfTextUi, /02 Desember 2026/);
+  assert.match(pdfTextUi, /01 Juli 2027/);
+  assert.match(pdfTextUi, /Kredit BFP Skema Menurun/);
+  assert.match(pdfTextUi, /Rp 17\.345\.297,09/);
+  assert.match(pdfTextUi, /Rp 27\.256\.895,43/);
+  assert.match(pdfTextUi, /Rp 68\.093\.104,57/);
+  if (CAPTURE_DIR) {
+    fs.mkdirSync(CAPTURE_DIR, { recursive: true });
+    fs.writeFileSync(path.join(CAPTURE_DIR, `${savedSimInfo.simNo || "BNI-CEO-SINTETIS"}.pdf`), pdfBuf);
+  }
+
+  // Edit TMT bergeser dengan count sama (7x): angka tetap identik, TMT baru tampil di preview & PDF
+  await driver.eval(`(document.querySelector('[data-testid="edit-simulation-bottom-button"]') || Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('Edit Simulasi'))).click()`);
+  await waitFor(driver, `Boolean(document.querySelector('[data-testid="bni-tmt-pensiun-date-input"]'))`);
+  await setInput("bni-tmt-pensiun-date-input", "2028-02-01");
+  assert.equal(await driver.eval(`document.querySelector('[data-testid="bni-blokir-prapensiun-input"]').value`), "7");
+  await driver.eval(`document.querySelector('[data-testid="bni-submit-button"]').click()`);
+  await waitFor(driver, `Boolean(document.querySelector('[data-testid="bni-result-tmt-pensiun-date"]'))`);
+  assert.match(await driver.eval(`document.querySelector('[data-testid="bni-result-tmt-pensiun-date"]').innerText`), /01\/02\/2028/);
+  assert.match(await driver.eval(`document.querySelector('[data-testid="result-net"]').innerText`), /68\.093\.104,57/);
 
   // 2. Sales Manager vs SM lain di UI
   await uiLogin("salesmanager@layananpensiunan.id");

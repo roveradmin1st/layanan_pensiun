@@ -1312,26 +1312,44 @@ export function BniResultView({ r }) {
     );
   }
 
+  const ajkCoverageStatus =
+    bni.ajk_covered === false
+      ? "Tidak Dicover AJK CAR"
+      : needsUnderwritingReview
+      ? "Dicover • Perlu verifikasi aturan asuransi"
+      : `Dicover (${bni.insurance_tenor_years || Math.ceil((r.tenor || 0) / 12)} tahun)`;
+  const blokirPrapenVal = bni.blokir_prapensiun_exact ?? bni.blokir_prapensiun;
+  const blokirPrapenDisplay =
+    Number(blokirPrapenVal || 0) === 0 && Number(bni.blokir_prapensiun_count || 0) === 0
+      ? "-"
+      : `Rp ${fmtExcelDec2(blokirPrapenVal)}`;
+
   return (
     <div className="space-y-6" data-testid="final-result">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200/80 pb-4">
-        <div className="flex items-center gap-3">
-          <PartnerLogo bankKey="bank_bni" size="lg" />
-          <div>
+        <div className="flex items-start sm:items-center gap-3 min-w-0">
+          <PartnerLogo bankKey="bank_bni" size="lg" className="shrink-0" />
+          <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="font-display text-base sm:text-lg font-bold text-[#0D6E6D]">
                 BANK BNI • BNI FLEKSI PENSIUN
               </h3>
-              <span className="rounded-full bg-[#0D6E6D]/10 px-2.5 py-0.5 text-[11px] font-bold text-[#0D6E6D]">
+              <span
+                className="rounded-full bg-[#0D6E6D]/10 px-2.5 py-0.5 text-[11px] font-bold text-[#0D6E6D]"
+                data-testid="bni-result-product-badge"
+              >
                 Kode {bni.product_code || "-"} • {bni.product_name || "BNI Fleksi"}
               </span>
             </div>
-            <p className="text-xs text-slate-500">
+            <p
+              className="mt-1 text-xs leading-snug text-slate-500 break-words"
+              data-testid="bni-result-header-scheme"
+            >
               {bni.insurance_scheme_label || "Kredit BFP Skema Menurun"} • Asuransi Jiwa {bni.insurance_underwriter || "CAR"}
             </p>
           </div>
         </div>
-        <div className="sm:self-center">
+        <div className="sm:self-center shrink-0">
           <span
             className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold ${
               needsUnderwritingReview ? "bg-amber-50 text-amber-800" :
@@ -1347,11 +1365,26 @@ export function BniResultView({ r }) {
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">
-        <div className="space-y-6">
-          <Block title="Identitas & Usia Debitur (BNI Fleksi)" accent="#0D6E6D">
+        <div className="space-y-6 min-w-0">
+          <Block title="Identitas, Jadwal & Produk (BNI Fleksi)" accent="#0D6E6D">
             <Row k="Nama Calon Debitur" v={r.name || "-"} />
+            <Row k="Produk Kredit BNI" v={`Kode ${bni.product_code || "-"} — ${bni.product_name || "BNI Fleksi"}`} strong testid="bni-result-product" />
             <Row k="Tanggal Lahir" v={fmtDate(r.birth_date)} />
-            <Row k="Tanggal Aplikasi" v={fmtDate(r.process_date)} />
+            <Row k="Tanggal Aplikasi" v={fmtDate(r.process_date)} testid="bni-result-process-date" />
+            {bni.product_code === "4" && (
+              <>
+                <Row
+                  k="Rencana Tanggal Pencairan"
+                  v={bni.bni_disbursement_date ? fmtDate(bni.bni_disbursement_date) : "Belum diisi (rencana)"}
+                  testid="bni-result-disbursement-date"
+                />
+                <Row
+                  k="TMT Pensiun"
+                  v={bni.bni_tmt_pensiun_date ? fmtDate(bni.bni_tmt_pensiun_date) : "-"}
+                  testid="bni-result-tmt-pensiun-date"
+                />
+              </>
+            )}
             <Row k="Usia Saat Aplikasi (Eksak)" v={bni.age_exact_text || `${r.age} Tahun`} strong />
             <Row k="Usia Tahun (Pembulatan BNI)" v={`${bni.age_rounded_years ?? (r.age + 1)} tahun`} />
             <Row k="Tanggal Jatuh Tempo (EOMONTH)" v={fmtDate(bni.maturity_date)} />
@@ -1371,24 +1404,34 @@ export function BniResultView({ r }) {
           </Block>
         </div>
 
-        <div className="space-y-6">
+        <div className="space-y-6 min-w-0">
           <Block title="Biaya Bank & Asuransi AJK CAR" accent="#0D6E6D">
             <Row k="Biaya Admin Bank" v={rp(bni.admin_fee)} />
             <Row k={`Provisi (${bni.provisi_pct ?? 0}%)`} v={`Rp ${fmtExcelDec2(bni.provisi_exact ?? bni.provisi)}`} testid="result-proaq" />
             <Row k={`BTL (${bni.btl_pct ?? 3.5}%)`} v={`Rp ${fmtExcelDec2(bni.btl_exact ?? bni.btl)}`} />
             <Row k="Subtotal Biaya Bank" v={rp(bni.bank_fees)} strong />
-            <Row k={`Premi AJK Gross (${bni.ajk_rate_permil ?? 0} ‰)`} v={`Rp ${fmtExcelDec2(bni.gross_ajk_premium_exact ?? bni.gross_ajk_premium)}`} />
-            <Row k={`Subsidi BNI (s.d. ${bni.subsidy_cap_permil ?? 150} ‰)`} v={`-Rp ${fmtExcelDec2(bni.bni_subsidy_premium_exact ?? bni.bni_subsidy_premium)}`} />
+            <Row k="Skema Asuransi AJK" v={bni.insurance_scheme_label || "Kredit BFP Skema Menurun"} strong testid="bni-result-ajk-scheme" />
+            <Row k="Status Pertanggungan AJK" v={ajkCoverageStatus} strong testid="bni-result-ajk-coverage" />
+            <Row k={`Premi AJK Gross (${bni.ajk_rate_permil ?? 0} ‰)`} v={`Rp ${fmtExcelDec2(bni.gross_ajk_premium_exact ?? bni.gross_ajk_premium)}`} testid="bni-result-ajk-gross" />
+            <Row k={`Subsidi BNI (s.d. ${bni.subsidy_cap_permil ?? 150} ‰)`} v={`-Rp ${fmtExcelDec2(bni.bni_subsidy_premium_exact ?? bni.bni_subsidy_premium)}`} testid="bni-result-ajk-subsidy" />
             <Row k={`Premi AJK Nasabah (${fmtExcelDec2(bni.customer_ajk_permil ?? 0)} ‰)`} v={`Rp ${fmtExcelDec2(bni.customer_ajk_premium_exact ?? bni.customer_ajk_premium)}`} strong testid="result-risk" />
             <Row k="Total Biaya Kredit + AJK" v={`Rp ${fmtExcelDec2(bni.total_fees_exact ?? r.total_fees)}`} strong testid="result-total-fees" />
-            <Row k="Underwriting Medis" v={`${bni.underwriting_code || "-"} — ${bni.underwriting_desc || "-"}`} strong />
+            <Row k="Underwriting Medis" v={`${bni.underwriting_code || "-"} — ${bni.underwriting_desc || "-"}`} strong testid="bni-result-underwriting" />
+            {needsUnderwritingReview && bni.underwriting_review_reason && (
+              <div
+                className="border-t border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 sm:px-4"
+                data-testid="bni-underwriting-review-note"
+              >
+                {bni.underwriting_review_reason}
+              </div>
+            )}
           </Block>
 
           <Block title="Blokir, Take Over & Pencairan" accent="#F28A19">
             <Row k="Pencairan Bersih Sebelum Blokir" v={`Rp ${fmtExcelDec2(bni.net_before_blokir_exact ?? bni.net_before_blokir)}`} strong />
-            <Row k={`Blokir Angsuran (${bni.blokir_angsuran_count ?? 3}×)`} v={`Rp ${fmtExcelDec2(bni.blokir_angsuran_exact ?? bni.blokir_angsuran)}`} />
-            <Row k={`Blokir Tabungan Wajib (${bni.blokir_tabungan_count ?? 1}×)`} v={`Rp ${fmtExcelDec2(bni.blokir_tabungan_exact ?? bni.blokir_tabungan)}`} />
-            <Row k={`Blokir Prapensiun (${bni.blokir_prapensiun_count ?? 0}×)`} v={`Rp ${fmtExcelDec2(bni.blokir_prapensiun_exact ?? bni.blokir_prapensiun, true)}`} />
+            <Row k={`Blokir Angsuran (${bni.blokir_angsuran_count ?? 3}×)`} v={`Rp ${fmtExcelDec2(bni.blokir_angsuran_exact ?? bni.blokir_angsuran)}`} testid="bni-result-blokir-angsuran" />
+            <Row k={`Blokir Tabungan Wajib (${bni.blokir_tabungan_count ?? 1}×)`} v={`Rp ${fmtExcelDec2(bni.blokir_tabungan_exact ?? bni.blokir_tabungan)}`} testid="bni-result-blokir-tabungan" />
+            <Row k={`Blokir Prapensiun (${bni.blokir_prapensiun_count ?? 0}×)`} v={blokirPrapenDisplay} testid="bni-result-blokir-prapensiun" />
             <Row k={`Total Blokir (${bni.total_blokir_count ?? 0}×)`} v={`Rp ${fmtExcelDec2(bni.total_blokir_exact ?? r.retention)}`} strong testid="result-retention" />
             <Row k="Take Over (TO)" v={rp(r.take_over || 0)} />
           </Block>
@@ -1398,15 +1441,15 @@ export function BniResultView({ r }) {
       </div>
 
       <div className="grid gap-px overflow-hidden rounded-xl bg-[#0D6E6D] sm:grid-cols-2">
-        <div className="p-4 sm:p-5 text-white">
+        <div className="p-4 sm:p-5 text-white min-w-0">
           <p className="text-xs text-teal-100/85 font-medium">Terima Bersih Setelah Take Over</p>
-          <p className="mt-1 font-display text-2xl sm:text-3xl font-bold lp-num truncate" data-testid="result-net">
+          <p className="mt-1 font-display text-xl sm:text-3xl font-bold lp-num break-words" data-testid="result-net">
             Rp {fmtExcelDec2(bni.terima_bersih_after_to_exact ?? r.net_disbursement)}
           </p>
         </div>
-        <div className="p-4 sm:p-5 text-white sm:border-l sm:border-white/15">
+        <div className="p-4 sm:p-5 text-white sm:border-l sm:border-white/15 min-w-0">
           <p className="text-xs text-teal-100/85 font-medium">Sisa Gaji per Bulan</p>
-          <p className="mt-1 font-display text-2xl sm:text-3xl font-bold lp-num truncate" data-testid="result-remaining-salary">
+          <p className="mt-1 font-display text-xl sm:text-3xl font-bold lp-num break-words" data-testid="result-remaining-salary">
             Rp {fmtExcelDec2(bni.remaining_salary_exact ?? r.remaining_salary)}
           </p>
         </div>

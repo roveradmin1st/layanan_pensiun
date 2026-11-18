@@ -3873,35 +3873,69 @@ export function generateSimulationPdfBuffer(sim) {
 
   const headerBg = isCapital ? "0.027 0.533 0.494" : isMestika ? "0.118 0.494 0.204" : isBniFleksi ? "0.051 0.431 0.427" : "0.208 0.063 0.502";
   lines.push(`q ${headerBg} rg 0 760 595 82 re f Q`);
+  if (isBniFleksi) {
+    lines.push("q 0.949 0.541 0.098 rg 0 755 595 5 re f Q");
+  }
   lines.push(`BT /F2 13 Tf 1 1 1 rg 40 805 Td (${pdfEscape(headerTitle)}) Tj ET`);
   lines.push(`BT /F1 9 Tf 0.9 0.9 0.95 rg 40 785 Td (No. Simulasi: ${pdfEscape(sim.sim_no)}   |   Tanggal Proses: ${pdfEscape(isCapital || isMestika || isBniFleksi ? fmtDateId(r.process_date) : r.process_date)}   |   Petugas: ${pdfEscape(sim.created_by_name)}) Tj ET`);
+
+  const fmtPdfSmartRp = (exactVal, fallbackVal) => {
+    const val = exactVal ?? fallbackVal;
+    if (val === undefined || val === null) return "-";
+    const num = Number(val);
+    if (!Number.isFinite(num)) return "-";
+    return Math.abs(num - Math.round(num)) < 0.005
+      ? fmtRp(Math.round(num))
+      : `Rp ${fmtExcelDec2(num)}`;
+  };
 
   let rows = [];
 
   if (isBniFleksi) {
+    const blokirAngsAmt = bni.blokir_angsuran_exact ?? bni.blokir_angsuran;
+    const blokirTabAmt = bni.blokir_tabungan_exact ?? bni.blokir_tabungan;
+    const blokirPraAmt = bni.blokir_prapensiun_exact ?? bni.blokir_prapensiun;
+    const ajkCoverageText = bni.ajk_covered === false
+      ? "Tidak Dicover AJK CAR"
+      : bni.underwriting_requires_verification
+      ? "Dicover - Perlu verifikasi aturan asuransi"
+      : `Dicover (${bni.insurance_tenor_years || Math.ceil((r.tenor || 0) / 12)} tahun)`;
+
     rows = [
-      ["IDENTITAS & PRODUK BNI FLEKSI", ""],
+      ["IDENTITAS, JADWAL & PRODUK BNI FLEKSI", ""],
       ["Nama Calon Debitur", r.name || "-"],
       ["Tgl Lahir / Usia Aplikasi", `${fmtDateId(r.birth_date)} (${bni.age_exact_text || `${r.age} Tahun`})`],
-      ["Produk & Skema Asuransi", `${bni.product_name || "BNI Fleksi"} (Kode ${bni.product_code || "-"}) • ${bni.insurance_scheme_label || "Skema Menurun"}`],
-      ["Jatuh Tempo / Sisa Usia 75", `${fmtDateId(bni.maturity_date)} (Sisa masa usia ${bni.remaining_service_months ?? "-"} bln)`],
-      ["Gaji & Batas DBR", `${fmtRp(r.salary)} (DBR ${bni.dbr_pct ?? 90}% = ${fmtRp(bni.max_installment)})`],
-      ["PARAMETER PEMBIAYAAN & ANGSURAN", ""],
-      ["Plafond Maksimal / Diajukan", `${fmtRp(bni.max_plafond)} / ${fmtRp(r.plafond)}`],
-      ["Tenor / Bunga Efektif", `${r.tenor} bulan (${bni.insurance_tenor_years || Math.ceil((r.tenor || 0) / 12)} thn AJK) • ${r.bank_rate}% p.a.`],
-      ["Angsuran per Bulan", `${fmtRp(r.coop_installment)} (DSR Aktual ${r.ratio_pct}%)`],
-      ["BIAYA BANK & ASURANSI AJK CAR", ""],
-      [`Biaya Bank (Admin + Prov ${bni.provisi_pct ?? 0}% + BTL ${bni.btl_pct ?? 3.5}%)`, fmtRp(bni.bank_fees)],
-      [`Premi AJK Gross / Subsidi BNI (s.d. ${bni.subsidy_cap_permil ?? 150}‰)`, `${fmtRp(bni.gross_ajk_premium)} / -${fmtRp(bni.bni_subsidy_premium)}`],
-      [`Premi AJK Ditanggung Nasabah (${bni.customer_ajk_permil ?? 0}‰)`, fmtRp(bni.customer_ajk_premium)],
-      ["Status Underwriting Medis", `${bni.underwriting_code || "-"} (${bni.underwriting_desc || "-"})`],
-      ...(bni.underwriting_requires_verification ? [["Catatan", "Perlu verifikasi aturan asuransi sebelum pengajuan"]] : []),
+      ["Tanggal Aplikasi", fmtDateId(r.process_date)],
+      ...(bni.product_code === "4"
+        ? [
+            ["Rencana Tanggal Pencairan", bni.bni_disbursement_date ? fmtDateId(bni.bni_disbursement_date) : "Belum diisi (rencana)"],
+            ["TMT Pensiun", bni.bni_tmt_pensiun_date ? fmtDateId(bni.bni_tmt_pensiun_date) : "-"]
+          ]
+        : []),
+      ["Produk Kredit BNI", `Kode ${bni.product_code || "-"} - ${bni.product_name || "BNI Fleksi"}`],
+      ["Skema Asuransi AJK", bni.insurance_scheme_label || "Kredit BFP Skema Menurun"],
+      ["Penjamin Asuransi", bni.insurance_underwriter || "CAR (PT AJ Central Asia Raya)"],
+      ["Status Pertanggungan AJK", ajkCoverageText],
+      ["Jatuh Tempo / Sisa Usia 75", `${fmtDateId(bni.maturity_date)} (Sisa masa ${bni.remaining_service_months ?? "-"} bln)`],
+      ["PARAMETER PEMBIAYAAN, BIAYA & AJK CAR", ""],
+      ["Gaji & Batas DBR", `${fmtRp(r.salary)} (DBR ${bni.dbr_pct ?? 90}% = ${fmtPdfSmartRp(bni.max_installment_exact, bni.max_installment)})`],
+      ["Plafon Maksimum / Diajukan", `${fmtPdfSmartRp(bni.max_plafond, bni.max_plafond_exact)} / ${fmtRp(r.plafond)}`],
+      ["Tenor / Bunga Efektif", `${r.tenor} bln (${bni.insurance_tenor_years || Math.ceil((r.tenor || 0) / 12)} thn AJK) - ${r.bank_rate}% p.a.`],
+      ["Angsuran per Bulan", `${fmtPdfSmartRp(bni.monthly_installment_exact, r.coop_installment)} (DSR ${r.ratio_pct}%)`],
+      [`Biaya Bank (Adm+Prov ${bni.provisi_pct ?? 0}%+BTL ${bni.btl_pct ?? 3.5}%)`, fmtPdfSmartRp(bni.bank_fees_exact, bni.bank_fees)],
+      [`Premi AJK Kotor / Subsidi (${bni.ajk_rate_permil ?? 0} permil)`, `${fmtPdfSmartRp(bni.gross_ajk_premium_exact, bni.gross_ajk_premium)} / -${fmtPdfSmartRp(bni.bni_subsidy_premium_exact, bni.bni_subsidy_premium)}`],
+      [`Premi AJK Nasabah (${bni.customer_ajk_permil ?? 0} permil)`, fmtPdfSmartRp(bni.customer_ajk_premium_exact, bni.customer_ajk_premium)],
+      ["Status Underwriting Medis", `${bni.underwriting_code || "-"} (${String(bni.underwriting_desc || "-").slice(0, 42)})`],
+      ...(bni.underwriting_requires_verification ? [["Catatan Underwriting", "Perlu verifikasi aturan asuransi sebelum pengajuan"]] : []),
       ["BLOKIR, TAKE OVER & PENCAIRAN", ""],
-      ["Pencairan Bersih Sebelum Blokir", fmtRp(bni.net_before_blokir)],
-      [`Blokir Angsuran (${bni.blokir_angsuran_count ?? 3}x) & Tabungan (${bni.blokir_tabungan_count ?? 1}x)`, `${fmtRp(bni.blokir_angsuran)} + ${fmtRp(bni.blokir_tabungan)}`],
-      [`Blokir Prapensiun (${bni.blokir_prapensiun_count ?? 0}x) / TO`, `${fmtRp(bni.blokir_prapensiun)} / ${fmtRp(r.take_over || 0)}`],
-      ["TERIMA BERSIH SETELAH TO", fmtRp(r.net_disbursement)],
-      ["SISA GAJI PER BULAN", fmtRp(r.remaining_salary)]
+      ["Pencairan Bersih Sebelum Blokir", fmtPdfSmartRp(bni.net_before_blokir_exact, bni.net_before_blokir)],
+      [`Blokir Angsuran (${bni.blokir_angsuran_count ?? 3}x)`, fmtPdfSmartRp(blokirAngsAmt, 0)],
+      [`Blokir Tabungan Wajib (${bni.blokir_tabungan_count ?? 1}x)`, fmtPdfSmartRp(blokirTabAmt, 0)],
+      [`Blokir Prapensiun (${bni.blokir_prapensiun_count ?? 0}x)`, fmtPdfSmartRp(blokirPraAmt, 0)],
+      [`Total Blokir (${bni.total_blokir_count ?? 0}x angsuran)`, fmtPdfSmartRp(bni.total_blokir_exact, r.retention)],
+      ["Take Over (TO)", fmtRp(r.take_over || 0)],
+      ["TERIMA BERSIH SETELAH TO", fmtPdfSmartRp(bni.terima_bersih_after_to_exact, r.net_disbursement)],
+      ["SISA GAJI PER BULAN", fmtPdfSmartRp(bni.remaining_salary_exact, r.remaining_salary)]
     ];
   } else if (isMestika) {
     rows = [
@@ -4078,17 +4112,29 @@ export function generateSimulationPdfBuffer(sim) {
   let y = 735;
   for (const [k, v] of rows) {
     if (!v) {
-      y -= 8;
-      lines.push(`q 0.933 0.969 0.961 rg 40 ${y - 4} 515 18 re f Q`);
-      lines.push(`BT /F2 10 Tf ${isCapital ? "0.071 0.239 0.224" : "0.208 0.063 0.502"} rg 46 ${y} Td (${pdfEscape(k)}) Tj ET`);
-      y -= 20;
+      y -= isBniFleksi ? 6 : 8;
+      if (isBniFleksi) {
+        lines.push(`q 0.996 0.961 0.922 rg 40 ${y - 4} 515 17 re f Q`);
+        lines.push(`q 0.949 0.541 0.098 rg 40 ${y - 4} 4 17 re f Q`);
+        lines.push(`BT /F2 9.5 Tf 0.051 0.329 0.325 rg 49 ${y} Td (${pdfEscape(k)}) Tj ET`);
+        y -= 17;
+      } else {
+        lines.push(`q 0.933 0.969 0.961 rg 40 ${y - 4} 515 18 re f Q`);
+        lines.push(`BT /F2 10 Tf ${isCapital ? "0.071 0.239 0.224" : "0.208 0.063 0.502"} rg 46 ${y} Td (${pdfEscape(k)}) Tj ET`);
+        y -= 20;
+      }
     } else {
       const isHighlightRow =
-        isCapital &&
-        (k === "Tenor Diajukan" ||
-          k === "Plafon Diajukan" ||
-          k === "Sisa Bersih" ||
-          k === "Sisa Gaji Setelah Angsuran");
+        (isCapital &&
+          (k === "Tenor Diajukan" ||
+            k === "Plafon Diajukan" ||
+            k === "Sisa Bersih" ||
+            k === "Sisa Gaji Setelah Angsuran")) ||
+        (isBniFleksi &&
+          (k === "TERIMA BERSIH SETELAH TO" ||
+            k === "SISA GAJI PER BULAN" ||
+            k.startsWith("Blokir Prapensiun") ||
+            k.startsWith("Total Blokir")));
       const isStrong =
         isHighlightRow ||
         k.includes("TERIMA BERSIH") ||
@@ -4097,18 +4143,41 @@ export function generateSimulationPdfBuffer(sim) {
         k.includes("Pencairan Bersih") ||
         k.includes("Plafon Maksimal") ||
         k.includes("Plafond Maksimal") ||
+        k.includes("Plafon Maksimum") ||
         k.includes("Angsuran Aktual") ||
-        k.includes("Total Retensi");
+        k.includes("Total Retensi") ||
+        k.includes("Total Blokir");
       if (isHighlightRow) {
-        lines.push(`q 0.945 0.988 0.976 rg 40 ${y - 4} 515 16 re f Q`);
+        lines.push(`q ${isBniFleksi ? "0.996 0.969 0.933" : "0.945 0.988 0.976"} rg 40 ${y - 3.5} 515 15 re f Q`);
       }
-      lines.push(`BT /${isStrong ? "F2" : "F1"} 10 Tf 0.1 0.13 0.23 rg 46 ${y} Td (${pdfEscape(k)}) Tj ET`);
-      lines.push(`BT /F2 10 Tf ${isStrong ? "0.027 0.533 0.494" : "0.1 0.13 0.23"} rg 360 ${y} Td (${pdfEscape(v)}) Tj ET`);
-      y -= 17;
+      const rowFontSize = isBniFleksi ? 9.2 : 10;
+      const valX = isBniFleksi ? 310 : 360;
+      const strongValCol = isBniFleksi ? "0.761 0.369 0.039" : "0.027 0.533 0.494";
+      lines.push(`BT /${isStrong ? "F2" : "F1"} ${rowFontSize} Tf 0.1 0.13 0.23 rg 46 ${y} Td (${pdfEscape(k)}) Tj ET`);
+      lines.push(`BT /F2 ${rowFontSize} Tf ${isStrong ? strongValCol : "0.1 0.13 0.23"} rg ${valX} ${y} Td (${pdfEscape(v)}) Tj ET`);
+      y -= isBniFleksi ? 15 : 17;
     }
   }
 
-  if (isCapital) {
+  if (isBniFleksi) {
+    const cardTop = Math.max(96, y - 6);
+    const cardW = 251;
+    const cardH = 44;
+    const cy = cardTop - cardH;
+    const bniCards = [
+      { label: "TERIMA BERSIH SETELAH TO", val: fmtPdfSmartRp(bni.terima_bersih_after_to_exact, r.net_disbursement) },
+      { label: "SISA GAJI PER BULAN", val: fmtPdfSmartRp(bni.remaining_salary_exact, r.remaining_salary) }
+    ];
+    bniCards.forEach((c, idx) => {
+      const cx = 40 + idx * (cardW + 13);
+      lines.push(`q 0.996 0.969 0.933 rg ${cx} ${cy} ${cardW} ${cardH} re f Q`);
+      lines.push(`q 0.949 0.541 0.098 RG 0.9 w ${cx} ${cy} ${cardW} ${cardH} re S Q`);
+      lines.push(`q 0.949 0.541 0.098 rg ${cx} ${cy} 4 ${cardH} re f Q`);
+      lines.push(`BT /F2 8.5 Tf 0.45 0.27 0.08 rg ${cx + 12} ${cy + 28} Td (${pdfEscape(c.label)}) Tj ET`);
+      lines.push(`BT /F2 13 Tf 0.051 0.431 0.427 rg ${cx + 12} ${cy + 10} Td (${pdfEscape(c.val)}) Tj ET`);
+    });
+    lines.push("BT /F1 8 Tf 0.45 0.48 0.55 rg 40 40 Td (Estimasi simulasi BNI Fleksi Pensiun berdasarkan snapshot hasil server.) Tj ET");
+  } else if (isCapital) {
     // HIGHLIGHT POINT (PLAFON, TENOR, SISA BERSIH, SISA GAJI)
     y -= 10;
     lines.push(`q 0.027 0.533 0.494 rg 40 ${y - 4} 515 20 re f Q`);

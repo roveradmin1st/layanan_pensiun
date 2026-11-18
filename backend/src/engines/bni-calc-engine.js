@@ -84,6 +84,28 @@ export function formatUtcDate(d) {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 
+/** Parsing opsional tanggal kalender YYYY-MM-DD ketat tanpa overflow kalender. */
+export function parseOptionalStrictCalendarDate(raw) {
+  if (raw === undefined || raw === null) {
+    return { provided: false, valid: true, value: null, date: null };
+  }
+  if (typeof raw !== "string") {
+    return { provided: true, valid: false, value: null, date: null };
+  }
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return { provided: false, valid: true, value: null, date: null };
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return { provided: true, valid: false, value: null, date: null };
+  }
+  const parsed = parseUtcDate(trimmed);
+  if (!parsed) {
+    return { provided: true, valid: false, value: null, date: null };
+  }
+  return { provided: true, valid: true, value: formatUtcDate(parsed), date: parsed };
+}
+
 // Excel EDATE(startDate, months)
 export function edateUtc(date, months) {
   const y = date.getUTCFullYear();
@@ -576,6 +598,15 @@ function buildCoreContext(body, rawCfg, defaultProcessDate) {
   });
   const blokirValid = blokirAngsParse.valid && blokirTabParse.valid && blokirPrapenParse.valid;
 
+  // Tanggal Pencairan (rencana/aktual) & TMT Pensiun opsional khusus Pra Purna (Kode 4)
+  const isPraPurna = productCode === "4";
+  const disbursementDateParse = parseOptionalStrictCalendarDate(body.bni_disbursement_date);
+  const tmtPensiunDateParse = parseOptionalStrictCalendarDate(body.bni_tmt_pensiun_date);
+  const disbursementDateValid = !isPraPurna || disbursementDateParse.valid;
+  const tmtPensiunDateValid = !isPraPurna || tmtPensiunDateParse.valid;
+  const disbursementDateStr = isPraPurna && disbursementDateParse.valid ? disbursementDateParse.value : null;
+  const tmtPensiunDateStr = isPraPurna && tmtPensiunDateParse.valid ? tmtPensiunDateParse.value : null;
+
   const ageObj = dobDate && procDate && dobDate <= procDate ? datedifYMD(dobDate, procDate) : null;
   const entryAgeYears = ageObj ? ageObj.years : null;
   const roundedAgeYears = entryAgeYears !== null ? entryAgeYears + 1 : null;
@@ -611,6 +642,10 @@ function buildCoreContext(body, rawCfg, defaultProcessDate) {
     blokirTabParse,
     blokirPrapenParse,
     blokirValid,
+    disbursementDateValid,
+    tmtPensiunDateValid,
+    disbursementDateStr,
+    tmtPensiunDateStr,
     ageObj,
     entryAgeYears,
     roundedAgeYears,
@@ -801,6 +836,12 @@ function evaluateBniMaxWithContext(body, ctx) {
   if (ctx.dobDate && ctx.procDate && ctx.dobDate > ctx.procDate) {
     errors.push("Tanggal lahir tidak boleh setelah tanggal aplikasi.");
   }
+  if (!ctx.disbursementDateValid) {
+    errors.push("Rencana Tanggal Pencairan BNI Pra Purna harus berupa tanggal kalender YYYY-MM-DD yang valid.");
+  }
+  if (!ctx.tmtPensiunDateValid) {
+    errors.push("TMT Pensiun BNI Pra Purna harus berupa tanggal kalender YYYY-MM-DD yang valid.");
+  }
   if (!ctx.dbrValid) {
     errors.push("Persentase DBR harus bernilai antara > 0% hingga 100%.");
   }
@@ -914,6 +955,8 @@ function evaluateBniMaxWithContext(body, ctx) {
     name: body.name || "",
     birth_date: ctx.dobStr,
     process_date: ctx.procStr,
+    bni_disbursement_date: ctx.disbursementDateStr,
+    bni_tmt_pensiun_date: ctx.tmtPensiunDateStr,
     age: ctx.entryAgeYears ?? 0,
     age_months: ctx.ageObj?.months ?? 0,
     age_days: ctx.ageObj?.days ?? 0,
@@ -1106,6 +1149,12 @@ export function evaluateBniPreview(body, rawCfg, defaultProcessDate) {
   if (ctx.dobDate && ctx.procDate && ctx.dobDate > ctx.procDate) {
     inputIssues.push("Tanggal lahir tidak boleh setelah tanggal aplikasi.");
   }
+  if (!ctx.disbursementDateValid) {
+    inputIssues.push("Rencana Tanggal Pencairan BNI Pra Purna harus berupa tanggal kalender YYYY-MM-DD yang valid.");
+  }
+  if (!ctx.tmtPensiunDateValid) {
+    inputIssues.push("TMT Pensiun BNI Pra Purna harus berupa tanggal kalender YYYY-MM-DD yang valid.");
+  }
   if (!ctx.salaryValid) inputIssues.push("Gaji bulanan harus bernilai numerik dan lebih dari Rp 0.");
   if (!ctx.dbrValid) inputIssues.push("Persentase DBR harus bernilai antara > 0% hingga 100%.");
   if (!ctx.takeOverValid) inputIssues.push("Nominal Take Over tidak valid atau bernilai negatif.");
@@ -1254,6 +1303,8 @@ export function evaluateBniPreview(body, rawCfg, defaultProcessDate) {
     name: body.name || "",
     birth_date: ctx.dobStr,
     process_date: ctx.procStr,
+    bni_disbursement_date: ctx.disbursementDateStr,
+    bni_tmt_pensiun_date: ctx.tmtPensiunDateStr,
     age: ctx.entryAgeYears ?? 0,
     age_months: ctx.ageObj?.months ?? 0,
     age_days: ctx.ageObj?.days ?? 0,
@@ -1284,6 +1335,8 @@ export function evaluateBniPreview(body, rawCfg, defaultProcessDate) {
       status: "AVAILABLE",
       available: true,
       excel_d28_status: excelD28Status,
+      bni_disbursement_date: ctx.disbursementDateStr,
+      bni_tmt_pensiun_date: ctx.tmtPensiunDateStr,
       product_code: ctx.productCode,
       product_name: ctx.productDef.name,
       insurance_scheme: ctx.schemeCode,

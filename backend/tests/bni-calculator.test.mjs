@@ -7,8 +7,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { DEFAULT_PARTNER_PARAMETERS } from "../src/config/default-parameters.js";
-import { calculateMax, calculatePreview } from "../src/engines/calc-engine.js";
-import { datedifYMD, edateUtc, eomonthUtc, formatUtcDate, parseUtcDate } from "../src/engines/bni-calc-engine.js";
+import { calculateMax, calculatePreview, generateSimulationPdfBuffer } from "../src/engines/calc-engine.js";
+import {
+  datedifYMD,
+  edateUtc,
+  eomonthUtc,
+  formatUtcDate,
+  parseOptionalStrictCalendarDate,
+  parseUtcDate
+} from "../src/engines/bni-calc-engine.js";
 import { disposableBackend, runFixture, startFixture } from "./helpers/disposable.mjs";
 import { LEGACY_BNI } from "./helpers/legacy-bni.mjs";
 
@@ -1004,6 +1011,224 @@ db.close();`);
     const reset = await api("/api/calc/params/reset", { token: superToken, body: {} });
     assert.equal(reset.status, 200);
     assert.deepEqual(reset.data.partners.bank_bni, approved.data.partners.bank_bni);
+  } finally {
+    if (running) await running.stop();
+    fixture.cleanup();
+  }
+});
+
+test("BNI Fleksi: Kasus penerimaan CEO (blokir 7x, tanggal pencairan & TMT Pensiun Pra Purna), pergeseran TMT, count 10 vs 7, validasi tanggal, dan PDF snapshot beraksen oranye", { timeout: 60000 }, async () => {
+  const params = structuredClone(DEFAULT_PARTNER_PARAMETERS);
+  const ceoInput = {
+    bank_key: "bank_bni",
+    name: "DEBITUR SINTETIS UJI CEO",
+    birth_date: "1969-01-15",
+    process_date: "2026-11-19",
+    bni_disbursement_date: "2026-12-02",
+    bni_tmt_pensiun_date: "2027-07-01",
+    bni_product_code: "4",
+    bni_insurance_scheme: "MENURUN",
+    salary: 3759100,
+    bni_dbr_pct: 90,
+    plafond: 100000000,
+    tenor: 50,
+    take_over: 0,
+    blokir_angsuran_count: 3,
+    blokir_tabungan_count: 1,
+    blokir_prapensiun_count: 7
+  };
+
+  // 1. Verifikasi unit _exact & pembulatan untuk kasus uji CEO
+  const maxForTenor = calculateMax({ ...ceoInput, plafond: undefined }, params);
+  assert.equal(maxForTenor.status, "AVAILABLE");
+  assert.equal(maxForTenor.eval_tenor, 50);
+  assert.equal(maxForTenor.max_plafond, 136534588);
+  assert.equal(maxForTenor.bni_disbursement_date, "2026-12-02");
+  assert.equal(maxForTenor.bni_tmt_pensiun_date, "2027-07-01");
+
+  const maxInitial = calculateMax({ ...ceoInput, plafond: undefined, tenor: undefined }, params);
+  assert.equal(maxInitial.status, "AVAILABLE");
+  assert.equal(maxInitial.eval_tenor, maxInitial.max_tenor);
+  assert.ok(maxInitial.max_tenor >= 50);
+
+  const ceoRes = calculatePreview(ceoInput, params);
+  assert.equal(ceoRes.status, "AVAILABLE");
+  assert.equal(ceoRes.overall_ok, true);
+  assert.equal(ceoRes.bank_rate, 10.5);
+  assert.equal(Number(ceoRes.bni_details.monthly_installment_exact.toFixed(2)), 2477899.58);
+  assert.equal(ceoRes.bni_details.max_plafond, 136534588);
+  assert.equal(ceoRes.bni_details.gross_ajk_premium_exact, 5464000);
+  assert.equal(ceoRes.bni_details.customer_ajk_premium_exact, 0);
+  assert.equal(Number(ceoRes.bni_details.blokir_prapensiun_exact.toFixed(2)), 17345297.09);
+  assert.equal(ceoRes.bni_details.total_blokir_count, 11);
+  assert.equal(Number(ceoRes.bni_details.total_blokir_exact.toFixed(2)), 27256895.43);
+  assert.equal(Number(ceoRes.bni_details.terima_bersih_after_to_exact.toFixed(2)), 68093104.57);
+  assert.equal(ceoRes.net_disbursement, 68093105);
+  assert.equal(ceoRes.bni_details.bni_disbursement_date, "2026-12-02");
+  assert.equal(ceoRes.bni_details.bni_tmt_pensiun_date, "2027-07-01");
+
+  // 2. Pergeseran TMT dengan count sama: angka tetap identik, hanya tanggal berubah
+  const shiftedTmtRes = calculatePreview(
+    { ...ceoInput, bni_disbursement_date: "2026-12-10", bni_tmt_pensiun_date: "2028-02-01" },
+    params
+  );
+  assert.equal(shiftedTmtRes.bni_details.monthly_installment_exact, ceoRes.bni_details.monthly_installment_exact);
+  assert.equal(shiftedTmtRes.bni_details.blokir_prapensiun_exact, ceoRes.bni_details.blokir_prapensiun_exact);
+  assert.equal(shiftedTmtRes.bni_details.terima_bersih_after_to_exact, ceoRes.bni_details.terima_bersih_after_to_exact);
+  assert.equal(shiftedTmtRes.bni_details.bni_disbursement_date, "2026-12-10");
+  assert.equal(shiftedTmtRes.bni_details.bni_tmt_pensiun_date, "2028-02-01");
+
+  // 3. Perbandingan blokir_prapensiun_count 10 vs 7 dengan input lain sama
+  const count10Res = calculatePreview({ ...ceoInput, blokir_prapensiun_count: 10 }, params);
+  const diff3x = ceoRes.bni_details.terima_bersih_after_to_exact - count10Res.bni_details.terima_bersih_after_to_exact;
+  assert.ok(Math.abs(diff3x - 3 * ceoRes.bni_details.monthly_installment_exact) < 1e-6);
+  assert.equal(count10Res.bank_rate, ceoRes.bank_rate);
+  assert.equal(count10Res.plafond, ceoRes.plafond);
+  assert.equal(count10Res.tenor, ceoRes.tenor);
+  assert.equal(count10Res.bni_details.monthly_installment_exact, ceoRes.bni_details.monthly_installment_exact);
+  assert.equal(count10Res.bni_details.gross_ajk_premium_exact, ceoRes.bni_details.gross_ajk_premium_exact);
+  assert.equal(count10Res.bni_details.customer_ajk_premium_exact, ceoRes.bni_details.customer_ajk_premium_exact);
+
+  // Blokir terlalu besar membuat terima bersih <= 0 -> overall_ok = false
+  const tooManyBlokir = calculatePreview({ ...ceoInput, blokir_prapensiun_count: 40 }, params);
+  assert.equal(tooManyBlokir.overall_ok, false);
+  assert.equal(tooManyBlokir.validations.find((v) => v.key === "net").ok, false);
+
+  // 4. Validasi dua tanggal baru khusus Kode 4 & parser tanggal ketat
+  assert.equal(parseOptionalStrictCalendarDate("2026-02-30").valid, false);
+  assert.equal(parseOptionalStrictCalendarDate("2026-12-02extra").valid, false);
+  assert.equal(parseOptionalStrictCalendarDate(" 2026-12-02 ").value, "2026-12-02");
+  for (const badField of [
+    { bni_disbursement_date: "2026-02-30" },
+    { bni_tmt_pensiun_date: "2025-02-29" },
+    { bni_disbursement_date: "2026-12-02foo" },
+    { bni_tmt_pensiun_date: { year: 2027 } }
+  ]) {
+    const invMax = calculateMax({ ...ceoInput, plafond: undefined, ...badField }, params);
+    const invPrev = calculatePreview({ ...ceoInput, ...badField }, params);
+    assert.equal(invMax.status, "INVALID");
+    assert.equal(invMax.processable, false);
+    assert.equal(invPrev.status, "INVALID");
+    assert.equal(invPrev.error_code, "BNI_INVALID_INPUT");
+  }
+
+  // Kode 1 tidak menggunakan dua tanggal Pra Purna
+  const regulerRes = calculatePreview({
+    ...ceoInput,
+    bni_product_code: "1",
+    bni_disbursement_date: "2026-12-02",
+    bni_tmt_pensiun_date: "2027-07-01",
+    blokir_prapensiun_count: 0
+  }, params);
+  assert.equal(regulerRes.bni_details.bni_disbursement_date, null);
+  assert.equal(regulerRes.bni_details.bni_tmt_pensiun_date, null);
+
+  // 5. PDF BNI: aksen oranye, snapshot sim.result, tanggal, blokir terpisah, AJK, terima bersih & kompatibilitas simulasi lama
+  const bniPdf = generateSimulationPdfBuffer({
+    sim_no: "SIM-CEO-0001",
+    created_by_name: "Petugas Sintetis",
+    input: { ...ceoInput, plafond: 999999999, bni_tmt_pensiun_date: "2099-01-01" },
+    result: ceoRes
+  }).toString("utf8");
+  assert.ok(bniPdf.startsWith("%PDF-1.4"));
+  assert.ok(bniPdf.includes("0.949 0.541 0.098"), "PDF BNI harus memakai aksen oranye BNI");
+  assert.match(bniPdf, /02 Desember 2026/);
+  assert.match(bniPdf, /01 Juli 2027/);
+  assert.ok(!bniPdf.includes("01 Januari 2099"), "PDF harus membaca snapshot sim.result, bukan sim.input");
+  assert.match(bniPdf, /Kredit BFP Skema Menurun/);
+  assert.match(bniPdf, /Blokir Angsuran \\\(3x\\\)/);
+  assert.match(bniPdf, /Blokir Tabungan Wajib \\\(1x\\\)/);
+  assert.match(bniPdf, /Blokir Prapensiun \\\(7x\\\)/);
+  assert.match(bniPdf, /Rp 17\.345\.297,09/);
+  assert.match(bniPdf, /Rp 27\.256\.895,43/);
+  assert.match(bniPdf, /Rp 68\.093\.104,57/);
+
+  // Simulasi lama tanpa field bni_disbursement_date & bni_tmt_pensiun_date tetap valid
+  const legacyResult = structuredClone(ceoRes);
+  delete legacyResult.bni_details.bni_disbursement_date;
+  delete legacyResult.bni_details.bni_tmt_pensiun_date;
+  const legacyPdf = generateSimulationPdfBuffer({
+    sim_no: "SIM-LEGACY-0001",
+    created_by_name: "Petugas Sintetis",
+    result: legacyResult
+  }).toString("utf8");
+  assert.ok(legacyPdf.startsWith("%PDF-1.4"));
+  assert.match(legacyPdf, /Belum diisi \\\(rencana\\\)/);
+
+  // Desain PDF bank lain (Capital) tetap dipertahankan tanpa aksen oranye BNI
+  const capRes = calculatePreview({
+    bank_key: "bank_capital",
+    name: "SYNTHETIC CAPITAL",
+    birth_date: "1968-05-10",
+    process_date: "2026-11-19",
+    capital_product: "pensiun",
+    salary: 6000000,
+    plafond: 100000000,
+    tenor: 60
+  }, params);
+  const capPdf = generateSimulationPdfBuffer({
+    sim_no: "SIM-CAP-0001",
+    created_by_name: "Petugas Sintetis",
+    result: capRes
+  }).toString("utf8");
+  assert.ok(capPdf.startsWith("%PDF-1.4"));
+  assert.equal(capPdf.includes("0.949 0.541 0.098"), false);
+
+  // 6. Integrasi HTTP: normalisasi tanggal saat simpan, penolakan tanggal mustahil, dan unduh PDF BNI
+  const fixture = disposableBackend();
+  let running;
+  try {
+    const prep = runFixture(fixture, `import { getStore, saveStore, db } from './src/db/database.js';
+import { hashPassword } from './src/security/passwords.js';
+const state = getStore();
+const hash = await hashPassword(${JSON.stringify(PASSWORD)});
+for (const u of state.users) { u.password_hash = hash; u.must_change_password = false; }
+saveStore();
+db.close();`, "development");
+    assert.equal(prep.status, 0, prep.stderr);
+    running = await startFixture(fixture, "production");
+
+    const loginRes = await fetch(`${running.base}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "marketing@layananpensiunan.id", password: PASSWORD })
+    });
+    assert.equal(loginRes.status, 200);
+    const { access_token: token } = await loginRes.json();
+
+    const saveBadDate = await fetch(`${running.base}/api/simulations`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ ...ceoInput, bni_tmt_pensiun_date: "2027-02-30" })
+    });
+    assert.equal(saveBadDate.status, 400);
+    assert.equal((await saveBadDate.json()).error_code, "BNI_INVALID_INPUT");
+
+    const saveNormalized = await fetch(`${running.base}/api/simulations`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...ceoInput,
+        bni_disbursement_date: " 2026-12-02 ",
+        bni_tmt_pensiun_date: " 2027-07-01 "
+      })
+    });
+    assert.equal(saveNormalized.status, 200);
+    const savedSim = await saveNormalized.json();
+    assert.equal(savedSim.input.bni_disbursement_date, "2026-12-02");
+    assert.equal(savedSim.input.bni_tmt_pensiun_date, "2027-07-01");
+    assert.equal(savedSim.result.bni_details.bni_disbursement_date, "2026-12-02");
+    assert.equal(savedSim.result.bni_details.bni_tmt_pensiun_date, "2027-07-01");
+    assert.equal(savedSim.result.bni_details.total_blokir_count, 11);
+
+    const dlPdf = await fetch(`${running.base}/api/simulations/${savedSim.id}/pdf`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    assert.equal(dlPdf.status, 200);
+    const dlPdfText = await dlPdf.text();
+    assert.match(dlPdfText, /02 Desember 2026/);
+    assert.match(dlPdfText, /01 Juli 2027/);
+    assert.match(dlPdfText, /Rp 68\.093\.104,57/);
   } finally {
     if (running) await running.stop();
     fixture.cleanup();
