@@ -35,18 +35,18 @@ export default function ForgotPassword() {
       {sent ? (
         <div className="mt-6 flex gap-3 rounded-xl border border-[#078D67]/20 bg-[#078D67]/5 p-4 text-sm text-[#17223B]" data-testid="forgot-success">
           <CheckCircle2 className="h-5 w-5 shrink-0 text-[#078D67]" />
-          Jika email terdaftar, tautan reset telah dikirim. Tautan berlaku selama 1 jam.
+          Hubungi administrator untuk pengaturan ulang kata sandi. Siapkan email akun Anda untuk verifikasi identitas.
         </div>
       ) : (
         <form onSubmit={submit} className="mt-6 space-y-5">
-          <p className="text-sm text-slate-500">Masukkan email akun Anda. Kami akan mengirimkan tautan untuk mengatur ulang kata sandi.</p>
+          <p className="text-sm text-slate-500">Pemulihan akun dibantu administrator. Masukkan email untuk melihat petunjuk pengaturan ulang.</p>
           {error && <p className="text-sm text-red-600" data-testid="forgot-error">{error}</p>}
           <div className="space-y-2">
             <Label htmlFor="fp-email">Email</Label>
             <Input id="fp-email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="h-11" data-testid="forgot-email-input" />
           </div>
           <CtaButton type="submit" disabled={busy} className="h-11 w-full font-semibold" data-testid="forgot-submit-button">
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Kirim Tautan Reset"}
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Lihat Petunjuk Pemulihan"}
           </CtaButton>
         </form>
       )}

@@ -99,6 +99,77 @@ export const Loading = () => (
   </div>
 );
 
+export const DashboardSkeleton = () => (
+  <div className="space-y-6 lp-fade" aria-label="Memuat ringkasan operasional">
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+      <div className="space-y-2">
+        <div className="h-3 w-28 lp-skeleton" />
+        <div className="h-7 w-56 lp-skeleton" />
+        <div className="h-4 w-80 max-w-full lp-skeleton" />
+      </div>
+      <div className="flex gap-2">
+        <div className="h-10 w-32 rounded-lg lp-skeleton" />
+        <div className="h-10 w-36 rounded-lg lp-skeleton" />
+      </div>
+    </div>
+    <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 xl:grid-cols-5">
+      {[1, 2, 3, 4, 5].map((i) => (
+        <div key={i} className="lp-card p-4 sm:p-5 space-y-2.5">
+          <div className="h-3.5 w-24 lp-skeleton" />
+          <div className="h-7 w-20 lp-skeleton" />
+        </div>
+      ))}
+    </div>
+    <div className="grid gap-6 xl:grid-cols-3">
+      <div className="lp-card p-5 xl:col-span-2 space-y-4">
+        <div className="h-4 w-44 lp-skeleton" />
+        <div className="h-[240px] w-full rounded-xl lp-skeleton" />
+      </div>
+      <div className="lp-card p-5 space-y-4">
+        <div className="h-4 w-36 lp-skeleton" />
+        <div className="h-[150px] w-full rounded-xl lp-skeleton" />
+        <div className="space-y-2.5 pt-2">
+          {[1, 2, 3].map((k) => (
+            <div key={k} className="h-10 w-full lp-skeleton" />
+          ))}
+        </div>
+      </div>
+    </div>
+  </div>
+);
+
+export const TableSkeleton = ({ cols = 7, rows = 6 }) => (
+  <>
+    {Array.from({ length: rows }).map((_, rIdx) => (
+      <tr key={rIdx} className="border-b border-slate-100">
+        {Array.from({ length: cols }).map((__, cIdx) => (
+          <td key={cIdx} className="px-4 py-3.5">
+            <div className={`h-4 lp-skeleton ${cIdx === 0 ? "w-28" : cIdx === 1 ? "w-36" : "w-20"}`} />
+          </td>
+        ))}
+      </tr>
+    ))}
+  </>
+);
+
+export const CardListSkeleton = ({ rows = 5 }) => (
+  <div className="divide-y divide-slate-100">
+    {Array.from({ length: rows }).map((_, idx) => (
+      <div key={idx} className="p-4 space-y-2.5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="h-4 w-36 lp-skeleton" />
+          <div className="h-5 w-20 rounded-full lp-skeleton" />
+        </div>
+        <div className="h-3 w-48 lp-skeleton" />
+        <div className="grid grid-cols-2 gap-3 pt-1">
+          <div className="h-8 rounded-md lp-skeleton" />
+          <div className="h-8 rounded-md lp-skeleton" />
+        </div>
+      </div>
+    ))}
+  </div>
+);
+
 export const CtaButton = ({ className = "", ...p }) => (
   <Button className={`bg-[#F28A19] text-white transition-colors hover:bg-[#DC7A0F] ${className}`} {...p} />
 );
