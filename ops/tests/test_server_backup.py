@@ -146,9 +146,9 @@ class BackupTests(unittest.TestCase):
                 expected_daily_pruned.add(p_name)
 
             # Snapshots older than 14 WIB days (day 20 ago) -> pruned unless protected
-            old_pruned_name, _ = make_snapshot(now - timedelta(days=20), 'old00001')
-            receipt_protected_name, receipt_protected_dir = make_snapshot(now - timedelta(days=25), 'rec00001')
-            latest_protected_name, latest_protected_dir = make_snapshot(now - timedelta(days=30), 'lat00001')
+            old_pruned_name, _ = make_snapshot(now - timedelta(days=20), 'dead0001')
+            receipt_protected_name, receipt_protected_dir = make_snapshot(now - timedelta(days=25), 'fade0001')
+            latest_protected_name, latest_protected_dir = make_snapshot(now - timedelta(days=30), 'beef0001')
 
             (backups/'latest-verified.json').write_text(json.dumps({
                 'backup': str(latest_protected_dir/'database.sqlite'),
