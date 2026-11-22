@@ -88,7 +88,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 12 
 
 app.use(cors({ origin: IS_PROD ? false : true, credentials: true, exposedHeaders: ["X-Document-Version", "X-Document-SHA256", "Content-Disposition"] }));
 app.use("/api/auth", express.json({ limit: "8kb" }));
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "128kb" }));
 app.use(cookieParser());
 
 // Security Headers (Enterprise Financial Standard)
@@ -113,7 +113,7 @@ function sanitizeUser(u) {
     phone: u.phone || "",
     active: u.active !== false,
     must_change_password: u.must_change_password === true,
-    capabilities: { web_restore: !IS_PROD },
+    capabilities: { web_restore: !IS_PROD, web_backup: !IS_PROD },
     manager_id: u.manager_id || null,
     manager_name: u.manager_name || null
   };
@@ -443,6 +443,19 @@ function validateNonNegativeFields(body, fieldNames) {
       if (!Number.isFinite(val) || val < 0) {
         return `Nilai parameter '${key}' tidak valid atau bernilai negatif.`;
       }
+    }
+  }
+  return null;
+}
+
+const MAX_TEXT_NOTE_LENGTH = 2000;
+
+function validateTextLengthLimit(obj, fieldNames = ["note", "notes", "reason", "admin_notes"], maxLen = MAX_TEXT_NOTE_LENGTH) {
+  if (!obj || typeof obj !== "object") return null;
+  for (const key of fieldNames) {
+    const val = obj[key];
+    if (val !== undefined && val !== null && String(val).length > maxLen) {
+      return `Panjang teks '${key}' maksimal ${maxLen.toLocaleString("id-ID")} karakter.`;
     }
   }
   return null;
@@ -1092,7 +1105,7 @@ app.get("/api/calc/limits", requireAuth, (req, res) => {
           maxEntryAgeYears: partner.maxEntryAgeYears,
           maxInstallmentRatio: partner.maxInstallmentRatio,
           plafondRoundingStep: partner.plafondRoundingStep,
-          tiers: (partner.tiers || []).map((t) => ({
+          tiers: (Array.isArray(partner.tiers) ? partner.tiers : []).map((t) => ({
             id: t.id,
             name: t.name,
             minAge: t.minAge,
@@ -1107,9 +1120,187 @@ app.get("/api/calc/limits", requireAuth, (req, res) => {
   res.json({ limits });
 });
 
+const ALLOWED_PARTNER_KEYS = new Set([
+  "ams2",
+  "bsi_prapen",
+  "bank_capital",
+  "bank_mestika",
+  "bank_mantap",
+  "bank_mnc",
+  "bank_bni"
+]);
+const FORBIDDEN_PARAM_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const IMMUTABLE_PARTNER_KEYS = new Set(["id", "code", "type", "engine"]);
+const PERCENT_RATE_KEYS = new Set([
+  "bankRateAnnual",
+  "maxInstallmentRatio",
+  "proaqRate",
+  "tataLaksanaMin",
+  "tataLaksanaMax",
+  "tataLaksanaDefault",
+  "interestRateAnnual",
+  "interestRatePlusAnnual",
+  "costRatePraPercent",
+  "costRatePensiunPercent",
+  "provisionRatePercent",
+  "insuranceRatePercent",
+  "tataLaksanaRatePercent",
+  "pensionDeductionPercent",
+  "disbursementCostPercent"
+]);
+
+function hasForbiddenKeys(obj) {
+  if (!obj || typeof obj !== "object") return false;
+  for (const key of Object.getOwnPropertyNames(obj)) {
+    if (FORBIDDEN_PARAM_KEYS.has(key)) return true;
+  }
+  return false;
+}
+
+function validateAndApplyPartnerUpdate(partnerKey, target, rawUpdates, { apply = false } = {}) {
+  if (!ALLOWED_PARTNER_KEYS.has(partnerKey) || !target || typeof target !== "object") {
+    return { ok: false, status: 404, detail: `Mitra bank '${partnerKey}' tidak ditemukan.` };
+  }
+  if (!rawUpdates || typeof rawUpdates !== "object" || Array.isArray(rawUpdates)) {
+    return { ok: false, status: 400, detail: "Payload perubahan parameter tidak valid." };
+  }
+  if (hasForbiddenKeys(rawUpdates)) {
+    return { ok: false, status: 400, detail: "Properti parameter berbahaya tidak diizinkan." };
+  }
+
+  const schemaRef = DEFAULT_PARTNER_PARAMETERS[partnerKey];
+  if (!schemaRef || typeof schemaRef !== "object") {
+    return { ok: false, status: 404, detail: `Skema mitra bank '${partnerKey}' tidak ditemukan.` };
+  }
+
+  const sanitized = {};
+  for (const key of Object.keys(rawUpdates)) {
+    if (FORBIDDEN_PARAM_KEYS.has(key)) {
+      return { ok: false, status: 400, detail: "Properti parameter berbahaya tidak diizinkan." };
+    }
+    if (!Object.hasOwn(schemaRef, key)) {
+      return { ok: false, status: 400, detail: `Properti parameter '${key}' tidak dikenali pada skema mitra '${partnerKey}'.` };
+    }
+
+    const val = rawUpdates[key];
+    if (IMMUTABLE_PARTNER_KEYS.has(key)) {
+      if (val !== target[key]) {
+        return { ok: false, status: 400, detail: `Properti identitas '${key}' tidak dapat diubah.` };
+      }
+      continue;
+    }
+
+    if (key === "tiers") {
+      if (!Array.isArray(val) || val.length < 1 || val.length > 20) {
+        return { ok: false, status: 400, detail: "Parameter tiers harus berupa array berisi 1 hingga 20 kategori usia yang valid." };
+      }
+      const nextTiers = [];
+      for (const item of val) {
+        if (!item || typeof item !== "object" || Array.isArray(item) || hasForbiddenKeys(item)) {
+          return { ok: false, status: 400, detail: "Setiap item pada tiers harus berupa objek kategori usia yang valid." };
+        }
+        const tierAllowedKeys = new Set(["id", "name", "minAge", "maxAge", "coopRateAnnual", "riskReserveRate"]);
+        for (const tk of Object.keys(item)) {
+          if (!tierAllowedKeys.has(tk)) {
+            return { ok: false, status: 400, detail: `Properti tier '${tk}' tidak diizinkan.` };
+          }
+        }
+        if (typeof item.id !== "string" || !item.id.trim() || item.id.trim().length > 64) {
+          return { ok: false, status: 400, detail: "Setiap tier wajib memiliki id teks yang valid (maks 64 karakter)." };
+        }
+        if (typeof item.name !== "string" || !item.name.trim() || item.name.trim().length > 120) {
+          return { ok: false, status: 400, detail: "Setiap tier wajib memiliki nama teks yang valid (maks 120 karakter)." };
+        }
+        for (const numField of ["minAge", "maxAge", "coopRateAnnual", "riskReserveRate"]) {
+          const n = item[numField];
+          if (typeof n !== "number" || !Number.isFinite(n) || n < 0) {
+            return { ok: false, status: 400, detail: `Nilai tier '${numField}' harus berupa angka non-negatif yang valid.` };
+          }
+        }
+        if (item.minAge > item.maxAge || item.maxAge > 100) {
+          return { ok: false, status: 400, detail: "Rentang usia tier tidak valid (minAge <= maxAge <= 100)." };
+        }
+        if (item.coopRateAnnual > 100 || item.riskReserveRate > 100) {
+          return { ok: false, status: 400, detail: "Persentase bunga/cadangan risiko tier harus berada antara 0% hingga 100%." };
+        }
+        nextTiers.push({
+          id: item.id.trim(),
+          name: item.name.trim(),
+          minAge: item.minAge,
+          maxAge: item.maxAge,
+          coopRateAnnual: item.coopRateAnnual,
+          riskReserveRate: item.riskReserveRate
+        });
+      }
+      sanitized.tiers = nextTiers;
+      continue;
+    }
+
+    const expectedType = typeof schemaRef[key];
+    if (expectedType === "boolean") {
+      if (typeof val !== "boolean") {
+        return { ok: false, status: 400, detail: `Parameter '${key}' harus berupa boolean.` };
+      }
+      sanitized[key] = val;
+    } else if (expectedType === "string") {
+      if (typeof val !== "string" || !val.trim() || val.length > 500) {
+        return { ok: false, status: 400, detail: `Parameter '${key}' harus berupa teks valid (1–500 karakter).` };
+      }
+      if (key === "interestMethod" && val !== "annuity" && val !== "flat") {
+        return { ok: false, status: 400, detail: "Parameter 'interestMethod' harus bernilai 'annuity' atau 'flat'." };
+      }
+      sanitized[key] = val.trim();
+    } else if (expectedType === "number") {
+      if (typeof val !== "number" || !Number.isFinite(val) || val < 0) {
+        return { ok: false, status: 400, detail: `Parameter '${key}' harus berupa angka non-negatif yang valid.` };
+      }
+      if (PERCENT_RATE_KEYS.has(key) && val > 100) {
+        return { ok: false, status: 400, detail: `Parameter persentase '${key}' tidak boleh melebihi 100%.` };
+      }
+      if (key === "maxTenorMonths" && (val < 1 || val > 360)) {
+        return { ok: false, status: 400, detail: "Parameter 'maxTenorMonths' harus berada antara 1 hingga 360 bulan." };
+      }
+      if ((key === "maxEntryAgeYears" || key === "maxEndAgeYears" || key === "regulerMaxAgeYears") && (val < 18 || val > 100)) {
+        return { ok: false, status: 400, detail: `Parameter usia '${key}' harus berada antara 18 hingga 100 tahun.` };
+      }
+      if (key === "maxEndAgeMonths" && (val < 0 || val > 11)) {
+        return { ok: false, status: 400, detail: "Parameter 'maxEndAgeMonths' harus berada antara 0 hingga 11 bulan." };
+      }
+      if (key === "maxPlafondAbsolute" && (val <= 0 || val > 10000000000)) {
+        return { ok: false, status: 400, detail: "Parameter 'maxPlafondAbsolute' harus bernilai positif (maks Rp10 Miliar)." };
+      }
+      if (key === "retentionMultiplier" && val > 120) {
+        return { ok: false, status: 400, detail: "Parameter 'retentionMultiplier' maksimal 120x." };
+      }
+      if (key === "maxGpMonths" && val > 120) {
+        return { ok: false, status: 400, detail: "Parameter 'maxGpMonths' maksimal 120 bulan." };
+      }
+      sanitized[key] = val;
+    }
+  }
+
+  if (partnerKey === "ams2") {
+    const effMin = sanitized.tataLaksanaMin ?? target.tataLaksanaMin;
+    const effMax = sanitized.tataLaksanaMax ?? target.tataLaksanaMax;
+    if (effMin > effMax) {
+      return { ok: false, status: 400, detail: "Parameter 'tataLaksanaMin' tidak boleh melebihi 'tataLaksanaMax'." };
+    }
+  }
+
+  if (Object.keys(sanitized).length === 0) {
+    return { ok: false, status: 400, detail: "Tidak ada perubahan parameter yang valid untuk disimpan." };
+  }
+
+  if (apply) {
+    Object.assign(target, sanitized);
+  }
+  return { ok: true, sanitizedUpdates: sanitized };
+}
+
 app.get("/api/calc/params", requireAuth, requireRoles("super_admin", "admin_ops"), (req, res) => {
   const store = getStore();
   const ams2 = store.partner_parameters.ams2;
+  const tiers = Array.isArray(ams2.tiers) ? ams2.tiers : DEFAULT_PARTNER_PARAMETERS.ams2.tiers;
   res.json({
     formula_version: store.partner_parameters.version || "2.5.0-ENTERPRISE",
     last_updated: store.partner_parameters.lastUpdated,
@@ -1123,9 +1314,9 @@ app.get("/api/calc/params", requireAuth, requireRoles("super_admin", "admin_ops"
     admin_fee: ams2.adminFee,
     tata_laksana_max_pct: ams2.tataLaksanaMax,
     retention_multiplier: ams2.retentionMultiplier,
-    categories: ams2.tiers.map((t) => ({
+    categories: tiers.map((t) => ({
       id: t.id,
-      name: t.name.toUpperCase(),
+      name: String(t.name || "").toUpperCase(),
       min_age: t.minAge,
       max_age: t.maxAge,
       coop_rate_annual: t.coopRateAnnual,
@@ -1168,6 +1359,8 @@ app.put("/api/calc/params/bsi_prapen/products/:productCode", requireAuth, requir
     return res.status(403).json({ detail: "Anda tidak memiliki kewenangan pada mitra bank BSI." });
   }
   const body = req.body || {};
+  const textErr = validateTextLengthLimit(body, ["reason"]);
+  if (textErr) return res.status(400).json({ detail: textErr });
   const updates = body.updates && typeof body.updates === "object" && !Array.isArray(body.updates)
     ? body.updates
     : body;
@@ -1251,14 +1444,19 @@ app.post("/api/calc/params/bsi_prapen/products/:productCode/reset", requireAuth,
 app.put("/api/calc/params/:partnerKey", requireAuth, requireRoles("super_admin", "admin_ops"), (req, res) => {
   const { partnerKey } = req.params;
   const { updates, reason, product_key, productCode, expectedPolicyVersion } = req.body || {};
+  if (!ALLOWED_PARTNER_KEYS.has(partnerKey)) {
+    return res.status(404).json({ detail: `Mitra bank '${partnerKey}' tidak ditemukan.` });
+  }
   if (!updates || typeof updates !== "object" || Array.isArray(updates)) {
     return res.status(400).json({ detail: "Payload perubahan parameter tidak valid." });
   }
+  const textErr = validateTextLengthLimit({ reason }, ["reason"]);
+  if (textErr) return res.status(400).json({ detail: textErr });
   if (!canAccessBank(req.user, partnerKey)) {
     return res.status(403).json({ detail: "Anda tidak memiliki kewenangan pada mitra bank ini." });
   }
   const store = getStore();
-  const target = store.partner_parameters[partnerKey];
+  const target = Object.hasOwn(store.partner_parameters, partnerKey) ? store.partner_parameters[partnerKey] : null;
   if (!target) {
     return res.status(404).json({ detail: `Mitra bank '${partnerKey}' tidak ditemukan.` });
   }
@@ -1284,6 +1482,11 @@ app.put("/api/calc/params/:partnerKey", requireAuth, requireRoles("super_admin",
     );
   }
 
+  const validation = validateAndApplyPartnerUpdate(partnerKey, target, updates, { apply: false });
+  if (!validation.ok) {
+    return res.status(validation.status || 400).json({ detail: validation.detail });
+  }
+
   // Dual Control: Admin Operasional creates proposal; Super Admin applies directly
   if (req.user.role === "admin_ops") {
     const prop = withTransaction(() => {
@@ -1296,7 +1499,7 @@ app.put("/api/calc/params/:partnerKey", requireAuth, requireRoles("super_admin",
         created_at: new Date().toISOString(),
         status: "PENDING",
         reason: reason || "Usulan penyesuaian parameter mitra bank",
-        changes: updates
+        changes: validation.sanitizedUpdates
       };
       store.parameter_proposals.unshift(createdProp);
       addAuditLog(req.user, "propose_param_change", partnerKey, `Mengusulkan perubahan parameter ${target.name}`, req.ip);
@@ -1311,7 +1514,7 @@ app.put("/api/calc/params/:partnerKey", requireAuth, requireRoles("super_admin",
 
   // Super Admin direct update (Non-BSI)
   withTransaction(() => {
-    Object.assign(target, updates);
+    validateAndApplyPartnerUpdate(partnerKey, target, validation.sanitizedUpdates, { apply: true });
     store.partner_parameters.lastUpdated = new Date().toISOString();
     store.partner_parameters.updatedBy = `${req.user.name} (Super Admin)`;
     addAuditLog(req.user, "update_partner_params", partnerKey, `Memperbarui parameter mitra ${target.name}`, req.ip);
@@ -1399,13 +1602,26 @@ app.post("/api/calc/params/proposals/:id/decide", requireAuth, requireRoles("sup
     });
   }
 
+  let approvedNonBsiUpdates = null;
+  if (decision === "APPROVE" && prop.partner_key !== "bsi_prapen") {
+    const partnerTarget =
+      ALLOWED_PARTNER_KEYS.has(prop.partner_key) && Object.hasOwn(store.partner_parameters, prop.partner_key)
+        ? store.partner_parameters[prop.partner_key]
+        : null;
+    const validation = validateAndApplyPartnerUpdate(prop.partner_key, partnerTarget, prop.changes, { apply: false });
+    if (!validation.ok) {
+      return res.status(validation.status || 400).json({ detail: validation.detail });
+    }
+    approvedNonBsiUpdates = validation.sanitizedUpdates;
+  }
+
   withTransaction(() => {
     prop.status = decision === "APPROVE" ? "APPROVED" : "REJECTED";
     prop.decided_by = req.user.name;
     prop.decided_at = new Date().toISOString();
 
-    if (decision === "APPROVE" && store.partner_parameters[prop.partner_key] && prop.partner_key !== "bsi_prapen") {
-      Object.assign(store.partner_parameters[prop.partner_key], prop.changes);
+    if (decision === "APPROVE" && approvedNonBsiUpdates && Object.hasOwn(store.partner_parameters, prop.partner_key) && prop.partner_key !== "bsi_prapen") {
+      validateAndApplyPartnerUpdate(prop.partner_key, store.partner_parameters[prop.partner_key], approvedNonBsiUpdates, { apply: true });
       store.partner_parameters.lastUpdated = new Date().toISOString();
       store.partner_parameters.updatedBy = `${req.user.name} (Super Admin)`;
     }
@@ -1505,6 +1721,112 @@ app.get("/api/simulations", requireAuth, (req, res) => {
   res.json({ items, total, page, page_size: pageSize });
 });
 
+const SIMULATION_INPUT_WHITELIST = [
+  "bank_key",
+  "lead_id",
+  "dapem",
+  "name",
+  "birth_date",
+  "process_date",
+  "salary",
+  "pension_salary",
+  "take_over",
+  "tata_laksana_pct",
+  "plafond",
+  "tenor",
+  "requested_plafond",
+  "requested_tenor",
+  "takeover_type",
+  "pic",
+  "sales_manager",
+  "sales_manager_hp",
+  "marketing",
+  "marketing_hp",
+  "nopen",
+  "nip",
+  "flagging",
+  "pelunasan",
+  "existing_installment",
+  "settlement_amount",
+  "ongoing_installments",
+  "base_rate_pct",
+  "first_installment_date",
+  "insurance_start_date",
+  "retirement_date",
+  "bup_age",
+  "bup_year",
+  "tmt_pensiun_date",
+  "tmt_pensiun_year",
+  "tmt_bekerja",
+  "pensiun",
+  "ratio_basis",
+  "ratio_pct",
+  "retired_type",
+  "spouse_status",
+  "blokir_count",
+  "blokir_1_override",
+  "blokir_2_override",
+  "blokir_3_override",
+  "bsi_sub_product",
+  "bsi_product_code",
+  "product_code",
+  "sub_product",
+  "bsi_akad",
+  "bsi_skema",
+  "bsi_status_gaji",
+  "bsi_dbr_chosen",
+  "gaji_pokok",
+  "uang_makan",
+  "tunjangan_rutin_1",
+  "tunjangan_rutin_3",
+  "tunjangan_lain_1",
+  "tht",
+  "bsi_tmt_bekerja",
+  "bsi_tmt_pensiun_date",
+  "bsi_price_aktif",
+  "bsi_price_pensiun",
+  "bsi_proyeksi_cair",
+  "bsi_start_angsuran",
+  "bsi_insurance_buffer_months",
+  "bsi_insurance_months",
+  "bsi_manual_insurance",
+  "bsi_discount_pct",
+  "bsi_extra_em_pct",
+  "buka_blokir_lama",
+  "pelunasan_lama",
+  "angsuran_bsi",
+  "angsuran_selain_bsi",
+  "bsi_retired_type",
+  "bsi_spouse_status",
+  "bsi_flagging",
+  "bsi_ratio_basis",
+  "bsi_ratio_pct",
+  "capital_product",
+  "capital_payment_type",
+  "capital_gp_manual",
+  "mestika_salary_type",
+  "mestika_has_dependents",
+  "mestika_dependent_type"
+];
+
+function pickWhitelistedSimulationInput(body) {
+  const picked = {};
+  if (!body || typeof body !== "object") return picked;
+  for (const key of SIMULATION_INPUT_WHITELIST) {
+    if (!Object.hasOwn(body, key)) continue;
+    const val = body[key];
+    if (val === undefined) continue;
+    if (val === null || typeof val === "boolean") {
+      picked[key] = val;
+    } else if (typeof val === "number") {
+      if (Number.isFinite(val)) picked[key] = val;
+    } else if (typeof val === "string") {
+      picked[key] = val.slice(0, 500);
+    }
+  }
+  return picked;
+}
+
 app.post("/api/simulations", requireAuth, (req, res) => {
   const body = req.body || {};
   const bankKey = body.bank_key || "ams2";
@@ -1557,7 +1879,7 @@ app.post("/api/simulations", requireAuth, (req, res) => {
       bsi_product_code: result.bsi_product_code || null,
       policy_version: result.policy_version || null,
       dapem: body.dapem || "TASPEN",
-      input: body,
+      input: pickWhitelistedSimulationInput(body),
       result,
       status: "saved",
       created_by: req.user.id,
@@ -1593,9 +1915,13 @@ app.get("/api/simulations/:id/pdf", requireAuth, (req, res) => {
     return res.status(403).json({ detail: "Anda tidak memiliki akses untuk mengunduh PDF simulasi ini." });
   }
   const pdfBuf = generateSimulationPdfBuffer(sim);
+  const safeSimFile = sanitizeSafeFilename(sim.sim_no, "SIMULASI");
   addAuditLog(req.user, "download_pdf", sim.sim_no, `Mengunduh PDF simulasi ${sim.sim_no}`, req.ip);
   res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `attachment; filename="${sim.sim_no}.pdf"`);
+  res.setHeader("Content-Disposition", `attachment; filename="${safeSimFile}.pdf"`);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+  res.setHeader("Cache-Control", "no-store");
   res.send(pdfBuf);
 });
 
@@ -1607,9 +1933,13 @@ app.get("/api/simulations/:id/png", requireAuth, (req, res) => {
     return res.status(403).json({ detail: "Anda tidak memiliki akses untuk mengunduh gambar simulasi ini." });
   }
   const svgBuf = generateSimulationSvgBuffer(sim);
+  const safeSimFile = sanitizeSafeFilename(sim.sim_no, "SIMULASI");
   addAuditLog(req.user, "download_image", sim.sim_no, `Mengunduh ringkasan visual ${sim.sim_no}`, req.ip);
   res.setHeader("Content-Type", "image/svg+xml");
-  res.setHeader("Content-Disposition", `attachment; filename="${sim.sim_no}.svg"`);
+  res.setHeader("Content-Disposition", `attachment; filename="${safeSimFile}.svg"`);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+  res.setHeader("Cache-Control", "no-store");
   res.send(svgBuf);
 });
 
@@ -1976,6 +2306,8 @@ app.post("/api/leads", requireAuth, requireRoles("super_admin", "admin_ops", "ad
   const body = req.body || {};
   const err = validateNonNegativeFields(body, ["pension_salary"]);
   if (err) return res.status(400).json({ detail: err });
+  const textErr = validateTextLengthLimit(body, ["notes"]);
+  if (textErr) return res.status(400).json({ detail: textErr });
 
   const targetBranch = normalizeBranch(body.branch || req.user.branch || "BANDUNG");
   if (!canAccessBranch(req.user, targetBranch)) {
@@ -2253,6 +2585,8 @@ app.get("/api/lead-requests", requireAuth, (req, res) => {
 app.post("/api/lead-requests", requireAuth, requireRoles("marketing"), (req, res) => {
   const store = getStore();
   const body = req.body || {};
+  const textErr = validateTextLengthLimit(body, ["notes"]);
+  if (textErr) return res.status(400).json({ detail: textErr });
   const requestedCount =
     body.requested_count !== undefined && body.requested_count !== null
       ? Number(body.requested_count)
@@ -2375,6 +2709,8 @@ app.post(
   requireAuth,
   requireRoles("super_admin", "admin_ops"),
   (req, res) => {
+    const textErr = validateTextLengthLimit(req.body, ["admin_notes"]);
+    if (textErr) return res.status(400).json({ detail: textErr });
     const store = getStore();
     const reqItem = (store.lead_requests || []).find((r) => r.id === req.params.id);
     if (!reqItem) {
@@ -2524,6 +2860,8 @@ app.post(
       return res.status(409).json({ detail: `Permohonan ${reqItem.request_no} sudah diproses sebelumnya (Status: ${reqItem.status}).` });
     }
 
+    const textErr = validateTextLengthLimit(req.body, ["reason", "admin_notes"]);
+    if (textErr) return res.status(400).json({ detail: textErr });
     const reason = String(req.body?.reason || req.body?.admin_notes || "").trim();
     if (!reason) {
       return res.status(400).json({ detail: "Alasan penolakan permohonan wajib diisi." });
@@ -2579,6 +2917,8 @@ app.patch("/api/leads/:id", requireAuth, (req, res) => {
   const body = req.body || {};
   const err = validateNonNegativeFields(body, ["pension_salary"]);
   if (err) return res.status(400).json({ detail: err });
+  const textErr = validateTextLengthLimit(body, ["notes"]);
+  if (textErr) return res.status(400).json({ detail: textErr });
   if (body.status !== undefined && !VALID_LEAD_STATUSES.includes(body.status)) {
     return res.status(400).json({ detail: "Status lead tidak valid." });
   }
@@ -2659,6 +2999,11 @@ app.post("/api/leads/:id/activities", requireAuth, (req, res) => {
   if (!canAccessLead(req.user, lead)) {
     return res.status(403).json({ detail: "Anda tidak memiliki akses pada lead ini." });
   }
+  const textErr = validateTextLengthLimit(req.body, ["note"]);
+  if (textErr) return res.status(400).json({ detail: textErr });
+  if (req.body?.type !== undefined && req.body?.type !== null && String(req.body.type).length > 100) {
+    return res.status(400).json({ detail: "Tipe aktivitas maksimal 100 karakter." });
+  }
   const act = withTransaction(() => {
     const createdAct = {
       id: `act-${Date.now()}`,
@@ -2700,11 +3045,12 @@ app.post("/api/leads/:id/documents", requireAuth, upload.single("file"), (req, r
   }
   const docMeta = withTransaction(() => {
     const docId = `ldoc-${Date.now()}`;
-    saveUploadedFile(docId, req.file.originalname, detected.mime, req.file.buffer);
+    const safeFilename = sanitizeSafeFilename(req.file.originalname, "dokumen.pdf");
+    saveUploadedFile(docId, safeFilename, detected.mime, req.file.buffer);
     const createdDoc = {
       id: docId,
       category: String(req.query.category || "KTP"),
-      filename: req.file.originalname,
+      filename: safeFilename,
       uploaded_at: new Date().toISOString(),
       uploaded_by: req.user.name
     };
@@ -2726,8 +3072,9 @@ app.get("/api/documents/:id/download", requireAuth, (req, res) => {
   }
   const file = getUploadedFile(req.params.id);
   if (!file) return res.status(404).json({ detail: "Dokumen tidak ditemukan" });
+  const safeFilename = sanitizeSafeFilename(file.filename, "dokumen.pdf");
   res.setHeader("Content-Type", file.mime_type || "application/pdf");
-  res.setHeader("Content-Disposition", `inline; filename="${file.filename}"`);
+  res.setHeader("Content-Disposition", `inline; filename="${safeFilename}"`);
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
   res.send(Buffer.from(file.data));
@@ -3029,7 +3376,7 @@ app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "
 
     const createdBatch = {
       id: `imp-${Date.now()}`,
-      filename: req.file.originalname,
+      filename: sanitizeSafeFilename(req.file.originalname, "impor_leads.xlsx"),
       user_name: req.user.name,
       uploaded_by_id: req.user.id,
       branch: explicitBranch || null,
@@ -3240,15 +3587,16 @@ app.post("/api/applications/:id/documents/:key", requireAuth, upload.single("fil
     }
     const version = previous ? previousVersion + 1 : Math.max(1, (doc.versions || 0) + 1);
     const fileId = `appdoc-${appItem.id}-${doc.key}-v${version}-${crypto.randomUUID()}`;
-    saveUploadedFile(fileId, req.file.originalname, detected.mime, req.file.buffer);
+    const safeFilename = sanitizeSafeFilename(req.file.originalname, `${doc.key}.pdf`);
+    saveUploadedFile(fileId, safeFilename, detected.mime, req.file.buffer);
     doc.file_id = fileId;
     doc.versions = version;
     doc.sha256 = documentHash(req.file.buffer);
-    doc.version_history.push({ version, file_id: fileId, filename: req.file.originalname,
+    doc.version_history.push({ version, file_id: fileId, filename: safeFilename,
       sha256: doc.sha256, uploaded_at: new Date().toISOString(), uploaded_by_id: req.user.id });
     delete doc.reviewed_version; delete doc.reviewed_sha256; delete doc.reviewed_by; delete doc.reviewed_at;
     doc.status = "diunggah";
-    doc.filename = req.file.originalname;
+    doc.filename = safeFilename;
     doc.uploaded_at = new Date().toISOString();
     doc.note = "";
 
@@ -3280,8 +3628,9 @@ app.get("/api/applications/:id/documents/:key", requireAuth, (req, res) => {
   const isCorruptOrDummy = stored && (!stored.data || stored.data.length < 15);
 
   if (stored && !isCorruptOrDummy) {
+    const safeStoredName = sanitizeSafeFilename(stored.filename, `${doc.key}.pdf`);
     res.setHeader("Content-Type", stored.mime_type || "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename="${stored.filename}"`);
+    res.setHeader("Content-Disposition", `inline; filename="${safeStoredName}"`);
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
     res.setHeader("Cache-Control", "no-store");
@@ -3293,8 +3642,9 @@ app.get("/api/applications/:id/documents/:key", requireAuth, (req, res) => {
   if (!IS_PROD && doc.filename) {
     const sim = store.simulations.find((s) => s.id === appItem.sim_id) || store.simulations[0];
     const pdfBuf = generateSimulationPdfBuffer(sim);
+    const safeDocName = sanitizeSafeFilename(doc.filename, `${doc.key}.pdf`);
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename="${doc.filename}"`);
+    res.setHeader("Content-Disposition", `inline; filename="${safeDocName}"`);
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
     return res.send(pdfBuf);
@@ -3318,6 +3668,8 @@ app.post("/api/applications/:id/documents/:key/review", requireAuth, requireRole
   if (!doc) return res.status(404).json({ detail: "Dokumen tidak ditemukan" });
 
   const { status, note, expected_version, expected_sha256 } = req.body || {};
+  const textErr = validateTextLengthLimit({ note }, ["note"]);
+  if (textErr) return res.status(400).json({ detail: textErr });
   const normalizedStatus = status === "lengkap" ? "diterima" : status;
   if (!["diterima", "ditolak", "diunggah"].includes(normalizedStatus)) {
     return res.status(400).json({ detail: "Status verifikasi dokumen tidak valid." });
@@ -3383,6 +3735,8 @@ app.post("/api/applications/:id/action", requireAuth, (req, res) => {
   }
 
   const { action, note, process_date, ref_no, booking_date, credit_no } = req.body || {};
+  const textErr = validateTextLengthLimit({ note }, ["note"]);
+  if (textErr) return res.status(400).json({ detail: textErr });
   const allowedRoles = APP_ACTION_ROLE_MAP[action];
   if (!allowedRoles) {
     return res.status(400).json({ detail: "Aksi pengajuan tidak dikenali." });
@@ -3580,13 +3934,18 @@ app.post("/api/claims", requireAuth, upload.single("file"), (req, res) => {
     claimAmount = Math.round(parsedAmt);
   }
 
+  const textErr = validateTextLengthLimit(req.body, ["notes"]);
+  if (textErr) return res.status(400).json({ detail: textErr });
+
   let uploadedMime = "application/pdf";
+  let safeBookingFilename = "bukti_akad.pdf";
   if (req.file) {
     const detected = detectSafeDocumentType(req.file.buffer, req.file.originalname);
     if (!detected) {
       return res.status(400).json({ detail: "Format berkas bukti tidak didukung atau mengandung konten aktif. Hanya PDF, JPG, atau PNG asli yang diperbolehkan." });
     }
     uploadedMime = detected.mime;
+    safeBookingFilename = sanitizeSafeFilename(req.file.originalname, "bukti_akad.pdf");
   }
 
   const isFixed = Boolean(["super_admin", "admin_ops"].includes(req.user.role) && req.body?.amount !== undefined && req.body?.amount !== null && String(req.body.amount).trim() !== "");
@@ -3595,7 +3954,7 @@ app.post("/api/claims", requireAuth, upload.single("file"), (req, res) => {
     const ym = new Date().toISOString().slice(0, 7).replace("-", "");
     const claimId = `clm-${Date.now()}`;
     if (req.file) {
-      saveUploadedFile(`${claimId}-booking`, req.file.originalname, uploadedMime, req.file.buffer);
+      saveUploadedFile(`${claimId}-booking`, safeBookingFilename, uploadedMime, req.file.buffer);
     }
 
     const createdClaim = {
@@ -3617,7 +3976,7 @@ app.post("/api/claims", requireAuth, upload.single("file"), (req, res) => {
       amount_fixed: isFixed,
       status: "DRAFT",
       notes: req.body?.notes || "",
-      booking_proof: req.file ? req.file.originalname : "bukti_akad.pdf",
+      booking_proof: safeBookingFilename,
       payment_proof: null,
       history: [
         { id: `ch-${Date.now()}`, action: "DRAFT", note: req.body?.notes || "Klaim dibuat", user_name: req.user.name, at: new Date().toISOString() }
@@ -3649,6 +4008,8 @@ app.post("/api/claims/:id/action", requireAuth, (req, res) => {
     return res.status(403).json({ detail: "Anda tidak memiliki akses pada klaim ini." });
   }
   const { action, note, amount } = req.body || {};
+  const textErr = validateTextLengthLimit({ note }, ["note"]);
+  if (textErr) return res.status(400).json({ detail: textErr });
   const map = { submit: "SUBMITTED", review: "REVIEW", revision: "REVISION", approve: "APPROVED", reject: "REJECTED", set_amount: claim.status };
   const nextStatus = map[action];
   if (!nextStatus) {
@@ -3785,20 +4146,25 @@ app.post("/api/claims/:id/pay", requireAuth, requireRoles("super_admin", "admin_
     }
   }
 
+  const textErr = validateTextLengthLimit(req.body, ["note"]);
+  if (textErr) return res.status(400).json({ detail: textErr });
+
   if (parsedAmount !== null && Math.round(parsedAmount) !== claim.amount) return res.status(409).json({ detail: "Nominal pembayaran harus sama dengan nominal klaim yang telah disetujui." });
   let payFileMime = "application/pdf";
+  let safePayFilename = "bukti_transfer.pdf";
   if (req.file) {
     const detected = detectSafeDocumentType(req.file.buffer, req.file.originalname);
     if (!detected) {
       return res.status(400).json({ detail: "Format bukti transfer tidak didukung atau mengandung konten aktif. Hanya PDF, JPG, atau PNG asli yang diperbolehkan." });
     }
     payFileMime = detected.mime;
+    safePayFilename = sanitizeSafeFilename(req.file.originalname, "bukti_transfer.pdf");
   }
 
   withTransaction(() => {
     if (req.file) {
-      saveUploadedFile(`${claim.id}-payment`, req.file.originalname, payFileMime, req.file.buffer);
-      claim.payment_proof = req.file.originalname;
+      saveUploadedFile(`${claim.id}-payment`, safePayFilename, payFileMime, req.file.buffer);
+      claim.payment_proof = safePayFilename;
     }
     if (parsedAmount !== null) claim.amount = Math.round(parsedAmount);
     claim.status = "PAID";
@@ -3831,9 +4197,10 @@ app.post("/api/claims/:id/proof", requireAuth, upload.single("file"), (req, res)
   if (!detected) {
     return res.status(400).json({ detail: "Format berkas bukti tidak didukung atau mengandung konten aktif. Hanya PDF, JPG, atau PNG asli yang diperbolehkan." });
   }
+  const safeProofFilename = sanitizeSafeFilename(req.file.originalname, "bukti_akad.pdf");
   withTransaction(() => {
-    saveUploadedFile(`${claim.id}-booking`, req.file.originalname, detected.mime, req.file.buffer);
-    claim.booking_proof = req.file.originalname;
+    saveUploadedFile(`${claim.id}-booking`, safeProofFilename, detected.mime, req.file.buffer);
+    claim.booking_proof = safeProofFilename;
   });
   res.json(serializeClaimForUser(claim, req.user));
 });
@@ -3848,8 +4215,9 @@ app.get("/api/claims/:id/file/:type", requireAuth, (req, res) => {
   const fileType = req.params.type === "payment" ? "payment" : "booking";
   const stored = getUploadedFile(`${claim.id}-${fileType}`);
   if (stored) {
+    const safeFilename = sanitizeSafeFilename(stored.filename, `bukti_${fileType}.pdf`);
     res.setHeader("Content-Type", stored.mime_type || "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename="${stored.filename}"`);
+    res.setHeader("Content-Disposition", `inline; filename="${safeFilename}"`);
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
     return res.send(Buffer.from(stored.data));
@@ -4181,6 +4549,11 @@ app.get("/api/audit-logs", requireAuth, requireRoles("super_admin", "admin_ops")
 });
 
 app.get("/api/backup", requireAuth, requireRoles("super_admin"), (req, res) => {
+  if (IS_PROD) {
+    return res.status(403).json({
+      detail: "Unduh backup JSON dinonaktifkan di produksi untuk mencegah kehabisan memori (OOM). Gunakan prosedur backup SQLite terverifikasi (server_backup.py / server_export.py)."
+    });
+  }
   const store = getStore();
   const files = getAllUploadedFiles();
   const backupPayload = {

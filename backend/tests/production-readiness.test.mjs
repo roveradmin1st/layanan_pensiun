@@ -140,12 +140,15 @@ saveStore();db.close();`));
       assert.equal(raw.branch, 'BSI SIANTAR 2');
       assert.equal(raw.bank_scope, 'bsi_only');
     });
-    await t.test('Anonymous, legacy tokens, default credentials, production restore and quick-role are blocked', async () => {
+    await t.test('Anonymous, legacy tokens, default credentials, production backup/restore and quick-role are blocked', async () => {
+      assert.equal(superLogin.user.capabilities?.web_restore, false);
+      assert.equal(superLogin.user.capabilities?.web_backup, false);
       assert.equal((await call('GET', '/api/users')).status, 401);
       const oldToken = jwt.sign({ sub: 'super' }, running.secret);
       assert.equal((await call('GET', '/api/auth/me', null, oldToken)).status, 401);
       assert.equal((await call('POST', '/api/auth/login', { email: 'default@example.test', password: 'Password123!' })).status, 403);
       assert.equal((await call('POST', '/api/auth/quick-role', { role: 'super_admin' }, superToken)).status, 403);
+      assert.equal((await call('GET', '/api/backup', null, superToken)).status, 403);
       assert.equal((await call('POST', '/api/backup/restore', null, superToken, { 'Content-Type': 'multipart/form-data; boundary=malformed' })).status, 403);
       const oversized = await call('POST', '/api/auth/login', { email: 'x'.repeat(9000), password: 'x' });
       assert.equal(oversized.status, 413);

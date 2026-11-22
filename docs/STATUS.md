@@ -1,19 +1,27 @@
 # Status Server dan Kesiapan Operasional — Layanan Pensiunan
 
-Tanggal acuan konteks server: **8–9 November 2026** (Peluncuran operasional dengan data nyata dijadwalkan **Senin, 9 November 2026**).
-Dasar fakta server: hasil audit folder, symlink, proses, dan file database yang dibuka oleh proses, dikirim pemilik pada 8 November 2026, serta catatan bertanggal perkembangan rilis dan CI pada 8–9 November 2026. Fakta historis persiapan (7 November 2026) dibedakan secara tegas dari hasil audit aktual ini.
+Tanggal acuan konteks server terkini: **22 November 2026** (sinkronisasi audit host/hardening VPS dan pengembangan perbaikan keamanan aplikasi).
+Dasar fakta server: hasil pelaporan controller VPS (`lp-release` / `ops/server_release.py`) per 15 November 2026, verifikasi commit pada repository `https://github.com/roveradmin1st/layanan_pensiun.git`, serta catatan hardening host VPS per **22 November 2026**. Catatan audit sebelumnya (8–9 November 2026 pada rilis `c76e823`/`fe1025a`) dan persiapan awal (7 November 2026) dipertahankan di bawah sebagai riwayat historis bertanggal.
 
-## 1. Kondisi Server Aktual yang Terkonfirmasi oleh Audit (8 November 2026)
+## 1. Kondisi Server Aktual yang Terkonfirmasi (Sinkronisasi 15–22 November 2026)
 
-- **Symlink Rilis Aktif (`current`):** `/srv/layanan-pensiunan/current` mengarah ke `/srv/layanan-pensiunan/releases/layanan-pensiunan-c76e823-production` (pada saat audit 8 November 2026; lihat pembaruan status aktivasi fitur 8–9 November 2026 di Bagian 5).
-- **Proses & Runtime:** Proses yang mendengarkan port aplikasi (`layanan-pensiunan-api` pada PM2) berjalan sebagai user layanan `lpapp` (satu instance mode *fork*, Node `24.22.2`), dengan *working directory* `/srv/layanan-pensiunan/releases/layanan-pensiunan-c76e823-production/backend` (pada saat audit 8 November 2026).
-- **Baseline Commit Terpasang (Audit 8 November 2026):** Manifest rilis tersebut mencatat commit `c76e823db5a047807bea77ad6c03f2985e62560b` (branch asal baseline produksi: `fix/production-readiness-20261109` di repository `https://github.com/roveradmin1st/layanan_pensiun.git`). Commit tersebut adalah baseline runtime yang terkonfirmasi pada audit 8 November 2026; untuk rilis fitur `fe1025a94ebcb9ca6b078fa57e00287015ff8dc0` (`fix/release-operational-ux-20261108`) pada 9 November 2026, lihat Bagian 5.
-- **Database Produksi Persisten:** Proses membuka `/srv/layanan-pensiunan/shared/data/enterprise.sqlite`, beserta sidecar `enterprise.sqlite-wal` dan `enterprise.sqlite-shm`. Dokumen unggahan disimpan sebagai BLOB di dalam SQLite.
-- **Alamat Listen & Alur Jaringan:** Alamat listen backend yang ditemukan adalah `127.0.0.1:4000`. Alur layanan: Browser pengguna (tanpa VPN) → Nginx HTTPS (`https://139.190.106.136/`) → Node/Express (`127.0.0.1:4000`) → SQLite. Frontend React/Vite hasil build (`frontend/dist`) dilayani oleh aplikasi.
-- **Kapasitas Disk:** Ruang disk tersedia sekitar **51 GB** dari filesystem **58 GB**. Tidak ada kebutuhan mendesak menghapus folder berdasarkan kapasitas ini.
-- **Pemisahan Konteks User:** User SSH operator adalah `layananpensiunan`; user layanan adalah `lpapp`. State PM2 dalam HOME operator dan PM2 milik `lpapp` (`/var/lib/layanan-pensiunan/.pm2/`) adalah konteks yang berbeda.
+- **Baseline Produksi Aktif & Terverifikasi (`lp-release`):** Commit `6a791a34b4f90111fabe3e5ce55fef08a8395913` (`feat/repeatable-deployment-20261109`, `lp-release v1.1.0`, kontrak data `lp-production-20261109-v1`, controller melaporkan `status=active_verified`, `alignment=aligned`, `database_healthy=true`).
+- **Posisi Branch `origin/main`:** `52ac0b883d903bca2dd35c3dd3ca43a8243d662f` (branch lama; jangan dipakai sebagai baseline produksi maupun pengembangan).
+- **Proses, Runtime & Database Produksi Persisten:**
+  - Layanan `layanan-pensiunan-api` berjalan di PM2 sebagai user `lpapp` (satu instance mode *fork*, Node `24.22.2`) pada `127.0.0.1:4000` di balik Nginx HTTPS (`https://139.190.106.136/`).
+  - Membuka `/srv/layanan-pensiunan/shared/data/enterprise.sqlite` (+ `-wal` dan `-shm`) dengan dokumen BLOB tersimpan di dalam SQLite.
+- **Hardening Host, Backup Offsite & Kapasitas Disk VPS (22 November 2026):**
+  - **Ekspor Offsite & Uji Pemulihan Produksi:** Ekspor backup produksi terenkripsi GPG ke laptop pemilik + *restore drill* terisolasi atas snapshot `scheduled-20261122T121509Z-63b55ad7` **LULUS 100%**.
+  - **Kapasitas Disk:** Pemangkasan manual 305 folder backup `scheduled-*` lama dan pembersihan 9 folder UAT/staging lama selesai; ruang bebas disk VPS menjadi **`44,26 GiB`** (**`23%` terpakai**).
+  - **Hardening Host (`H-1` s.d. `H-4`):**
+    - Izin `/var/lib/layanan-pensiunan/.pm2/dump.pm2.bak` diperketat ke `0600` dan folder `.pm2` ke `0750`, unit `pm2-lpapp.service` ditambah `UMask=0077` & `LimitCORE=0`, serta 2 orphan daemon PM2 dimatikan.
+    - Skrip legacy `/srv/layanan-pensiunan/deploy.sh` dicabut izin eksekusinya (`0600`) dan file plaintext uji lama 7 Nov (`restored-diFHxTMa.sqlite`) dihapus.
+    - Firewall UFW port `22/tcp` diubah menjadi `LIMIT IN`.
+    - Nginx di-hardening: hanya `TLSv1.2 TLSv1.3`, `HTTP/2` aktif, `Gzip` penuh (`js/css/json/svg/webmanifest`), `upstream keepalive 16`, `Strict-Transport-Security`, `proxy_hide_header X-Powered-By`, serta perbaikan duplikasi `Cache-Control: no-store` pada `/assets/` dan `/brand/`.
+  - **Pemeriksaan Kesehatan Server:** Seluruh **18/18 cek `server_doctor.py` LULUS (`server_checks_passed: true`)**.
+- **Pemisahan Konteks User:** User SSH operator adalah `layananpensiunan`; user layanan adalah `lpapp` (`/var/lib/layanan-pensiunan/.pm2/`).
 
-> **Batas Fakta Audit 8 November 2026:** Audit ini **tidak** menghitung data nasabah/akun terkini, **tidak** memeriksa seluruh checksum kode terhadap GitHub, **tidak** membuktikan akses HTTPS terkini, dan **tidak** membuktikan integritas setiap backup. Jangan mengklaim pemeriksaan tersebut sudah dilakukan dari audit folder saja.
+> **Catatan Historis Audit Awal (8 November 2026):** Pada audit 8 November 2026, `/srv/layanan-pensiunan/current` sempat mengarah ke rilis awal `layanan-pensiunan-c76e823-production` (`c76e823db5a047807bea77ad6c03f2985e62560b`), lalu dilanjutkan pembaruan fitur (`fe1025a`), isolasi Multi-SM (`355de87` / `7ad57a2`), hingga pemasangan controller `lp-release` pada baseline `6a791a34b4f90111fabe3e5ce55fef08a8395913`.
 
 ## 2. Peta Lokasi Server (VPS) dan Perannya
 
@@ -233,7 +241,19 @@ Sesuai arahan teknis `Blue_Print/command.md` (9 November 2026) dan hasil temuan 
   suite API keamanan/RBAC/bisnis, build frontend, kandidat sintetis, ekstraksi
   paket dengan dua cold start, serta alur browser sintetis. Dependensi lockfile
   sama dengan checkout validasi sebelumnya. Actionlint juga lulus.
-- Ditambahkan wrapper instalasi `ops/lp-release` dan langkah pemasangan operator
-  pada RUNBOOK. Pemasangan/VPS belum diklaim berhasil; hasil doctor terbaru dari
-  operator diminta sebelum aktivasi. Konfigurasi secret GitHub dan deployment
-  nyata pertama tetap membutuhkan bukti dari server.
+- Ditunda: `ops/production_cutover.py` (alat bootstrap satu kali yang gagal saat aktivasi awal 8 Nov 2026), `/srv/layanan-pensiunan/deploy.sh` (izin eksekusi dicabut ke `0600` pada hardening 22 Nov 2026).
+
+---
+
+## 8. Hardening Keamanan Aplikasi & Optimasi Backup/Database (22 November 2026 — Branch `fix/security-hardening-and-backup-20261122`)
+
+Berdasarkan temuan audit pada `Blue_Print/command.md` (22 November 2026), branch terisolasi `fix/security-hardening-and-backup-20261122` dibangun tepat di atas baseline produksi aktif `6a791a34b4f90111fabe3e5ce55fef08a8395913` (**belum dipasang ke VPS produksi** sampai lulus GitHub CI dan dieksekusi via `lp-release` + instalasi operator `server_backup.py`):
+
+1. **Parser Impor XLSX (`backend/src/utils/lead-import-parser.js`):** Filter entry XML relevan (`xl/sharedStrings.xml`, `xl/workbook.xml`, `xl/_rels/workbook.xml.rels`, `xl/worksheets/*.xml`) dilakukan *sebelum* `zlib.inflateRawSync()`, batas akumulasi dekompresi maksimal **32 MB** (maks 16 MB per entry, maks 30 entry XML, maks 200 header ZIP), serta pembatasan referensi sel `r="([A-Z]{1,3})(\d+)"` dan `MAX_COLUMNS = 256` agar sel rusak/ekstrem seperti `<c r="ZZZZZZ1">` tidak membekukan *event loop*.
+2. **Validasi Skema Parameter Mitra Non-BSI (`backend/src/server.js`):** Validasi whitelist `ALLOWED_PARTNER_KEYS` dan validator `validateAndApplyPartnerUpdate()` pada `PUT /api/calc/params/:partnerKey` dan `POST /api/calc/params/proposals/:id/decide` yang menolak key berbahaya (`__proto__`, `constructor`, `prototype`), properti identitas yang berubah, angka negatif/`NaN`, dan `tiers` non-array/kosong.
+3. **Escaping SVG/PDF & Header Keamanan Unduhan (`backend/src/engines/calc-engine.js`, `backend/src/server.js`):** Menambahkan `escapeXml()` pada seluruh interpolasi teks `generateSimulationSvgBuffer()`, memastikan `escapePdfText()` digunakan di `generateSimulationPdfBuffer()`, serta memasang `Content-Security-Policy: default-src 'none'; sandbox`, `X-Content-Type-Options: nosniff`, dan `Cache-Control: no-store` pada `/api/simulations/:id/pdf` & `/png`.
+4. **Pembatasan Payload & State Bloat (`backend/src/server.js`):** Menurunkan limit `express.json` global menjadi `128kb`, menyaring `createdSim.input` dengan `SIMULATION_INPUT_WHITELIST`, dan membatasi panjang `note`, `notes`, `reason`, `admin_notes` maksimal `2.000` karakter.
+5. **Sanitasi `Content-Disposition` & Proteksi Endpoint `/api/backup` (`backend/src/server.js`, `frontend/src/pages/Settings.jsx`):** Menerapkan `sanitizeSafeFilename()` di seluruh endpoint unggah dan header unduhan `Content-Disposition`, menonaktifkan `GET /api/backup` pada `IS_PROD` (`403 Forbidden`), serta menambahkan `capabilities.web_backup = !IS_PROD` untuk menonaktifkan tombol Unduh Backup pada UI produksi.
+6. **Kompaksi Backup `VACUUM` & Retensi Terjadwal (`ops/server_backup.py`):** Menambahkan `isolation_level=None` + `VACUUM` pada worker salinan backup sebelum `integrity_check` dan SHA-256 (mengeliminasi `freelist_count` tanpa menyentuh DB produksi live), serta menambahkan `prune_scheduled_backups()` yang mempertahankan **48 backup `scheduled-*` terbaru** + **1 backup `scheduled-*` terakhir per hari kalender WIB (`Asia/Jakarta`) untuk 14 hari terakhir** sambil melindungi mutlak target `latest-verified.json`, seluruh `backup_ref` di `releases/receipts/*.json`, dan seluruh file/folder di luar `scheduled-*`.
+   - **Catatan Instalasi VPS:** Karena `ops/` masuk denylist paket `lp-release`, pembaruan `/usr/local/lib/layanan-pensiunan/ops/server_backup.py` dipasang secara terpisah oleh operator root dengan verifikasi SHA-256 (lihat [RUNBOOK.md](RUNBOOK.md)).
+7. **Eliminasi Serialisasi JSON Ganda (`backend/src/db/database.js`):** `withTransaction()` memakai `structuredClone(store)` untuk snapshot rollback in-memory dan menulis `saveStore()` satu kali tepat sebelum `COMMIT` transaksi terluar; `addAuditLog()` menunda `saveStore()` saat `inTransaction === true`.

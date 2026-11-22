@@ -1024,7 +1024,7 @@ function Backup() {
       <h2 className="font-display font-bold">Backup &amp; Pemulihan</h2>
       <p className="text-sm text-slate-500">Unduh salinan JSON seluruh leads, aktivitas, simulasi, parameter mitra, dan audit log. Pemulihan mengganti koleksi data dan dilakukan pengelola sistem saat maintenance.</p>
       <div className="flex flex-wrap gap-2">
-        <Button variant="outline" onClick={() => downloadFile("/backup", "backup.json")} data-testid="backup-download-button"><Download className="mr-2 h-4 w-4" />Unduh Backup</Button>
+        <Button variant="outline" disabled={user.capabilities?.web_backup === false} onClick={() => downloadFile("/backup", "backup.json")} data-testid="backup-download-button"><Download className="mr-2 h-4 w-4" />Unduh Backup</Button>
         <input ref={ref} type="file" accept=".json" className="hidden" onChange={(e) => restore(e.target.files[0])} data-testid="restore-file-input" />
         <Button variant="outline" disabled={user.capabilities?.web_restore === false} onClick={() => ref.current.click()} data-testid="restore-button"><Upload className="mr-2 h-4 w-4" />Pulihkan dari File</Button>
       </div>

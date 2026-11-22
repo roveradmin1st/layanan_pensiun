@@ -3414,12 +3414,25 @@ export function calculatePreview(body, allParams) {
   };
 }
 
-function pdfEscape(str) {
+export function escapeXml(val) {
+  return String(val ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+export function escapePdfText(str) {
   return String(str ?? "")
     .replace(/\\/g, "\\\\")
     .replace(/\(/g, "\\(")
     .replace(/\)/g, "\\)")
     .replace(/[^\x20-\x7E]/g, " ");
+}
+
+function pdfEscape(str) {
+  return escapePdfText(str);
 }
 
 function fmtRp(n) {
@@ -4156,43 +4169,43 @@ export function generateSimulationSvgBuffer(sim) {
   <rect width="900" height="620" fill="#F4F9F4" rx="18"/>
   <rect width="900" height="105" fill="#165B26" rx="18"/>
   <text x="40" y="45" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="20" font-weight="bold">TIGA BERMUDA AMANAH • BANK MESTIKA (TBA-MSTK 1.0)</text>
-  <text x="40" y="75" fill="#DCFCE7" font-family="Arial, sans-serif" font-size="13">${sim.sim_no} • ${r.name || "-"} (${mst.age_label || `${r.age} thn`}) • Kredit Pensiun ${mst.product_label || "Reguler"} (${r.bank_rate}% p.a.)</text>
+  <text x="40" y="75" fill="#DCFCE7" font-family="Arial, sans-serif" font-size="13">${escapeXml(sim.sim_no)} • ${escapeXml(r.name || "-")} (${escapeXml(mst.age_label || `${r.age} thn`)}) • Kredit Pensiun ${escapeXml(mst.product_label || "Reguler")} (${escapeXml(r.bank_rate)}% p.a.)</text>
 
   <rect x="40" y="125" width="400" height="340" fill="#FFFFFF" stroke="#D1E7D5" rx="12"/>
   <text x="60" y="158" fill="#1E7E34" font-family="Arial, sans-serif" font-size="14" font-weight="bold">PARAMETER &amp; GAJI POKOK (DSR 99%)</text>
   <text x="60" y="192" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Jenis Gaji:</text>
-  <text x="415" y="192" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${mst.salary_type_label || "Sesuai Gaji IDPB"}</text>
+  <text x="415" y="192" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(mst.salary_type_label || "Sesuai Gaji IDPB")}</text>
   <text x="60" y="222" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Gaji Pokok Diakui:</text>
-  <text x="415" y="222" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(mst.basic_salary ?? r.salary)}</text>
+  <text x="415" y="222" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(mst.basic_salary ?? r.salary))}</text>
   <text x="60" y="252" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Status Tanggungan:</text>
-  <text x="415" y="252" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="12" font-weight="bold">${mst.dependent_label || "Tidak Ada Tanggungan"}</text>
+  <text x="415" y="252" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="12" font-weight="bold">${escapeXml(mst.dependent_label || "Tidak Ada Tanggungan")}</text>
   <text x="60" y="282" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Maksimal Tenor:</text>
-  <text x="415" y="282" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${mst.max_tenor ?? r.tenor} bulan (s.d. 79 thn 11 bln)</text>
+  <text x="415" y="282" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(mst.max_tenor ?? r.tenor)} bulan (s.d. 79 thn 11 bln)</text>
   <text x="60" y="312" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Plafond Maksimal (Cap):</text>
-  <text x="415" y="312" text-anchor="end" fill="#1E7E34" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(mst.max_plafond ?? r.plafond)}</text>
+  <text x="415" y="312" text-anchor="end" fill="#1E7E34" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(mst.max_plafond ?? r.plafond))}</text>
   <text x="60" y="342" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Alternatif Plafond (PV):</text>
-  <text x="415" y="342" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(mst.alt_plafond ?? r.plafond)}</text>
+  <text x="415" y="342" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(mst.alt_plafond ?? r.plafond))}</text>
 
   <rect x="460" y="125" width="400" height="340" fill="#FFFFFF" stroke="#D1E7D5" rx="12"/>
   <text x="480" y="158" fill="#1E7E34" font-family="Arial, sans-serif" font-size="14" font-weight="bold">PENGAJUAN &amp; POTONGAN PENCAIRAN</text>
   <text x="480" y="192" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Plafond / Tenor:</text>
-  <text x="835" y="192" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.plafond)} / ${r.tenor} bln</text>
+  <text x="835" y="192" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(r.plafond))} / ${escapeXml(r.tenor)} bln</text>
   <text x="480" y="222" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Angsuran per Bulan:</text>
-  <text x="835" y="222" text-anchor="end" fill="#1E7E34" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.coop_installment)}</text>
-  <text x="480" y="252" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Biaya Pencairan (${mst.cost_rate_pct ?? 22}%):</text>
-  <text x="835" y="252" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.total_fees)}</text>
-  <text x="480" y="282" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Retensi (${mst.retention_multiplier ?? 3}x Angsuran):</text>
-  <text x="835" y="282" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.retention)}</text>
+  <text x="835" y="222" text-anchor="end" fill="#1E7E34" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(r.coop_installment))}</text>
+  <text x="480" y="252" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Biaya Pencairan (${escapeXml(mst.cost_rate_pct ?? 22)}%):</text>
+  <text x="835" y="252" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(r.total_fees))}</text>
+  <text x="480" y="282" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Retensi (${escapeXml(mst.retention_multiplier ?? 3)}x Angsuran):</text>
+  <text x="835" y="282" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(r.retention))}</text>
   <text x="480" y="312" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Pelunasan Take Over (TO):</text>
-  <text x="835" y="312" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.take_over || 0)}</text>
+  <text x="835" y="312" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(r.take_over || 0))}</text>
   <text x="480" y="342" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">DSR Angsuran Aktual:</text>
-  <text x="835" y="342" text-anchor="end" fill="#1E7E34" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${r.ratio_pct}% (Maks ${mst.dsr_pct ?? 99}%)</text>
+  <text x="835" y="342" text-anchor="end" fill="#1E7E34" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(r.ratio_pct)}% (Maks ${escapeXml(mst.dsr_pct ?? 99)}%)</text>
 
   <rect x="40" y="485" width="820" height="95" fill="#1E7E34" rx="14"/>
   <text x="65" y="520" fill="#DCFCE7" font-family="Arial, sans-serif" font-size="13">SISA BERSIH PENCAIRAN (BANK MESTIKA)</text>
-  <text x="65" y="558" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="28" font-weight="bold">${fmtRp(r.net_disbursement)}</text>
+  <text x="65" y="558" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="28" font-weight="bold">${escapeXml(fmtRp(r.net_disbursement))}</text>
   <text x="500" y="520" fill="#DCFCE7" font-family="Arial, sans-serif" font-size="13">SISA GAJI (DARI GAJI POKOK)</text>
-  <text x="500" y="558" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="28" font-weight="bold">${fmtRp(r.remaining_salary)}</text>
+  <text x="500" y="558" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="28" font-weight="bold">${escapeXml(fmtRp(r.remaining_salary))}</text>
 </svg>`;
     return Buffer.from(svg, "utf8");
   }
@@ -4207,47 +4220,47 @@ export function generateSimulationSvgBuffer(sim) {
   <rect width="900" height="620" fill="#F4F8F6" rx="18"/>
   <rect width="900" height="105" fill="#123D39" rx="18"/>
   <text x="40" y="45" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="20" font-weight="bold">APLIKASI CALC CAPITAL — DASA CIPTA BERKARYA</text>
-  <text x="40" y="75" fill="#DCE9E6" font-family="Arial, sans-serif" font-size="13">${sim.sim_no} • ${r.name || "-"} • ${cap.product_label || (isCapPensiun ? "Pensiun" : "Pra Pensiun")} • PS3 CAPITAL</text>
+  <text x="40" y="75" fill="#DCE9E6" font-family="Arial, sans-serif" font-size="13">${escapeXml(sim.sim_no)} • ${escapeXml(r.name || "-")} • ${escapeXml(cap.product_label || (isCapPensiun ? "Pensiun" : "Pra Pensiun"))} • PS3 CAPITAL</text>
   
   <rect x="40" y="125" width="400" height="340" fill="#FFFFFF" stroke="#D7E5E1" rx="12"/>
   <text x="60" y="158" fill="#07887E" font-family="Arial, sans-serif" font-size="14" font-weight="bold">INFORMASI &amp; RINCIAN TENOR</text>
   <text x="60" y="192" fill="#647572" font-family="Arial, sans-serif" font-size="13">Nama Debitur:</text>
-  <text x="415" y="192" text-anchor="end" fill="#172C2A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${r.name || "-"}</text>
+  <text x="415" y="192" text-anchor="end" fill="#172C2A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(r.name || "-")}</text>
   <text x="60" y="222" fill="#647572" font-family="Arial, sans-serif" font-size="13">Tanggal Lahir:</text>
-  <text x="415" y="222" text-anchor="end" fill="#172C2A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtDateId(r.birth_date)}</text>
+  <text x="415" y="222" text-anchor="end" fill="#172C2A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtDateId(r.birth_date))}</text>
   <text x="60" y="252" fill="#647572" font-family="Arial, sans-serif" font-size="13">Gaji Bulanan:</text>
-  <text x="415" y="252" text-anchor="end" fill="#172C2A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.salary)}</text>
+  <text x="415" y="252" text-anchor="end" fill="#172C2A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(r.salary))}</text>
   <text x="60" y="282" fill="#647572" font-family="Arial, sans-serif" font-size="13">Batas Usia Kredit:</text>
-  <text x="415" y="282" text-anchor="end" fill="#172C2A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtDateId(cap.age_limit_date)}</text>
+  <text x="415" y="282" text-anchor="end" fill="#172C2A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtDateId(cap.age_limit_date))}</text>
   <text x="60" y="312" fill="#647572" font-family="Arial, sans-serif" font-size="13">Tenor Kredit Maksimal:</text>
-  <text x="415" y="312" text-anchor="end" fill="#172C2A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${maxTenorVal} bulan</text>
+  <text x="415" y="312" text-anchor="end" fill="#172C2A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(maxTenorVal)} bulan</text>
   <text x="60" y="342" fill="#647572" font-family="Arial, sans-serif" font-size="13">Tenor Diajukan:</text>
-  <text x="415" y="342" text-anchor="end" fill="#07887E" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${reqTenorVal} bulan</text>
+  <text x="415" y="342" text-anchor="end" fill="#07887E" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(reqTenorVal)} bulan</text>
 
   <rect x="460" y="125" width="400" height="340" fill="#FFFFFF" stroke="#D7E5E1" rx="12"/>
   <text x="480" y="158" fill="#07887E" font-family="Arial, sans-serif" font-size="14" font-weight="bold">HASIL SIMULASI</text>
   <text x="480" y="192" fill="#647572" font-family="Arial, sans-serif" font-size="13">Batas Angsuran Maksimal (90%):</text>
-  <text x="835" y="192" text-anchor="end" fill="#172C2A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(cap.payment_cap ?? Math.round((r.salary || 0) * 0.9))}</text>
+  <text x="835" y="192" text-anchor="end" fill="#172C2A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(cap.payment_cap ?? Math.round((r.salary || 0) * 0.9)))}</text>
   <text x="480" y="222" fill="#647572" font-family="Arial, sans-serif" font-size="13">Angsuran Aktual:</text>
-  <text x="835" y="222" text-anchor="end" fill="#07887E" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(cap.actual_payment ?? r.coop_installment)}</text>
+  <text x="835" y="222" text-anchor="end" fill="#07887E" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(cap.actual_payment ?? r.coop_installment))}</text>
   <text x="480" y="252" fill="#647572" font-family="Arial, sans-serif" font-size="13">Plafon Maksimal:</text>
-  <text x="835" y="252" text-anchor="end" fill="#172C2A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(cap.max_loan_pv ?? cap.recommendation_max_loan ?? r.plafond)}</text>
+  <text x="835" y="252" text-anchor="end" fill="#172C2A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(cap.max_loan_pv ?? cap.recommendation_max_loan ?? r.plafond))}</text>
   <text x="480" y="282" fill="#647572" font-family="Arial, sans-serif" font-size="13">Plafon Diajukan:</text>
-  <text x="835" y="282" text-anchor="end" fill="#07887E" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(cap.loan ?? r.plafond)}</text>
+  <text x="835" y="282" text-anchor="end" fill="#07887E" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(cap.loan ?? r.plafond))}</text>
   <text x="480" y="312" fill="#647572" font-family="Arial, sans-serif" font-size="13">Biaya Kredit:</text>
-  <text x="835" y="312" text-anchor="end" fill="#172C2A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(cap.cost ?? r.total_fees)}</text>
-  <text x="480" y="342" fill="#647572" font-family="Arial, sans-serif" font-size="13">${retRowLabel}</text>
-  <text x="835" y="342" text-anchor="end" fill="#172C2A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(cap.total_retention ?? r.retention)}</text>
+  <text x="835" y="312" text-anchor="end" fill="#172C2A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(cap.cost ?? r.total_fees))}</text>
+  <text x="480" y="342" fill="#647572" font-family="Arial, sans-serif" font-size="13">${escapeXml(retRowLabel)}</text>
+  <text x="835" y="342" text-anchor="end" fill="#172C2A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(cap.total_retention ?? r.retention))}</text>
 
   <rect x="40" y="485" width="820" height="95" fill="#07887E" rx="14"/>
   <text x="60" y="518" fill="#DCE9E6" font-family="Arial, sans-serif" font-size="11" font-weight="bold">HIGHLIGHT: PLAFON</text>
-  <text x="60" y="552" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="20" font-weight="bold">${fmtRp(cap.loan ?? r.plafond)}</text>
+  <text x="60" y="552" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="20" font-weight="bold">${escapeXml(fmtRp(cap.loan ?? r.plafond))}</text>
   <text x="275" y="518" fill="#DCE9E6" font-family="Arial, sans-serif" font-size="11" font-weight="bold">TENOR</text>
-  <text x="275" y="552" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="20" font-weight="bold">${reqTenorVal} Bulan</text>
+  <text x="275" y="552" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="20" font-weight="bold">${escapeXml(reqTenorVal)} Bulan</text>
   <text x="430" y="518" fill="#DCE9E6" font-family="Arial, sans-serif" font-size="11" font-weight="bold">SISA BERSIH</text>
-  <text x="430" y="552" fill="#B9FFF5" font-family="Arial, sans-serif" font-size="20" font-weight="bold">${fmtRp(cap.net_cash ?? r.net_disbursement)}</text>
+  <text x="430" y="552" fill="#B9FFF5" font-family="Arial, sans-serif" font-size="20" font-weight="bold">${escapeXml(fmtRp(cap.net_cash ?? r.net_disbursement))}</text>
   <text x="655" y="518" fill="#DCE9E6" font-family="Arial, sans-serif" font-size="11" font-weight="bold">SISA GAJI</text>
-  <text x="655" y="552" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="20" font-weight="bold">${fmtRp(cap.salary_left ?? r.remaining_salary)}</text>
+  <text x="655" y="552" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="20" font-weight="bold">${escapeXml(fmtRp(cap.salary_left ?? r.remaining_salary))}</text>
 </svg>`;
     return Buffer.from(svg, "utf8");
   }
@@ -4365,26 +4378,26 @@ export function generateSimulationSvgBuffer(sim) {
 
         let content = "";
         if (row.type === "header") {
-          content = `<text x="${boxX + 14}" y="${textY}" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="14" font-weight="bold">${row.label}</text>`;
+          content = `<text x="${boxX + 14}" y="${textY}" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="14" font-weight="bold">${escapeXml(row.label)}</text>`;
         } else if (row.type === "section") {
-          content = `<text x="${boxX + 14}" y="${textY}" fill="#065F46" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${row.label}</text>`;
+          content = `<text x="${boxX + 14}" y="${textY}" fill="#065F46" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(row.label)}</text>`;
         } else if (row.type === "text") {
           content =
-            `<text x="${boxX + 14}" y="${textY}" fill="#334155" font-family="Arial, sans-serif" font-size="13">${row.label}</text>` +
+            `<text x="${boxX + 14}" y="${textY}" fill="#334155" font-family="Arial, sans-serif" font-size="13">${escapeXml(row.label)}</text>` +
             `<text x="${boxX + col1W + 6}" y="${textY}" fill="#64748B" font-family="Arial, sans-serif" font-size="13">:</text>` +
-            `<text x="${boxX + col1W + col2W + 6}" y="${textY}" fill="#0F172A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${row.val}</text>`;
+            `<text x="${boxX + col1W + col2W + 6}" y="${textY}" fill="#0F172A" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(row.val)}</text>`;
         } else if (row.type === "num") {
           const isDash = row.val === "-";
           const valX = isDash ? boxX + boxW - 32 : boxX + boxW - 14;
           content =
-            `<text x="${boxX + 14}" y="${textY}" fill="#334155" font-family="Arial, sans-serif" font-size="13">${row.label}</text>` +
+            `<text x="${boxX + 14}" y="${textY}" fill="#334155" font-family="Arial, sans-serif" font-size="13">${escapeXml(row.label)}</text>` +
             `<text x="${boxX + col1W + 6}" y="${textY}" fill="#64748B" font-family="Arial, sans-serif" font-size="13">:</text>` +
-            `<text x="${valX}" y="${textY}" text-anchor="end" fill="#0F172A" font-family="Arial, sans-serif" font-size="13"${row.boldVal ? ' font-weight="bold"' : ""}>${row.val}</text>`;
+            `<text x="${valX}" y="${textY}" text-anchor="end" fill="#0F172A" font-family="Arial, sans-serif" font-size="13"${row.boldVal ? ' font-weight="bold"' : ""}>${escapeXml(row.val)}</text>`;
         } else if (row.type === "footer") {
           content =
-            `<text x="${boxX + 14}" y="${textY}" fill="#065F46" font-family="Arial, sans-serif" font-size="14" font-weight="bold">${row.label}</text>` +
+            `<text x="${boxX + 14}" y="${textY}" fill="#065F46" font-family="Arial, sans-serif" font-size="14" font-weight="bold">${escapeXml(row.label)}</text>` +
             `<text x="${boxX + col1W + 6}" y="${textY}" fill="#065F46" font-family="Arial, sans-serif" font-size="14" font-weight="bold">:</text>` +
-            `<text x="${boxX + boxW - 14}" y="${textY}" text-anchor="end" fill="#065F46" font-family="Arial, sans-serif" font-size="15" font-weight="bold">${row.val}</text>`;
+            `<text x="${boxX + boxW - 14}" y="${textY}" text-anchor="end" fill="#065F46" font-family="Arial, sans-serif" font-size="15" font-weight="bold">${escapeXml(row.val)}</text>`;
         }
         return `${bg}${hLine}${content}`;
       })
@@ -4407,42 +4420,42 @@ export function generateSimulationSvgBuffer(sim) {
   <rect width="900" height="620" fill="#F8F9FC" rx="18"/>
   <rect width="900" height="105" fill="#12264D" rx="18"/>
   <text x="40" y="46" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="20" font-weight="bold">${isAms2 ? "KOPERASI ASIA MADANI SEJAHTERA — RINCIAN SIMULASI KREDIT (AMS2)" : "LAYANAN PENSIUNAN — RINGKASAN SIMULASI RESMI"}</text>
-  <text x="40" y="76" fill="#E2E8F0" font-family="Arial, sans-serif" font-size="14">${sim.sim_no} • ${r.name || "-"} • ${ams.category_label || r.category || "-"} • Tanggal: ${fmtDateId(r.process_date)}</text>
+  <text x="40" y="76" fill="#E2E8F0" font-family="Arial, sans-serif" font-size="14">${escapeXml(sim.sim_no)} • ${escapeXml(r.name || "-")} • ${escapeXml(ams.category_label || r.category || "-")} • Tanggal: ${escapeXml(fmtDateId(r.process_date))}</text>
   <rect x="40" y="128" width="400" height="335" fill="#FFFFFF" stroke="#E2E8F0" rx="12"/>
   <text x="60" y="162" fill="#8C3D9C" font-family="Arial, sans-serif" font-size="14" font-weight="bold">01 INFORMASI DEBITUR &amp; ANGSURAN</text>
   <text x="60" y="196" fill="#64748B" font-family="Arial, sans-serif" font-size="13">Nama Debitur:</text>
-  <text x="415" y="196" text-anchor="end" fill="#17223B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${r.name || "-"}</text>
+  <text x="415" y="196" text-anchor="end" fill="#17223B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(r.name || "-")}</text>
   <text x="60" y="226" fill="#64748B" font-family="Arial, sans-serif" font-size="13">Tanggal Lahir / Usia:</text>
-  <text x="415" y="226" text-anchor="end" fill="#17223B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtDateId(r.birth_date)} (${r.age} tahun)</text>
+  <text x="415" y="226" text-anchor="end" fill="#17223B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtDateId(r.birth_date))} (${escapeXml(r.age)} tahun)</text>
   <text x="60" y="256" fill="#64748B" font-family="Arial, sans-serif" font-size="13">Kategori / Pengajuan:</text>
-  <text x="415" y="256" text-anchor="end" fill="#8C3D9C" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${ams.category_label || r.category || "-"} • ${ams.takeover_label || (Number(r.take_over || 0) > 0 ? "Take Over" : "Non Take Over")}</text>
+  <text x="415" y="256" text-anchor="end" fill="#8C3D9C" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(ams.category_label || r.category || "-")} • ${escapeXml(ams.takeover_label || (Number(r.take_over || 0) > 0 ? "Take Over" : "Non Take Over"))}</text>
   <text x="60" y="286" fill="#64748B" font-family="Arial, sans-serif" font-size="13">Gaji Bulanan:</text>
-  <text x="415" y="286" text-anchor="end" fill="#17223B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.salary)}</text>
+  <text x="415" y="286" text-anchor="end" fill="#17223B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(r.salary))}</text>
   <text x="60" y="316" fill="#64748B" font-family="Arial, sans-serif" font-size="13">Plafon Kredit / Tenor:</text>
-  <text x="415" y="316" text-anchor="end" fill="#17223B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.plafond)} / ${r.tenor} bulan</text>
+  <text x="415" y="316" text-anchor="end" fill="#17223B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(r.plafond))} / ${escapeXml(r.tenor)} bulan</text>
   <text x="60" y="346" fill="#64748B" font-family="Arial, sans-serif" font-size="13">${isAms2 ? "Angsuran Koperasi / Bulan:" : "Angsuran per Bulan:"}</text>
-  <text x="415" y="346" text-anchor="end" fill="#8C3D9C" font-family="Arial, sans-serif" font-size="15" font-weight="bold">${fmtRp(r.coop_installment)}</text>
+  <text x="415" y="346" text-anchor="end" fill="#8C3D9C" font-family="Arial, sans-serif" font-size="15" font-weight="bold">${escapeXml(fmtRp(r.coop_installment))}</text>
 
   <rect x="460" y="128" width="400" height="335" fill="#FFFFFF" stroke="#E2E8F0" rx="12"/>
   <text x="480" y="162" fill="#8C3D9C" font-family="Arial, sans-serif" font-size="14" font-weight="bold">02 RINCIAN BIAYA &amp; POTONGAN</text>
-  <text x="480" y="196" fill="#64748B" font-family="Arial, sans-serif" font-size="13">${isAms2 ? "Biaya Provisi dan Akuisisi:" : `Provisi (${r.proaq_pct}%):`}</text>
-  <text x="835" y="196" text-anchor="end" fill="#17223B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.proaq)}</text>
-  <text x="480" y="226" fill="#64748B" font-family="Arial, sans-serif" font-size="13">${isAms2 ? "Cadangan Risiko:" : `Asuransi Jiwa (${r.risk_pct}%):`}</text>
-  <text x="835" y="226" text-anchor="end" fill="#17223B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.risk)}</text>
+  <text x="480" y="196" fill="#64748B" font-family="Arial, sans-serif" font-size="13">${isAms2 ? "Biaya Provisi dan Akuisisi:" : `Provisi (${escapeXml(r.proaq_pct)}%):`}</text>
+  <text x="835" y="196" text-anchor="end" fill="#17223B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(r.proaq))}</text>
+  <text x="480" y="226" fill="#64748B" font-family="Arial, sans-serif" font-size="13">${isAms2 ? "Cadangan Risiko:" : `Asuransi Jiwa (${escapeXml(r.risk_pct)}%):`}</text>
+  <text x="835" y="226" text-anchor="end" fill="#17223B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(r.risk))}</text>
   <text x="480" y="256" fill="#64748B" font-family="Arial, sans-serif" font-size="13">Administrasi:</text>
-  <text x="835" y="256" text-anchor="end" fill="#17223B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.admin_fee)}</text>
+  <text x="835" y="256" text-anchor="end" fill="#17223B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(r.admin_fee))}</text>
   <text x="480" y="286" fill="#8C3D9C" font-family="Arial, sans-serif" font-size="13" font-weight="bold">TOTAL BIAYA KREDIT:</text>
-  <text x="835" y="286" text-anchor="end" fill="#8C3D9C" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.total_fees)}</text>
+  <text x="835" y="286" text-anchor="end" fill="#8C3D9C" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(r.total_fees))}</text>
   <text x="480" y="316" fill="#64748B" font-family="Arial, sans-serif" font-size="13">Take Over:</text>
-  <text x="835" y="316" text-anchor="end" fill="#17223B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.take_over || 0)}</text>
+  <text x="835" y="316" text-anchor="end" fill="#17223B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(r.take_over || 0))}</text>
   <text x="480" y="346" fill="#64748B" font-family="Arial, sans-serif" font-size="13">Retensi (3 x angsuran koperasi):</text>
-  <text x="835" y="346" text-anchor="end" fill="#17223B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${fmtRp(r.retention)}</text>
+  <text x="835" y="346" text-anchor="end" fill="#17223B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(r.retention))}</text>
 
   <rect x="40" y="485" width="820" height="95" fill="#12264D" rx="14"/>
   <text x="65" y="520" fill="#CBD5E1" font-family="Arial, sans-serif" font-size="13">ESTIMASI PENCAIRAN BERSIH</text>
-  <text x="65" y="558" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="28" font-weight="bold">${fmtRp(r.net_disbursement)}</text>
+  <text x="65" y="558" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="28" font-weight="bold">${escapeXml(fmtRp(r.net_disbursement))}</text>
   <text x="500" y="520" fill="#CBD5E1" font-family="Arial, sans-serif" font-size="13">SISA GAJI / BULAN</text>
-  <text x="500" y="558" fill="#10B981" font-family="Arial, sans-serif" font-size="28" font-weight="bold">${fmtRp(r.remaining_salary)}</text>
+  <text x="500" y="558" fill="#10B981" font-family="Arial, sans-serif" font-size="28" font-weight="bold">${escapeXml(fmtRp(r.remaining_salary))}</text>
 </svg>`;
   return Buffer.from(svg, "utf8");
 }

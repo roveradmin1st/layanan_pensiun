@@ -74,6 +74,8 @@ def production_smoke(base, password):
     token = json.loads(body)['access_token']
     if request(base, '/api/auth/me', token=token)[0] != 200:
         raise RuntimeError('Production authenticated session smoke failed.')
+    if request(base, '/api/backup', token=token)[0] != 403:
+        raise RuntimeError('Production GET /api/backup must return HTTP 403.')
 
 
 def candidate_smoke(sandbox):

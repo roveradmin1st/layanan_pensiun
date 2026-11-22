@@ -10,7 +10,11 @@ import zlib from "node:zlib";
 import { computeAgeDetail } from "../engines/calc-engine.js";
 import { normalizeBranch, resolveBranchFromCityOrText } from "../config/branches.js";
 
-const MAX_DECOMPRESSED_XML_BYTES = 50 * 1024 * 1024; // 50 MB max output guard
+const MAX_DECOMPRESSED_XML_BYTES = 16 * 1024 * 1024; // 16 MB max per single XML entry
+const MAX_TOTAL_DECOMPRESSED_BYTES = 32 * 1024 * 1024; // 32 MB max total accumulated bytes
+const MAX_ZIP_ENTRIES = 30; // max relevant XML entries extracted
+const MAX_ZIP_HEADERS_SCANNED = 200; // max ZIP local file headers scanned
+const MAX_COLUMNS = 256; // max cell column index (0..256)
 const MAX_IMPORT_ROWS = 10000;
 
 /**
@@ -181,16 +185,38 @@ export function parseBirthAndAge(rawBirth, rawAge, nip = "") {
 }
 
 /**
+ * Filter entry XML yang benar-benar diperlukan oleh parser XLSX sebelum dekompresi
+ */
+function isRelevantXlsxXmlEntry(rawName) {
+  const name = String(rawName || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  if (
+    name === "xl/sharedStrings.xml" ||
+    name === "xl/workbook.xml" ||
+    name === "xl/_rels/workbook.xml.rels"
+  ) {
+    return true;
+  }
+  return /^xl\/worksheets\/[^/]+\.xml$/i.test(name);
+}
+
+/**
  * Ekstrak file dari arsip ZIP (.xlsx) secara native menggunakan magic bytes PK\x03\x04
  */
 function extractZipEntries(buffer) {
   const entries = new Map();
   let pos = 0;
+  let headersScanned = 0;
+  let totalDecompressedBytes = 0;
 
   while (pos < buffer.length - 30) {
     if (buffer.readUInt32LE(pos) !== 0x04034b50) {
       pos++;
       continue;
+    }
+
+    headersScanned++;
+    if (headersScanned > MAX_ZIP_HEADERS_SCANNED) {
+      throw new Error("File XLSX tidak valid: jumlah komponen ZIP melebihi batas aman (maks 200 entry).");
     }
 
     const compression = buffer.readUInt16LE(pos + 8);
@@ -199,23 +225,47 @@ function extractZipEntries(buffer) {
     const extraLen = buffer.readUInt16LE(pos + 28);
 
     if (pos + 30 + nameLen > buffer.length) break;
-    const name = buffer.toString("utf8", pos + 30, pos + 30 + nameLen);
+    const name = buffer
+      .toString("utf8", pos + 30, pos + 30 + nameLen)
+      .replace(/\\/g, "/")
+      .replace(/^\/+/, "");
     const dataStart = pos + 30 + nameLen + extraLen;
 
     if (compressedSize > 0 && dataStart + compressedSize <= buffer.length) {
+      if (!isRelevantXlsxXmlEntry(name)) {
+        pos = dataStart + compressedSize;
+        continue;
+      }
+
+      if (entries.size >= MAX_ZIP_ENTRIES) {
+        throw new Error("File XLSX melebihi batas maksimum entry XML yang diizinkan (maks 30 entry).");
+      }
+
       const rawData = buffer.subarray(dataStart, dataStart + compressedSize);
       if (compression === 0) {
         // STORE
+        if (totalDecompressedBytes + rawData.length > MAX_TOTAL_DECOMPRESSED_BYTES) {
+          throw new Error("Ukuran hasil ekstraksi file XLSX melebihi batas aman memori (maks 32 MB).");
+        }
+        totalDecompressedBytes += rawData.length;
         entries.set(name, rawData);
       } else if (compression === 8) {
         // DEFLATE
+        const remainingBudget = MAX_TOTAL_DECOMPRESSED_BYTES - totalDecompressedBytes;
+        if (remainingBudget <= 0) {
+          throw new Error("Ukuran hasil dekompresi file XLSX melebihi batas aman memori (maks 32 MB).");
+        }
         try {
           const decompressed = zlib.inflateRawSync(rawData, {
-            maxOutputLength: MAX_DECOMPRESSED_XML_BYTES
+            maxOutputLength: Math.min(MAX_DECOMPRESSED_XML_BYTES, remainingBudget)
           });
+          totalDecompressedBytes += decompressed.length;
           entries.set(name, decompressed);
-        } catch {
-          // Abaikan jika entri tertentu gagal decompress
+        } catch (err) {
+          if (err?.code === "ERR_BUFFER_TOO_LARGE" || /maxOutputLength|too large|buffer/i.test(String(err?.message || ""))) {
+            throw new Error("Ukuran hasil dekompresi file XLSX melebihi batas aman memori (maks 32 MB).");
+          }
+          // Abaikan jika entri tertentu gagal decompress karena format lain
         }
       }
     }
@@ -291,7 +341,11 @@ function parseSheetRows(xmlBuf, sharedStrings = []) {
       const attrs = cm[1];
       const content = cm[2];
 
-      const rMatch = attrs.match(/r="([A-Z]+)(\d+)"/i);
+      const rawRefMatch = attrs.match(/\br="([^"]+)"/i);
+      const rMatch = rawRefMatch ? rawRefMatch[1].match(/^([A-Z]{1,3})(\d+)$/i) : null;
+      if (rawRefMatch && !rMatch) {
+        continue;
+      }
       const isString = /t="s"/i.test(attrs);
 
       let val = "";
@@ -321,8 +375,14 @@ function parseSheetRows(xmlBuf, sharedStrings = []) {
 
       if (rMatch) {
         const colIdx = colLettersToIndex(rMatch[1].toUpperCase());
+        if (colIdx < 0 || colIdx > MAX_COLUMNS) {
+          continue;
+        }
         cells[colIdx] = val;
       } else {
+        if (cells.length > MAX_COLUMNS) {
+          continue;
+        }
         cells.push(val);
       }
     }

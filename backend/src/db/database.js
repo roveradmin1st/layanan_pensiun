@@ -1251,7 +1251,7 @@ export function saveStore() {
 
 export function withTransaction(workFn) {
   const store = getStore();
-  const snapshot = JSON.stringify(store);
+  const snapshot = structuredClone(store);
   const startedOuter = !inTransaction;
   if (startedOuter) {
     db.exec("BEGIN IMMEDIATE");
@@ -1259,8 +1259,8 @@ export function withTransaction(workFn) {
   }
   try {
     const result = workFn(store);
-    saveStore();
     if (startedOuter) {
+      saveStore();
       db.exec("COMMIT");
       inTransaction = false;
     }
@@ -1270,7 +1270,7 @@ export function withTransaction(workFn) {
       try { db.exec("ROLLBACK"); } catch { /* ignore */ }
       inTransaction = false;
     }
-    stateCache = JSON.parse(snapshot);
+    stateCache = snapshot;
     throw err;
   }
 }
@@ -1289,7 +1289,9 @@ export function addAuditLog(user, action, entity, detail, ip = "127.0.0.1") {
     created_at: new Date().toISOString()
   });
   if (store.audit_logs.length > 1000) store.audit_logs.length = 1000;
-  saveStore();
+  if (!inTransaction) {
+    saveStore();
+  }
 }
 
 export function saveUploadedFile(id, filename, mimeType, buffer) {

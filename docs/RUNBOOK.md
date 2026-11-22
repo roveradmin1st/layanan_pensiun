@@ -53,19 +53,20 @@ Environment `production` dikonfigurasi dengan `DEPLOY_SSH_KEY`,
 dibatasi. Jangan membagikan key/password melalui chat. Sampai konfigurasi itu
 selesai dan diuji, gunakan controller yang sama melalui terminal operator.
 
-## Status Operasional Penting (Acuan Audit 8 November 2026)
+## Status Operasional Penting (Sinkronisasi 15–22 November 2026)
 
-1. **Rilis Produksi Sudah Aktif (`c76e823`):**
-   - Symlink `/srv/layanan-pensiunan/current` dan proses aktif (`lpapp`, 1 instance *fork* pada `127.0.0.1:4000`, Node `24.22.2`) telah menjalankan `/srv/layanan-pensiunan/releases/layanan-pensiunan-c76e823-production` (commit `c76e823db5a047807bea77ad6c03f2985e62560b`) dengan database `/srv/layanan-pensiunan/shared/data/enterprise.sqlite` (+ `-wal`, `-shm`).
-2. **Alur Update Berikutnya (Baku):**
+1. **Rilis Produksi Aktif & Terverifikasi (`6a791a34b4f90111fabe3e5ce55fef08a8395913`):**
+   - Pemeriksaan controller VPS (`lp-release`) pada **15 November 2026** mengonfirmasi baseline produksi aktif menunjuk commit `6a791a34b4f90111fabe3e5ce55fef08a8395913` (`feat/repeatable-deployment-20261109`) dengan hasil `status=active_verified`, `alignment=aligned`, `database_healthy=true`.
+   - Proses aktif (`lpapp`, 1 instance *fork* pada `127.0.0.1:4000`, Node `24.22.2`) menggunakan `/srv/layanan-pensiunan/shared/data/enterprise.sqlite` (+ `-wal`, `-shm`).
+2. **Hardening Host & Backup Offsite (22 November 2026):**
+   - Ekspor offsite terenkripsi GPG ke laptop + uji pemulihan (`scheduled-20261122T121509Z-63b55ad7`) **LULUS 100%**; pemangkasan 305 snapshot lama + 9 folder UAT/staging lama menyisakan ruang bebas **`44,26 GiB`** (`23%` terpakai).
+   - Hardening `H-1` s.d. `H-4` selesai (`.pm2` `0600`/`0750`, `pm2-lpapp.service` `UMask=0077` & `LimitCORE=0`, `deploy.sh` `0600`, UFW `LIMIT IN` `22/tcp`, Nginx HTTP/2 + HSTS + Gzip + hide `X-Powered-By` + fix `Cache-Control` aset), dan `server_doctor.py` lulus **18/18**.
+3. **Alur Update Berikutnya (Baku):**
    - **`pengembangan → pengujian → GitHub → CI berhasil → deployment saat diminta pemilik → verifikasi → catat versi`**
    - Setiap update wajib mempertahankan seluruh data, akun, password, role, status aktif, relasi SM–Marketing, wilayah, cakupan bank, parameter bank, dan dokumen BLOB yang sudah ada.
-3. **Batas Prosedur yang Terbukti vs. Rencana Otomasi / Alat Historis:**
-   - **Sudah Terbukti Bekerja:** Validasi lokal/CI (`python3 ops/ci.py` pada database sementara), pemeriksaan kandidat/rilis pada salinan sementara (`ops/check_candidate.py`, `ops/check_staged_release.py`), snapshot backup SQLite konsisten sebagai `lpapp`, enkripsi GPG ke laptop, dan aktivasi rilis manual terkendali.
-   - **Ditunda / Jangan Dijalankan Ulang untuk Update Rutin:**
-     - `ops/production_cutover.py`: Pernah gagal saat aktivasi transisi UAT→produksi (aktivasi kemudian diselesaikan secara manual atas izin pemilik). Pemilik menunda riset/perbaikan alat ini. **Jangan menjalankan ulang `production_cutover.py` atau skrip aktivasi historis untuk update rutin.**
-     - `/srv/layanan-pensiunan/deploy.sh`: Ada di VPS, namun isi dan kesesuaiannya belum dinilai dalam audit 8 November 2026. **Jangan menganggap file ini sebagai perintah update resmi.**
-     - **Deployment rutin satu tombol:** Baru merupakan sasaran perbaikan berikutnya dan belum tersedia/tervalidasi untuk produksi. Setiap `git push` tidak otomatis memperbarui VPS.
+4. **Batas Prosedur yang Terbukti vs. Alat Historis:**
+   - **Sudah Terbukti Bekerja:** Controller `/usr/local/bin/lp-release`, validasi lokal/CI (`python3 ops/ci.py` pada database sementara), `server_backup.py`, `server_doctor.py`, dan `server_export.py`.
+   - **Ditunda / Jangan Dijalankan Ulang:** `ops/production_cutover.py` (alat transisi awal UAT→produksi yang gagal pada 8 Nov 2026) dan `/srv/layanan-pensiunan/deploy.sh` (izin eksekusi dicabut ke `0600`). Setiap `git push` tidak otomatis memperbarui VPS.
 
 ---
 
@@ -146,7 +147,25 @@ sudo systemctl list-timers lp-backup.timer --all
 sudo python3 -I /usr/local/lib/layanan-pensiunan/ops/server_doctor.py
 ```
 
-Doctor memeriksa process/current, loopback, permission/env tanpa mencetak secret, TLS dengan sisa minimal 48 jam, timer, kapasitas, hash backup dan password/format produksi. Sebelum cutover format/password produksi akan gagal karena UAT memang belum dibersihkan; hasil tersebut bukan perintah untuk menghapus data. Doctor tidak membuktikan reboot, satu fork dari daftar tersimpan, penerimaan perhitungan bank atau salinan laptop. Semua itu tetap perlu bukti terpisah. Worker backup menggunakan SQLite Backup API sebagai lpapp sehingga mencakup transaksi WAL dan byte dokumen. Backup tidak melakukan reset, restore, vacuum/checkpoint pada sumber live, atau pruning otomatis. Lock `.deploy.lock` dan `.ops.lock` harus juga dipakai operator cutover agar tidak bertabrakan.
+Doctor memeriksa process/current, loopback, permission/env tanpa mencetak secret, TLS dengan sisa minimal 48 jam, timer, kapasitas, hash backup dan password/format produksi. Sebelum cutover format/password produksi akan gagal karena UAT memang belum dibersihkan; hasil tersebut bukan perintah untuk menghapus data. Doctor tidak membuktikan reboot, satu fork dari daftar tersimpan, penerimaan perhitungan bank atau salinan laptop. Semua itu tetap perlu bukti terpisah. Worker backup menggunakan SQLite Backup API sebagai lpapp sehingga mencakup transaksi WAL dan byte dokumen, lalu menjalankan `PRAGMA journal_mode=DELETE` dan `VACUUM` hanya pada file salinan backup (tanpa memodifikasi sumber live) sebelum `PRAGMA integrity_check` dan SHA-256. Setelah `latest-verified.json` ditulis, `prune_scheduled_backups()` mempertahankan **48 backup `scheduled-*` terbaru** serta **1 backup `scheduled-*` terakhir per hari kalender WIB (`Asia/Jakarta`) untuk 14 hari terakhir**, sambil melindungi mutlak target `latest-verified.json`, seluruh `backup_ref` pada `releases/receipts/*.json`, dan seluruh file/folder di luar `scheduled-*`. Lock `.deploy.lock` dan `.ops.lock` harus juga dipakai operator agar tidak bertabrakan dengan rilis.
+
+### Pembaruan Root-Owned `/usr/local/lib/layanan-pensiunan/ops/server_backup.py` (22 November 2026)
+
+Karena paket arsip `lp-release` mengecualikan folder `ops/`, pembaruan `ops/server_backup.py` (kompaksi `VACUUM` + retensi otomatis 48/14 hari WIB) dipasang terpisah oleh operator root dari checkout commit yang telah direview & lulus CI:
+
+```bash
+# 1. Verifikasi checksum SHA-256 file ops/server_backup.py (LF) sebelum pemasangan:
+sha256sum ops/server_backup.py
+# Expected SHA-256: 30aeaa4f694d7c53be82561d924bac010eb4dee0e08a1ea19b5b11534575c206
+
+# 2. Pasang root-owned ke lokasi terkelola (tidak menjalankan server atau mereset DB):
+sudo install -o root -g root -m 644 ops/server_backup.py /usr/local/lib/layanan-pensiunan/ops/server_backup.py
+sha256sum /usr/local/lib/layanan-pensiunan/ops/server_backup.py
+
+# 3. Jalankan satu kali unit backup & verifikasi seluruh cek doctor (18/18):
+sudo systemctl start lp-backup.service
+sudo python3 -I /usr/local/lib/layanan-pensiunan/ops/server_doctor.py
+```
 
 ### Enkripsi dan unduh ke laptop
 
