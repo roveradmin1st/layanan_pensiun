@@ -121,7 +121,39 @@ function normalizeIndonesianMobile(raw) {
   return digits;
 }
 
+/** Sanitasi ketat parameter UTM (/[a-zA-Z0-9_-]{1,40}/) untuk atribusi sumber iklan ke CRM */
+function sanitizeUtmParam(raw) {
+  if (typeof raw !== "string") return "";
+  const cleaned = raw
+    .trim()
+    .replace(/\s+/g, "_")
+    .replace(/[^a-zA-Z0-9_-]/g, "")
+    .slice(0, 40);
+  if (!/^[a-zA-Z0-9_-]{1,40}$/.test(cleaned) || !/[a-zA-Z0-9]/.test(cleaned)) {
+    return "";
+  }
+  return cleaned;
+}
+
+/** Baca & bentuk tag ringkas UTM dari URL awal kunjungan ([Sumber: <utm_source>/<utm_campaign>]) */
+function readInitialUtmTag() {
+  if (typeof window === "undefined" || !window.location?.search) return "";
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const source = sanitizeUtmParam(params.get("utm_source"));
+    const medium = sanitizeUtmParam(params.get("utm_medium"));
+    const campaign = sanitizeUtmParam(params.get("utm_campaign"));
+    const parts = [source, medium, campaign].filter(Boolean);
+    if (!parts.length) return "";
+    return `[Sumber: ${parts.join("/")}]`;
+  } catch {
+    return "";
+  }
+}
+
 export default function App() {
+  // Tangkap tag atribusi UTM sekali saat kunjungan pertama agar tetap utuh saat berpindah halaman
+  const [utmAttributionTag] = useState(() => readInitialUtmTag());
   // Phase tracking untuk sinkronisasi widget Turnstile pada langkah form
   const [activePhase, setActivePhase] = useState("dialog");
   // Mode permintaan: 'simulasi' (dari kalkulator) vs 'konsultasi-cabang' (Menu 04 / Profil Perusahaan)
@@ -594,9 +626,10 @@ export default function App() {
       : pensionStatus;
     const submitAge = isBranchOnly ? (institution === "PNS AKTIF" ? 55 : 65) : age;
 
+    const utmPrefix = utmAttributionTag ? ` ${utmAttributionTag}` : "";
     let rawSummary;
     if (isBranchOnly) {
-      rawSummary = `[Ref: ${refCode}] Konsultasi Cabang Web: Meminta dihubungi petugas cabang terdekat.`;
+      rawSummary = `[Ref: ${refCode}]${utmPrefix} Konsultasi Cabang Web: Meminta dihubungi petugas cabang terdekat.`;
     } else {
       const extraParts = [];
       if (pensionStatus === "Prapensiun" && prapenAnalysis?.valid) {
@@ -609,7 +642,7 @@ export default function App() {
       }
       const extraText = extraParts.length ? ` | ${extraParts.join(" | ")}` : "";
       rawSummary =
-        `[Ref: ${refCode}] Simulasi Web (${activeGoal.shortLabel}): Plafon ${formatRupiah(plafond)} | ` +
+        `[Ref: ${refCode}]${utmPrefix} Simulasi Web (${activeGoal.shortLabel}): Plafon ${formatRupiah(plafond)} | ` +
         `Tenor ${effectiveTenorYears} thn (${effectiveTenorMonths} bln) | ` +
         `Est. Angsuran ${formatRupiah(estimate.installmentLow)}–${formatRupiah(estimate.installmentHigh)}/bln${extraText}`;
     }

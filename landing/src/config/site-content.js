@@ -161,8 +161,8 @@ export const SITE_CONTENT = {
   brand: {
     name: "Layanan Pensiunan",
     tagline: "Solusi Kredit Pensiun",
-    logoHorizontal: "/brand/layanan-pensiunan-logo-horizontal.png",
-    logoVertical: "/brand/layanan-pensiunan-logo-vertical.png",
+    logoHorizontal: "/brand/layanan-pensiunan-logo-horizontal.webp",
+    logoVertical: "/brand/layanan-pensiunan-logo-vertical.webp",
     logoSilhouette: "/brand/logo-mark-silhouette.png"
   },
 
