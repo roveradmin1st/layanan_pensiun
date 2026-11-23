@@ -36,6 +36,7 @@ frontend/dist/
 frontend/build/
 
 # Operating System and Editor files
+.git_old/
 .DS_Store
 Thumbs.db
 desktop.ini
@@ -60,3 +61,24 @@ logs/
 .temp/
 .tmp/
 tmp/
+
+# Confidential company blueprint, formulas, and audit instructions (local only, never push to GitHub)
+/Blue_Print/
+Blue_Print/
+
+# Sensitive personal data & nominative survey responses (UU PDP / PII Protection)
+*Nominatif*
+*nominatif*
+*(Responses)*
+*(responses)*
+
+# Operations outputs and private production preparation
+/artifacts/
+/.ops-private/
+**/credentials.private.json
+**/policy.private.json
+__pycache__/
+*.py[cod]
+
+Backup Database VPS/
+SOP Operasional.pdf

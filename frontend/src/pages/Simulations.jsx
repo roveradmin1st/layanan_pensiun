@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Search, Loader2 } from "lucide-react";
 import { api } from "../lib/api";
 import { rp, fmtDateTime } from "../lib/format";
-import { PageHeader, Pager, Empty, DesktopTable, MobileList, ListCard } from "../components/common";
+import { useAuth } from "../context/AuthContext";
+import { PageHeader, Pager, Empty, DesktopTable, MobileList, ListCard, TableSkeleton, CardListSkeleton } from "../components/common";
 import { Input } from "../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
@@ -10,6 +11,7 @@ import ResultView from "../components/calc/ResultView";
 import { AiSummary, DownloadActions } from "../components/calc/SimExtras";
 
 export default function Simulations() {
+  const { user } = useAuth();
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
   const [data, setData] = useState(null);
@@ -24,7 +26,27 @@ export default function Simulations() {
 
   return (
     <div>
-      <PageHeader eyebrow="Calc Platinum" title="Riwayat Simulasi" desc="Seluruh simulasi final yang telah tersimpan beserta file PDF & gambar." />
+      <PageHeader
+        eyebrow="Layanan Pensiunan"
+        title="Riwayat Simulasi"
+        desc={
+          user?.bank_scope === "bsi_only"
+            ? `Arsip simulasi pembiayaan khusus Bank Syariah Indonesia (BSI) di Cabang ${user.branch || "Anda"}.`
+            : "Arsip seluruh simulasi pembiayaan yang telah tersimpan beserta dokumen PDF & ringkasan resmi."
+        }
+        actions={
+          user?.bank_scope === "bsi_only" ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-bold text-[#078D67]" data-testid="scope-badge-sim-bsi">
+              <span className="h-2 w-2 rounded-full bg-[#078D67] animate-pulse" />
+              Otoritas: Khusus BSI
+            </span>
+          ) : user?.role === "admin_branch" ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700" data-testid="scope-badge-sim-all">
+              Otoritas: Multi Mitra (All Bank)
+            </span>
+          ) : null
+        }
+      />
       <div className="lp-card">
         <div className="border-b border-slate-100 p-4">
           <div className="relative max-w-md">
@@ -55,15 +77,7 @@ export default function Simulations() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {!data && (
-                <TableRow>
-                  <TableCell colSpan={8}>
-                    <div className="flex justify-center py-8">
-                      <Loader2 className="h-5 w-5 animate-spin" />
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )}
+              {!data && <TableSkeleton cols={8} rows={6} />}
               {data?.items.map((s) => (
                 <TableRow
                   key={s.id}
@@ -78,11 +92,17 @@ export default function Simulations() {
                   <TableCell>{s.result.tenor} bln</TableCell>
                   <TableCell className="lp-num">
                     {s.result.bank_key === "bsi_prapen" || s.result.bsi_details ? (
-                      <span className="text-xs">
-                        <span className="text-slate-500">Aktif:</span> {rp(s.result.bsi_details?.active_installment || s.result.bank_installment)}
-                        <br />
-                        <span className="text-[#078D67] font-semibold">Pensiun:</span> {rp(s.result.bsi_details?.pension_installment || s.result.coop_installment)}
-                      </span>
+                      s.result.bsi_details?.sub_product === "PENSIUN" ? (
+                        <span className="text-xs font-semibold text-[#078D67]">
+                          {rp(s.result.bsi_details?.pension_installment || s.result.coop_installment)} / bln
+                        </span>
+                      ) : (
+                        <span className="text-xs">
+                          <span className="text-slate-500">Aktif:</span> {rp(s.result.bsi_details?.active_installment || s.result.bank_installment)}
+                          <br />
+                          <span className="text-[#078D67] font-semibold">Pensiun:</span> {rp(s.result.bsi_details?.pension_installment || s.result.coop_installment)}
+                        </span>
+                      )
                     ) : (
                       rp(s.result.coop_installment)
                     )}
@@ -97,11 +117,7 @@ export default function Simulations() {
 
         {/* Mobile List View */}
         <MobileList testid="simulations-mobile-list">
-          {!data && (
-            <div className="flex justify-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin" />
-            </div>
-          )}
+          {!data && <CardListSkeleton rows={5} />}
           {data?.items.map((s) => (
             <ListCard
               key={s.id}
@@ -124,9 +140,15 @@ export default function Simulations() {
                 <div className="col-span-2">
                   <span className="text-slate-400">Angsuran:</span>{" "}
                   {s.result.bank_key === "bsi_prapen" || s.result.bsi_details ? (
-                    <span className="font-semibold text-[#078D67] lp-num">
-                      {rp(s.result.bsi_details?.active_installment || s.result.bank_installment)} (Aktif) / {rp(s.result.bsi_details?.pension_installment || s.result.coop_installment)} (Pensiun)
-                    </span>
+                    s.result.bsi_details?.sub_product === "PENSIUN" ? (
+                      <span className="font-semibold text-[#078D67] lp-num">
+                        {rp(s.result.bsi_details?.pension_installment || s.result.coop_installment)} / bln
+                      </span>
+                    ) : (
+                      <span className="font-semibold text-[#078D67] lp-num">
+                        {rp(s.result.bsi_details?.active_installment || s.result.bank_installment)} (Aktif) / {rp(s.result.bsi_details?.pension_installment || s.result.coop_installment)} (Pensiun)
+                      </span>
+                    )
                   ) : (
                     <b className="font-semibold text-[#351080] lp-num">{rp(s.result.coop_installment)}</b>
                   )}
