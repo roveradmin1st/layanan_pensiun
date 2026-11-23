@@ -138,6 +138,17 @@ def collect_package_files(root: Path) -> dict[str, Path]:
         if p.is_file() and not p.is_symlink() and not is_denied(str(p.relative_to(root))):
             files[str(p.relative_to(root))] = p
 
+    # 5b. landing/dist/** (Public Landing Page static bundle, required when landing/package.json exists)
+    landing_pkg = root / "landing" / "package.json"
+    landing_dist_dir = root / "landing" / "dist"
+    landing_index = landing_dist_dir / "index.html"
+    if landing_pkg.is_file() or landing_dist_dir.is_dir():
+        if not landing_index.is_file():
+            raise FileNotFoundError(f"Missing required landing page build output at {landing_index}")
+        for p in landing_dist_dir.rglob("*"):
+            if p.is_file() and not p.is_symlink() and not is_denied(str(p.relative_to(root))):
+                files[str(p.relative_to(root))] = p
+
     # 6. PM2 Ecosystem config (if exists in ops/ecosystem.config.cjs or root)
     eco_file = root / "ops" / "ecosystem.config.cjs"
     if eco_file.is_file():

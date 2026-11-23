@@ -116,15 +116,23 @@ def main():
     if not args.skip_install:
         run(['npm', 'ci', '--omit=dev'], ROOT / 'backend')
         run(['npm', 'ci', '--include=dev'], ROOT / 'frontend')
+        if (ROOT / 'landing/package.json').is_file():
+            run(['npm', 'ci', '--include=dev'], ROOT / 'landing')
     run([sys.executable, '-m', 'unittest', 'discover', '-s', 'ops/tests', '-v'], ROOT)
     build_env = {**os.environ, 'VITE_BACKEND_URL': ''}
     run(['npm', 'run', 'build'], ROOT / 'frontend', build_env)
+    if (ROOT / 'landing/package.json').is_file():
+        run(['npm', 'run', 'build'], ROOT / 'landing', build_env)
     with tempfile.TemporaryDirectory(prefix='lp-ci-') as directory:
         sandbox = Path(directory)
         shutil.copytree(ROOT / 'backend', sandbox / 'backend', ignore=shutil.ignore_patterns('node_modules', 'data', '.env*', '*.log'))
         (sandbox / 'backend/node_modules').symlink_to(ROOT / 'backend/node_modules', target_is_directory=True)
         shutil.copytree(ROOT / 'frontend/src', sandbox / 'frontend/src')
         (sandbox / 'frontend/dist').symlink_to(ROOT / 'frontend/dist', target_is_directory=True)
+        if (ROOT / 'landing/dist').is_dir():
+            (sandbox / 'landing').mkdir(exist_ok=True)
+            shutil.copytree(ROOT / 'landing/src', sandbox / 'landing/src')
+            (sandbox / 'landing/dist').symlink_to(ROOT / 'landing/dist', target_is_directory=True)
         (sandbox / 'ops').symlink_to(ROOT / 'ops', target_is_directory=True)
         (sandbox / '.github').symlink_to(ROOT / '.github', target_is_directory=True)
         (sandbox / 'docs').symlink_to(ROOT / 'docs', target_is_directory=True)

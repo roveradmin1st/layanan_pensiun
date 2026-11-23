@@ -1,6 +1,6 @@
 # Status Server dan Kesiapan Operasional — Layanan Pensiunan
 
-Tanggal acuan konteks server terkini: **22 November 2026** (sinkronisasi audit host/hardening VPS dan pengembangan perbaikan keamanan aplikasi).
+Tanggal acuan konteks server terkini: **23 November 2026** (finalisasi branch landing page publik `feat/landing-page-20261122`; baseline produksi aktif VPS tetap di `6a791a34b4f90111fabe3e5ce55fef08a8395913`).
 Dasar fakta server: hasil pelaporan controller VPS (`lp-release` / `ops/server_release.py`) per 15 November 2026, verifikasi commit pada repository `https://github.com/roveradmin1st/layanan_pensiun.git`, serta catatan hardening host VPS per **22 November 2026**. Catatan audit sebelumnya (8–9 November 2026 pada rilis `c76e823`/`fe1025a`) dan persiapan awal (7 November 2026) dipertahankan di bawah sebagai riwayat historis bertanggal.
 
 ## 1. Kondisi Server Aktual yang Terkonfirmasi (Sinkronisasi 15–22 November 2026)
@@ -257,3 +257,21 @@ Berdasarkan temuan audit pada `Blue_Print/command.md` (22 November 2026), branch
 6. **Kompaksi Backup `VACUUM` & Retensi Terjadwal (`ops/server_backup.py`):** Menambahkan `isolation_level=None` + `VACUUM` pada worker salinan backup sebelum `integrity_check` dan SHA-256 (mengeliminasi `freelist_count` tanpa menyentuh DB produksi live), serta menambahkan `prune_scheduled_backups()` yang mempertahankan **48 backup `scheduled-*` terbaru** + **1 backup `scheduled-*` terakhir per hari kalender WIB (`Asia/Jakarta`) untuk 14 hari terakhir** sambil melindungi mutlak target `latest-verified.json`, seluruh `backup_ref` di `releases/receipts/*.json`, dan seluruh file/folder di luar `scheduled-*`.
    - **Catatan Instalasi VPS:** Karena `ops/` masuk denylist paket `lp-release`, pembaruan `/usr/local/lib/layanan-pensiunan/ops/server_backup.py` dipasang secara terpisah oleh operator root dengan verifikasi SHA-256 (lihat [RUNBOOK.md](RUNBOOK.md)).
 7. **Eliminasi Serialisasi JSON Ganda (`backend/src/db/database.js`):** `withTransaction()` memakai `structuredClone(store)` untuk snapshot rollback in-memory dan menulis `saveStore()` satu kali tepat sebelum `COMMIT` transaksi terluar; `addAuditLog()` menunda `saveStore()` saat `inTransaction === true`.
+
+---
+
+## 9. Pengembangan & Finalisasi Landing Page Publik (23 November 2026 — Branch `feat/landing-page-20261122`)
+
+Dibangun di atas commit `24849af0ef32e8f471aa4fe229138f1b663b6e52` (branch hardening 22 November 2026) dan **belum dipasang ke VPS produksi** (menunggu CI hijau dan instruksi deployment resmi pemilik):
+
+1. **Isolasi Permukaan Publik & Capture Leads (`landing/`, `backend/src/routes/public-leads.js`, `backend/src/server.js`, `ops/ci.py`, `ops/package_release.py`):**
+   - Permukaan publik `landing/` terpisah total dari aplikasi CRM internal (`frontend/src`) dan diisolasi via header `X-LP-Surface: public-landing` sehingga jalur internal `/api/*` selain `POST /api/public/leads` mengembalikan `404`.
+   - `POST /api/public/leads` dilindungi limit payload `8KB`, *rate limiter* IP (`5 req / 15 menit`), *honeypot* (`company_website`), verifikasi Cloudflare Turnstile opsional/terpaksa via DI, sanitasi *formula-injection*, anti-enumerasi duplikat, serta mempertahankan kontrak data `lp-production-20261109-v1` (`activities: []`, segmentasi usia prapensiun vs pensiun).
+2. **Desain & Konten Publik (`landing/src/`):**
+   - Gerbang pembuka logo resmi dan maskot pemandu **Peni** (`mascot-intro-salam.webp` / `mascot-intro-point.webp`) dengan kalkulator simulasi awal awam (Pensiun Murni, Prapensiun dengan input Tanggal Pensiun/TMT, Take Over, Cek Cabang 7 Kanwil), dukungan tombol Back via History API, serta berbagi ringkasan estimasi ke WhatsApp keluarga.
+   - Halaman Profil Perusahaan resmi **PT Kolaborasi Ekosistem Nusantara (KEN)**: jargon *flagship* bersama maskot Peni, 3 standar anti-penipuan & batas kewenangan terhadap bank mitra, nilai kerja **PRIMA**, peta garis wilayah Indonesia interaktif tanpa kotak (32 provinsi BAKOSURTANAL + 30 titik layanan 7 Kanwil), 6 tahap pendampingan, pembaca Edukasi (6 topik), FAQ, Karir, Mitra & Portofolio bertahap, serta *embed* Google Maps kantor Pematangsiantar dan kontak WhatsApp resmi Peni (`0851 2114 2064`).
+3. **Verifikasi Lokal & Final QC (23 November 2026):**
+   - **Full Regression Suite Backend (`npm --prefix backend test`):** **80/80 pengujian LULUS 100%** (termasuk `tests/public-landing-leads.test.mjs`).
+   - **Build Produksi Landing (`npm --prefix landing run build`):** Lulus (`dist/assets/index-CrZqTLbD.css 38,60 kB`, `index-C6mHPv1l.js 341,45 kB`, `0` aset yatim, `0` kelas CSS mati).
+   - **Audit Keamanan, Aksesibilitas & Browser QC (`http://127.0.0.1:4174/`):** `0` *sink* `innerHTML`/`dangerouslySetInnerHTML`, `9/9` tautan eksternal `noopener noreferrer`, *timeout* `15 detik` pada `fetch`, `0` label tanpa `for`, `0` error konsol dan `0` *horizontal overflow* pada Desktop (`1280×900`) maupun Mobile (`390×844`).
+   - **GitHub Actions CI (`validate.yml`):** Dipantau segera setelah *push* ke `origin/feat/landing-page-20261122`.

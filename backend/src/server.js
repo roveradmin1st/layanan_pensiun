@@ -20,6 +20,7 @@ import {
 } from "./config/bsi-product-config.js";
 import { MASTER_BRANCHES, KANWIL_BRANCHES, normalizeBranch, resolveBranchFromCityOrText } from "./config/branches.js";
 import { createPensionPreviewRouter } from "./routes/bsi-pensiun-preview.js";
+import { createPublicLeadsRouter } from "./routes/public-leads.js";
 import {
   calculateMax,
   calculatePreview,
@@ -88,17 +89,38 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 12 
 
 app.use(cors({ origin: IS_PROD ? false : true, credentials: true, exposedHeaders: ["X-Document-Version", "X-Document-SHA256", "Content-Disposition"] }));
 app.use("/api/auth", express.json({ limit: "8kb" }));
+app.use("/api/public/leads", express.json({ limit: "8kb" }));
 app.use(express.json({ limit: "128kb" }));
 app.use(cookieParser());
+
+const LANDING_DIST = path.resolve(__dirname, "../../landing/dist");
+const isPublicSurface = (req) => req.headers["x-lp-surface"] === "public-landing";
 
 // Security Headers (Enterprise Financial Standard)
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-  res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive, nosnippet");
+  if (!isPublicSurface(req) || req.path.startsWith("/api")) {
+    res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive, nosnippet");
+  }
   next();
 });
+
+// Public Surface Guard (Seam #1: isolates layananpensiunan.id from internal CRM & /api/*)
+app.use((req, res, next) => {
+  if (!isPublicSurface(req)) return next();
+  if (req.path === "/api/public/leads" && req.method === "POST") return next();
+  if (req.path.startsWith("/api")) {
+    return res.status(404).json({ detail: "Endpoint tidak ditemukan." });
+  }
+  if (!["GET", "HEAD"].includes(req.method)) {
+    return res.status(405).end();
+  }
+  next();
+});
+
+app.use("/api/public/leads", createPublicLeadsRouter());
 
 function sanitizeUser(u) {
   if (!u) return null;
@@ -4624,6 +4646,36 @@ app.post("/api/backup/restore", requireAuth, requireRoles("super_admin"), (req, 
     return counts;
   });
   res.json({ restored });
+});
+
+// Serve built React public landing page when accessed via X-LP-Surface: public-landing
+const landingStaticMiddleware = express.static(LANDING_DIST, {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith("index.html")) {
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    } else if (filePath.includes(`${path.sep}assets${path.sep}`) || filePath.includes("/assets/")) {
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    } else if (filePath.includes(`${path.sep}brand${path.sep}`) || filePath.includes("/brand/")) {
+      res.setHeader("Cache-Control", "public, max-age=86400");
+    }
+  }
+});
+
+app.use((req, res, next) => {
+  if (!isPublicSurface(req)) return next();
+  if (req.path.startsWith("/api")) return next();
+  if (!fs.existsSync(LANDING_DIST)) {
+    return res.status(404).send("Landing page build belum tersedia.");
+  }
+  return landingStaticMiddleware(req, res, (err) => {
+    if (err) return next(err);
+    const indexPath = path.join(LANDING_DIST, "index.html");
+    if (!fs.existsSync(indexPath)) {
+      return res.status(404).send("Landing page index belum tersedia.");
+    }
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    return res.sendFile(indexPath);
+  });
 });
 
 // Serve built React frontend in production if `frontend/dist` exists

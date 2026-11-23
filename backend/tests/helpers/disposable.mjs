@@ -17,6 +17,8 @@ export function disposableBackend() {
   fs.symlinkSync(path.join(backend, 'node_modules'), path.join(cwd, 'node_modules'), linkType);
   fs.mkdirSync(path.join(root, 'frontend/dist'), { recursive: true });
   fs.writeFileSync(path.join(root, 'frontend/dist/index.html'), '<!doctype html><title>Disposable test</title>');
+  fs.mkdirSync(path.join(root, 'landing/dist'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'landing/dist/index.html'), '<!doctype html><title>Layanan Pensiunan — Public Landing</title>');
   return { root, cwd, database: path.join(cwd, 'data/enterprise.sqlite'),
     cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }

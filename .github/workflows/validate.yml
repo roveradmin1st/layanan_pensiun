@@ -31,6 +31,7 @@ jobs:
           cache-dependency-path: |
             backend/package-lock.json
             frontend/package-lock.json
+            landing/package-lock.json
       - name: Validate with disposable databases
         run: python3 ops/ci.py
       - name: Install the test browser
