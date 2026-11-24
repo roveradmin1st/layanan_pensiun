@@ -177,39 +177,61 @@ export const CtaButton = ({ className = "", ...p }) => (
 /* ---------------------------------------------------------------------------
  * Tampilan daftar responsif: tabel di >= md, kartu ringkas di < md.
  * ------------------------------------------------------------------------- */
-export const DesktopTable = ({ children }) => <div className="hidden md:block">{children}</div>;
+export const DesktopTable = ({ children, testid }) => <div className="hidden md:block" data-testid={testid}>{children}</div>;
 
-export const MobileList = ({ children }) => <div className="divide-y divide-slate-100 md:hidden">{children}</div>;
+export const MobileList = ({ children, testid }) => <div className="divide-y divide-slate-100 md:hidden" data-testid={testid}>{children}</div>;
 
-export const ListCard = ({ title, subtitle, badge, meta = [], leading, onClick, testid, footer }) => (
-  <div
-    role={onClick ? "button" : undefined}
-    tabIndex={onClick ? 0 : undefined}
-    onClick={onClick}
-    onKeyDown={(e) => { if (onClick && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onClick(); } }}
-    className={`flex gap-3 px-4 py-3.5 ${onClick ? "cursor-pointer active:bg-slate-100 hover:bg-slate-50" : ""}`}
-    data-testid={testid}
-  >
-    {leading && <div className="pt-0.5" onClick={(e) => e.stopPropagation()}>{leading}</div>}
-    <div className="min-w-0 flex-1">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-slate-900">{title}</p>
-          {subtitle && <p className="mt-0.5 truncate text-xs text-slate-500">{subtitle}</p>}
+export const ListCard = ({ title, subtitle, badge, meta = [], leading, onClick, testid, footer, children }) => {
+  const validMeta = (Array.isArray(meta) ? meta : []).filter(
+    (item) => item !== null && item !== undefined && item !== false && item !== ""
+  );
+  const actionArea = footer || children;
+  return (
+    <div
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onClick={onClick}
+      onKeyDown={(e) => { if (onClick && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onClick(); } }}
+      className={`flex gap-3 px-4 py-3.5 ${onClick ? "cursor-pointer active:bg-slate-100 hover:bg-slate-50" : ""}`}
+      data-testid={testid}
+    >
+      {leading && <div className="pt-0.5" onClick={(e) => e.stopPropagation()}>{leading}</div>}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-slate-900">{title}</p>
+            {subtitle && <p className="mt-0.5 truncate text-xs text-slate-500">{subtitle}</p>}
+          </div>
+          {badge && <div className="shrink-0">{badge}</div>}
         </div>
-        {badge && <div className="shrink-0">{badge}</div>}
+        {validMeta.length > 0 && (
+          <dl className="mt-2.5 grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+            {validMeta.map((item, idx) => {
+              if (Array.isArray(item)) {
+                const [k, v] = item;
+                return (
+                  <div key={`${String(k ?? "meta")}-${idx}`} className="min-w-0">
+                    <dt className="text-slate-400">{k}</dt>
+                    <dd className="truncate font-medium text-slate-700 lp-num">{v ?? "-"}</dd>
+                  </div>
+                );
+              }
+              return (
+                <div key={`meta-item-${idx}`} className="min-w-0">
+                  <dt className="sr-only">Informasi</dt>
+                  <dd className="truncate font-medium text-slate-700 lp-num">{item}</dd>
+                </div>
+              );
+            })}
+          </dl>
+        )}
+        {actionArea ? (
+          <div onClick={(e) => e.stopPropagation()}>
+            {footer}
+            {children}
+          </div>
+        ) : null}
       </div>
-      {meta.length > 0 && (
-        <dl className="mt-2.5 grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
-          {meta.filter(Boolean).map(([k, v]) => (
-            <div key={k} className="min-w-0">
-              <dt className="text-slate-400">{k}</dt>
-              <dd className="truncate font-medium text-slate-700 lp-num">{v ?? "-"}</dd>
-            </div>
-          ))}
-        </dl>
-      )}
-      {footer}
     </div>
-  </div>
-);
+  );
+};

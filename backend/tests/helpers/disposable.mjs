@@ -50,7 +50,7 @@ export async function startFixture(fixture, mode = 'development', secret = 'test
   };
   try {
     await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Disposable server startup timed out')), 10000);
+      const timer = setTimeout(() => reject(new Error('Disposable server startup timed out')), 25000);
       proc.stdout.on('data', (chunk) => { if (String(chunk).toLowerCase().includes('running on')) { clearTimeout(timer); resolve(); } });
       proc.once('error', (error) => { clearTimeout(timer); reject(error); });
       proc.once('exit', (code) => { clearTimeout(timer); reject(new Error(`Disposable server exited (${code}): ${log}`)); });

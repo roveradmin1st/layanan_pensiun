@@ -941,10 +941,17 @@ function computeAms2LiveRecommendation(d, cfg) {
 
 export default function CalculatorPage() {
   const { user } = useAuth();
-  const [sp] = useSearchParams();
+  const [sp, setSp] = useSearchParams();
   const nav = useNavigate();
   const leadId = sp.get("lead");
   const bankParam = sp.get("bank");
+
+  const detachLeadQueryParam = () => {
+    if (!sp.has("lead")) return;
+    const nextParams = new URLSearchParams(sp);
+    nextParams.delete("lead");
+    setSp(nextParams, { replace: true });
+  };
   const [banks, setBanks] = useState([]);
   const [partnerParams, setPartnerParams] = useState(null);
   const [bankKey, setBankKey] = useState(bankParam || "bsi_prapen");
@@ -1387,6 +1394,7 @@ export default function CalculatorPage() {
   };
 
   const resetAms2Form = () => {
+    detachLeadQueryParam();
     setD({
       ...d,
       name: "",
@@ -1516,6 +1524,7 @@ export default function CalculatorPage() {
   };
 
   const resetBsiForm = () => {
+    detachLeadQueryParam();
     const today = todayIsoLocal();
     const keepPen = d.bsi_sub_product === "PENSIUN";
     setD({
@@ -1684,6 +1693,7 @@ export default function CalculatorPage() {
   };
 
   const resetMestikaForm = () => {
+    detachLeadQueryParam();
     setD({
       ...d,
       name: "",
@@ -1751,6 +1761,7 @@ export default function CalculatorPage() {
   };
 
   const resetCapitalForm = () => {
+    detachLeadQueryParam();
     setD({
       ...d,
       name: "",
@@ -1786,6 +1797,7 @@ export default function CalculatorPage() {
   };
 
   const resetCurrentBankFromZero = () => {
+    detachLeadQueryParam();
     if (isAms2) return resetAms2Form();
     if (isBsi) return resetBsiForm();
     if (isCapital) return resetCapitalForm();

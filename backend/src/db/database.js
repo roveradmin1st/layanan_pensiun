@@ -16,6 +16,7 @@ import {
 } from "../config/bsi-product-config.js";
 import { calculatePreview } from "../engines/calc-engine.js";
 import { validateState } from "./state-schema.js";
+import { todayWibIso } from "../utils/time-wib.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const IS_PROD = process.env.NODE_ENV === "production";
@@ -197,7 +198,7 @@ function createInitialState() {
     }
   ];
 
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = todayWibIso();
   const leads = [
     {
       id: "lead-1001",
@@ -1222,9 +1223,22 @@ export function getStore() {
 }
 
 let inTransaction = false;
+let transactionDepth = 0;
+
+function restoreStateInPlace(target, snapshot) {
+  if (!target || typeof target !== "object" || Array.isArray(target)) {
+    return snapshot;
+  }
+  for (const key of Object.keys(target)) {
+    delete target[key];
+  }
+  Object.assign(target, snapshot);
+  return target;
+}
 
 export function saveStore() {
   if (!stateCache) return;
+  validateState(stateCache, { production: IS_PROD });
   const now = new Date().toISOString();
   const payload = JSON.stringify(stateCache);
   if (inTransaction) {
@@ -1250,27 +1264,58 @@ export function saveStore() {
 }
 
 export function withTransaction(workFn) {
+  if (typeof workFn !== "function") {
+    throw new TypeError("INVALID_TRANSACTION_CALLBACK: withTransaction memerlukan fungsi callback.");
+  }
+  if (workFn.constructor?.name === "AsyncFunction") {
+    throw new TypeError("ASYNC_TRANSACTION_FORBIDDEN: withTransaction hanya menerima fungsi sinkron, bukan async/Promise.");
+  }
+
   const store = getStore();
   const snapshot = structuredClone(store);
-  const startedOuter = !inTransaction;
+  const currentDepth = transactionDepth;
+  const startedOuter = currentDepth === 0;
+  const savepointName = `lp_sp_${currentDepth}`;
+
   if (startedOuter) {
     db.exec("BEGIN IMMEDIATE");
-    inTransaction = true;
+  } else {
+    db.exec(`SAVEPOINT ${savepointName}`);
   }
+  transactionDepth = currentDepth + 1;
+  inTransaction = true;
+
   try {
     const result = workFn(store);
+    if (result && (typeof result === "object" || typeof result === "function") && typeof result.then === "function") {
+      throw new TypeError("ASYNC_TRANSACTION_FORBIDDEN: Callback withTransaction tidak boleh mengembalikan Promise.");
+    }
     if (startedOuter) {
+      validateState(stateCache, { production: IS_PROD });
       saveStore();
       db.exec("COMMIT");
+      transactionDepth = 0;
       inTransaction = false;
+    } else {
+      db.exec(`RELEASE SAVEPOINT ${savepointName}`);
+      transactionDepth = currentDepth;
+      inTransaction = transactionDepth > 0;
     }
     return result;
   } catch (err) {
     if (startedOuter) {
       try { db.exec("ROLLBACK"); } catch { /* ignore */ }
+      transactionDepth = 0;
       inTransaction = false;
+    } else {
+      try {
+        db.exec(`ROLLBACK TO SAVEPOINT ${savepointName}`);
+        db.exec(`RELEASE SAVEPOINT ${savepointName}`);
+      } catch { /* ignore */ }
+      transactionDepth = currentDepth;
+      inTransaction = transactionDepth > 0;
     }
-    stateCache = snapshot;
+    stateCache = restoreStateInPlace(stateCache, snapshot);
     throw err;
   }
 }
@@ -1278,7 +1323,7 @@ export function withTransaction(workFn) {
 export function addAuditLog(user, action, entity, detail, ip = "127.0.0.1") {
   const store = getStore();
   store.audit_logs.unshift({
-    id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    id: `aud-${crypto.randomUUID()}`,
     user_id: user?.id || "system",
     user_name: user?.name || "System",
     role: user?.role || "system",
@@ -1295,10 +1340,12 @@ export function addAuditLog(user, action, entity, detail, ip = "127.0.0.1") {
 }
 
 export function saveUploadedFile(id, filename, mimeType, buffer) {
+  if (typeof id !== "string" || !id.trim()) {
+    throw new Error("INVALID_FILE_ID: ID berkas unggahan wajib berupa teks non-kosong.");
+  }
   db.prepare(`
     INSERT INTO uploaded_files (id, filename, mime_type, data, created_at)
     VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET filename = excluded.filename, mime_type = excluded.mime_type, data = excluded.data, created_at = excluded.created_at
   `).run(id, filename, mimeType, buffer, new Date().toISOString());
 }
 

@@ -249,6 +249,40 @@ const BRANCH_ALIASES = {
   "AMBON": "MANADO"
 };
 
+function escapeRegExp(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function cleanBranchInput(raw) {
+  if (!raw) return "";
+  return String(raw)
+    .trim()
+    .toUpperCase()
+    .replace(/[\.\,\-_\/()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Gabungkan MASTER_BRANCHES dan BRANCH_ALIASES, urutkan dari alias TERPANJANG ke TERPENDEK
+// serta gunakan batas kata (\b) agar "KOTA SOLOK" -> "PADANG" (bukan "SOLO") dan
+// "BANJARBARU" -> "BANJARMASIN" (bukan "BANJAR" -> "TASIKMALAYA").
+const SORTED_BRANCH_MATCHERS = (() => {
+  const combined = new Map();
+  for (const master of MASTER_BRANCHES) {
+    combined.set(master, master);
+  }
+  for (const [alias, master] of Object.entries(BRANCH_ALIASES)) {
+    combined.set(alias, master);
+  }
+  return Array.from(combined.entries())
+    .sort((a, b) => b[0].length - a[0].length || a[0].localeCompare(b[0]))
+    .map(([alias, master]) => ({
+      alias,
+      master,
+      regex: new RegExp(`(?:^|\\b)${escapeRegExp(alias)}(?:\\b|$)`)
+    }));
+})();
+
 /**
  * Normalisasi nama cabang menjadi format kanonikal Master Cabang.
  * Mencegah kegagalan otorisasi atau pencarian akibat inkonsistensi penulisan / spasi / kapitalisasi.
@@ -256,33 +290,18 @@ const BRANCH_ALIASES = {
  * @returns {string}
  */
 export function normalizeBranch(rawBranch) {
-  if (!rawBranch) return "";
-  const cleaned = String(rawBranch)
-    .trim()
-    .toUpperCase()
-    .replace(/[\.\,\-_]/g, " ")
-    .replace(/\s+/g, " ");
+  const cleaned = cleanBranchInput(rawBranch);
+  if (!cleaned) return "";
 
   if (BRANCH_ALIASES[cleaned]) {
     return BRANCH_ALIASES[cleaned];
   }
-
-  // 1. Cek kecocokan langsung atau mengandung nama cabang kanonikal
-  for (const master of MASTER_BRANCHES) {
-    if (
-      cleaned === master ||
-      cleaned.startsWith(master + " ") ||
-      cleaned.endsWith(" " + master) ||
-      cleaned.includes(" " + master + " ") ||
-      cleaned.includes(master)
-    ) {
-      return master;
-    }
+  if (MASTER_BRANCHES.includes(cleaned)) {
+    return cleaned;
   }
 
-  // 2. Cek kecocokan parsial terhadap alias daerah/outlet
-  for (const [alias, master] of Object.entries(BRANCH_ALIASES)) {
-    if (cleaned.includes(alias)) {
+  for (const { master, regex } of SORTED_BRANCH_MATCHERS) {
+    if (regex.test(cleaned)) {
       return master;
     }
   }
@@ -295,9 +314,15 @@ export function normalizeBranch(rawBranch) {
  * @param {string} city
  * @param {string} branchHint
  * @param {string} explicitTargetBranch
+ * @param {string} fallbackBranch - Default "BANDUNG" untuk impor internal; isi "PUSAT JAKARTA" untuk landing publik
  * @returns {string}
  */
-export function resolveBranchFromCityOrText(city = "", branchHint = "", explicitTargetBranch = "") {
+export function resolveBranchFromCityOrText(
+  city = "",
+  branchHint = "",
+  explicitTargetBranch = "",
+  fallbackBranch = "BANDUNG"
+) {
   if (explicitTargetBranch) {
     const norm = normalizeBranch(explicitTargetBranch);
     if (norm) return norm;
@@ -311,14 +336,7 @@ export function resolveBranchFromCityOrText(city = "", branchHint = "", explicit
   if (city) {
     const norm = normalizeBranch(city);
     if (norm && MASTER_BRANCHES.includes(norm)) return norm;
-
-    const cityUpper = String(city).toUpperCase();
-    for (const [alias, master] of Object.entries(BRANCH_ALIASES)) {
-      if (cityUpper.includes(alias)) {
-        return master;
-      }
-    }
   }
 
-  return "BANDUNG"; // Default fallback operasional
+  return fallbackBranch;
 }

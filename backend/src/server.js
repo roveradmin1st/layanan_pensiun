@@ -47,6 +47,7 @@ import { LoginLimiter } from "./security/login-limiter.js";
 import { documentVersion, documentHash, documentFileId, documentAccepted } from "./security/application-documents.js";
 import { buildZipBuffer, sanitizeSafeFilename } from "./utils/zip-builder.js";
 import { parseImportFile } from "./utils/lead-import-parser.js";
+import { todayWibIso, yearMonthWibCompact, isoTimestampToWibDate } from "./utils/time-wib.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4000);
@@ -107,10 +108,24 @@ app.use((req, res, next) => {
   next();
 });
 
+const MAX_PAGE_SIZE = 200;
+
+function parseBoundedPage(raw) {
+  const n = Number.parseInt(String(raw ?? "1"), 10);
+  return Number.isFinite(n) && n >= 1 ? n : 1;
+}
+
+function parseBoundedPageSize(raw, defaultSize = 10, maxSize = MAX_PAGE_SIZE) {
+  const n = Number.parseInt(String(raw ?? defaultSize), 10);
+  if (!Number.isFinite(n) || n < 1) return defaultSize;
+  return Math.min(maxSize, n);
+}
+
 // Public Surface Guard (Seam #1: isolates layananpensiunan.id from internal CRM & /api/*)
 app.use((req, res, next) => {
   if (!isPublicSurface(req)) return next();
   if (req.path === "/api/public/leads" && req.method === "POST") return next();
+  if (req.path === "/api/public/config" && ["GET", "HEAD"].includes(req.method)) return next();
   if (req.path.startsWith("/api")) {
     return res.status(404).json({ detail: "Endpoint tidak ditemukan." });
   }
@@ -118,6 +133,15 @@ app.use((req, res, next) => {
     return res.status(405).end();
   }
   next();
+});
+
+app.get("/api/public/config", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+  return res.status(200).json({
+    turnstile_site_key: String(
+      process.env.TURNSTILE_SITE_KEY || process.env.VITE_TURNSTILE_SITE_KEY || ""
+    ).trim()
+  });
 });
 
 app.use("/api/public/leads", createPublicLeadsRouter());
@@ -638,10 +662,10 @@ app.get("/api/dashboard", requireAuth, (req, res) => {
     by_status[l.status] = (by_status[l.status] || 0) + 1;
   }
 
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = todayWibIso();
   const growth = [];
   for (let i = 29; i >= 0; i--) {
-    const d = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+    const d = todayWibIso(Date.now() - i * 86400000);
     growth.push({
       date: d,
       kumulatif: Math.max(1, visibleLeads.length - Math.floor(i / 6)),
@@ -1024,7 +1048,7 @@ function handleBsiProductParamMutation(req, res, store, targetPartner, rawProduc
   if (req.user.role === "admin_ops") {
     const prop = withTransaction(() => {
       const createdProp = {
-        id: `prop-${Date.now()}`,
+        id: `prop-${crypto.randomUUID()}`,
         partner_key: "bsi_prapen",
         product_key: productCode,
         partner_name: `${targetPartner.name} — ${currentProd.label || productCode}`,
@@ -1513,7 +1537,7 @@ app.put("/api/calc/params/:partnerKey", requireAuth, requireRoles("super_admin",
   if (req.user.role === "admin_ops") {
     const prop = withTransaction(() => {
       const createdProp = {
-        id: `prop-${Date.now()}`,
+        id: `prop-${crypto.randomUUID()}`,
         partner_key: partnerKey,
         partner_name: target.name,
         proposed_by_id: req.user.id,
@@ -1726,8 +1750,8 @@ app.post("/api/calc/preview", requireAuth, (req, res) => {
 app.get("/api/simulations", requireAuth, (req, res) => {
   const store = getStore();
   const q = String(req.query.q || "").toLowerCase().trim();
-  const page = Math.max(1, Number(req.query.page || 1));
-  const pageSize = Math.max(1, Number(req.query.page_size || 10));
+  const page = parseBoundedPage(req.query.page);
+  const pageSize = parseBoundedPageSize(req.query.page_size, 10);
 
   let list = store.simulations.filter((s) => canAccessSimulation(req.user, s, store));
   if (q) {
@@ -1892,9 +1916,9 @@ app.post("/api/simulations", requireAuth, (req, res) => {
 
   const sim = withTransaction(() => {
     const seq = String(store.simulations.length + 1).padStart(4, "0");
-    const ym = new Date().toISOString().slice(0, 7).replace("-", "");
+    const ym = yearMonthWibCompact();
     const createdSim = {
-      id: `sim-${Date.now()}`,
+      id: `sim-${crypto.randomUUID()}`,
       sim_no: `SIM-${ym}-${seq}`,
       lead_id: body.lead_id || null,
       bank_key: bankKey,
@@ -2090,7 +2114,7 @@ app.post("/api/simulations/:id/approve", requireAuth, (req, res) => {
     let lead = sim.lead_id ? store.leads.find((l) => l.id === sim.lead_id) : null;
     if (!lead) {
       lead = {
-        id: `lead-${Date.now()}`,
+        id: `lead-${crypto.randomUUID()}`,
         name: sim.result.name,
         nopen: "",
         nip: "",
@@ -2101,7 +2125,7 @@ app.post("/api/simulations/:id/approve", requireAuth, (req, res) => {
         branch: normalizeBranch(sim.branch || req.user.branch || "BANDUNG"),
         pension_salary: sim.result.salary,
         status: "proses",
-        follow_up_date: new Date().toISOString().slice(0, 10),
+        follow_up_date: todayWibIso(),
         source: "Kalkulator Simulasi",
         assigned_to: sim.created_by || req.user.id,
         assigned_name: sim.created_by_name || req.user.name,
@@ -2120,7 +2144,7 @@ app.post("/api/simulations/:id/approve", requireAuth, (req, res) => {
 
     sim.status = "approved";
     const seq = String(store.applications.length + 1).padStart(4, "0");
-    const ym = new Date().toISOString().slice(0, 7).replace("-", "");
+    const ym = yearMonthWibCompact();
     const partnerCfg = store.partner_parameters[sim.bank_key] || store.partner_parameters.ams2;
 
     const effectiveMktId = sim.marketing_id || lead.assigned_to || sim.created_by || req.user.id;
@@ -2140,7 +2164,7 @@ app.post("/api/simulations/:id/approve", requireAuth, (req, res) => {
     }
 
     const createdApp = {
-      id: `app-${Date.now()}`,
+      id: `app-${crypto.randomUUID()}`,
       app_no: `APP-${ym}-${seq}`,
       sim_id: sim.id,
       lead_id: lead.id,
@@ -2180,7 +2204,7 @@ app.post("/api/simulations/:id/approve", requireAuth, (req, res) => {
       })),
       history: [
         {
-          id: `h-${Date.now()}`,
+          id: `h-${crypto.randomUUID()}`,
           action: "created",
           note: `Pengajuan dibuat dari persetujuan simulasi ${sim.sim_no}`,
           user_name: req.user.name,
@@ -2285,9 +2309,9 @@ app.get("/api/leads", requireAuth, (req, res) => {
   const store = getStore();
   let list = scopeLeads(store, req.user);
   const { q, status, branch, assigned, follow_up, manager_id } = req.query;
-  const page = Math.max(1, Number(req.query.page || 1));
-  const pageSize = Math.max(1, Number(req.query.page_size || 10));
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const page = parseBoundedPage(req.query.page);
+  const pageSize = parseBoundedPageSize(req.query.page_size, 10);
+  const todayIso = todayWibIso();
 
   if (q) {
     const sq = String(q).toLowerCase();
@@ -2360,7 +2384,7 @@ app.post("/api/leads", requireAuth, requireRoles("super_admin", "admin_ops", "ad
   const ageObj = body.birth_date ? computeAgeDetail(body.birth_date) : { years: 65 };
   const lead = withTransaction(() => {
     const createdLead = {
-      id: `lead-${Date.now()}`,
+      id: `lead-${crypto.randomUUID()}`,
       name: String(body.name || "CALON DEBITUR BARU").trim(),
       phone: String(body.phone || "").trim(),
       nopen: String(body.nopen || "").trim(),
@@ -2372,7 +2396,7 @@ app.post("/api/leads", requireAuth, requireRoles("super_admin", "admin_ops", "ad
       branch: targetBranch,
       source: String(body.source || "Input Manual").trim(),
       status: "baru",
-      follow_up_date: body.follow_up_date || new Date().toISOString().slice(0, 10),
+      follow_up_date: body.follow_up_date || todayWibIso(),
       assigned_to: marketer ? marketer.id : null,
       assigned_name: marketer ? marketer.name : null,
       sales_manager_id: smInfo.sales_manager_id,
@@ -2480,7 +2504,7 @@ app.post("/api/leads/assign", requireAuth, requireRoles("super_admin", "admin_op
         lead.updated_at = new Date().toISOString();
         if (!lead.activities) lead.activities = [];
         lead.activities.unshift({
-          id: `act-${Date.now()}-${updatedCount}`,
+          id: `act-${crypto.randomUUID()}`,
           type: "system",
           notes: activityNote,
           user_name: req.user.name,
@@ -2510,7 +2534,7 @@ app.post("/api/leads/assign", requireAuth, requireRoles("super_admin", "admin_op
 app.get("/api/lead-requests", requireAuth, (req, res) => {
   const store = getStore();
   const requests = store.lead_requests || [];
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = todayWibIso();
 
   if (req.user.role === "marketing") {
     const rawBranch = req.user.branch;
@@ -2519,7 +2543,7 @@ app.get("/api/lead-requests", requireAuth, (req, res) => {
     const myRequests = requests.filter((r) => r.requester_id === req.user.id);
     const pendingRequest = myRequests.find((r) => r.status === "PENDING") || null;
     const todayApproved = myRequests.find(
-      (r) => r.status === "APPROVED" && (r.processed_at || r.created_at || "").slice(0, 10) === todayIso
+      (r) => r.status === "APPROVED" && isoTimestampToWibDate(r.processed_at || r.created_at || "") === todayIso
     );
 
     // Hitung berapa leads aktif milik marketing yang masih berstatus "baru"
@@ -2622,7 +2646,7 @@ app.post("/api/lead-requests", requireAuth, requireRoles("marketing"), (req, res
   }
 
   const existingRequests = store.lead_requests || [];
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = todayWibIso();
 
   // 2. Validasi Anti-Spam: Maksimal 1 permohonan berstatus PENDING
   const activePending = existingRequests.find(
@@ -2639,7 +2663,7 @@ app.post("/api/lead-requests", requireAuth, requireRoles("marketing"), (req, res
     (r) =>
       r.requester_id === req.user.id &&
       r.status === "APPROVED" &&
-      (r.processed_at || r.created_at || "").slice(0, 10) === todayIso
+      isoTimestampToWibDate(r.processed_at || r.created_at || "") === todayIso
   );
   if (todayApproved) {
     return res.status(400).json({
@@ -2682,14 +2706,14 @@ app.post("/api/lead-requests", requireAuth, requireRoles("marketing"), (req, res
   }
 
   const now = new Date().toISOString();
-  const yearMonth = now.slice(0, 7).replace("-", "");
+  const yearMonth = yearMonthWibCompact();
   const seq = String((store.lead_requests?.length || 0) + 1).padStart(4, "0");
   const requestNo = `REQ-${yearMonth}-${seq}`;
   const smInfo = resolveSmForMarketing(store, req.user);
 
   const createdRequest = withTransaction(() => {
     const item = {
-      id: `req-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      id: `req-${crypto.randomUUID()}`,
       request_no: requestNo,
       requester_id: req.user.id,
       requester_name: req.user.name,
@@ -2824,7 +2848,7 @@ app.post(
         lead.updated_at = now;
         lead.activities = lead.activities || [];
         lead.activities.unshift({
-          id: `act-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+          id: `act-${crypto.randomUUID()}`,
           type: "system_allocation",
           notes: `Data dialokasikan ke Marketing ${requester.name}${smInfo.sales_manager_name ? ` (Tim SM: ${smInfo.sales_manager_name})` : ""} via Permintaan Resmi ${reqItem.request_no}`,
           created_at: now,
@@ -3028,7 +3052,7 @@ app.post("/api/leads/:id/activities", requireAuth, (req, res) => {
   }
   const act = withTransaction(() => {
     const createdAct = {
-      id: `act-${Date.now()}`,
+      id: `act-${crypto.randomUUID()}`,
       type: String(req.body?.type || "catatan"),
       note: String(req.body?.note || ""),
       user_name: req.user.name,
@@ -3066,7 +3090,7 @@ app.post("/api/leads/:id/documents", requireAuth, upload.single("file"), (req, r
     });
   }
   const docMeta = withTransaction(() => {
-    const docId = `ldoc-${Date.now()}`;
+    const docId = `ldoc-${crypto.randomUUID()}`;
     const safeFilename = sanitizeSafeFilename(req.file.originalname, "dokumen.pdf");
     saveUploadedFile(docId, safeFilename, detected.mime, req.file.buffer);
     const createdDoc = {
@@ -3174,41 +3198,53 @@ app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "
     const smQueuePointers = {};
     const smTeamPointers = {};
     const branchBreakdown = {};
+    const existingPhones = new Set();
+    const existingNopens = new Set();
+    for (const l of store.leads) {
+      if (l.phone && l.phone !== "080000000000") existingPhones.add(l.phone);
+      if (l.nopen) existingNopens.add(String(l.nopen).trim());
+    }
     const batchPhones = new Set();
-    const todayIso = new Date().toISOString().slice(0, 10);
+    const batchNopens = new Set();
+    const todayIso = todayWibIso();
+    const smsByBranch = new Map();
+    const marketersByBranch = new Map();
+    for (const u of store.users) {
+      if (u.active === false || !canAccessUserScope(req.user, u)) continue;
+      const bNorm = normalizeBranch(u.branch);
+      if (u.role === "sales_manager") {
+        if (!smsByBranch.has(bNorm)) smsByBranch.set(bNorm, []);
+        smsByBranch.get(bNorm).push(u);
+      } else if (u.role === "marketing") {
+        if (!marketersByBranch.has(bNorm)) marketersByBranch.set(bNorm, []);
+        marketersByBranch.get(bNorm).push(u);
+      }
+    }
+    const leadsToPrepend = [];
 
     for (let i = 0; i < parsed.rows.length; i++) {
       const row = parsed.rows[i];
       const { name, phone, city, branch_hint, source, nopen, nip, salary, birth_date, age, sales_manager_hint, marketing_hint } = row;
+      const cleanPhone = phone && phone !== "080000000000" ? String(phone).trim() : "";
+      const cleanNopen = nopen ? String(nopen).trim() : "";
 
-      // Cegah duplikasi data di database maupun antar baris dalam batch
+      // Cegah duplikasi O(1) via Set (abaikan nomor telepon kosong "")
       if (
-        store.leads.some((l) => (phone && l.phone === phone) || (nopen && l.nopen && l.nopen === nopen)) ||
-        (phone && batchPhones.has(phone))
+        (cleanPhone && (existingPhones.has(cleanPhone) || batchPhones.has(cleanPhone))) ||
+        (cleanNopen && (existingNopens.has(cleanNopen) || batchNopens.has(cleanNopen)))
       ) {
         skipped_duplicates++;
         continue;
       }
-      if (phone) batchPhones.add(phone);
+      if (cleanPhone) batchPhones.add(cleanPhone);
+      if (cleanNopen) batchNopens.add(cleanNopen);
 
       // Resolusi Cabang Kanonikal
       const targetBranch = explicitBranch || resolveBranchFromCityOrText(city, branch_hint, "") || "BANDUNG";
 
       // Ambil daftar Sales Manager & Marketing Aktif pada cabang tujuan (patuh bank_scope pengunggah)
-      const branchSms = store.users.filter(
-        (u) =>
-          u.role === "sales_manager" &&
-          u.active !== false &&
-          normalizeBranch(u.branch) === targetBranch &&
-          canAccessUserScope(req.user, u)
-      );
-      const branchMarketers = store.users.filter(
-        (u) =>
-          u.role === "marketing" &&
-          u.active !== false &&
-          normalizeBranch(u.branch) === targetBranch &&
-          canAccessUserScope(req.user, u)
-      );
+      const branchSms = smsByBranch.get(targetBranch) || [];
+      const branchMarketers = marketersByBranch.get(targetBranch) || [];
 
       // Resolusi Sales Manager Spesifik (jika ada pilihan eksplisit atau kolom Sales Manager di file)
       let specificSmUser = null;
@@ -3360,24 +3396,25 @@ app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "
         noteAction = `Dialokasikan ke Jalur Antrean Sales Manager ${salesManagerName} (${targetBranch})`;
       }
 
+      const rowNowIso = new Date().toISOString();
       const initialActivities = [
         {
-          id: `act-${Date.now()}-${i}`,
+          id: `act-${crypto.randomUUID()}`,
           type: "system",
           notes: noteAction,
-          created_at: new Date().toISOString()
+          created_at: rowNowIso
         }
       ];
 
-      store.leads.unshift({
-        id: `lead-${Date.now()}-${i}`,
+      leadsToPrepend.push({
+        id: `lead-${crypto.randomUUID()}`,
         name,
-        phone,
+        phone: cleanPhone,
         city: city || "Kota Bandung",
         branch: targetBranch,
         source: source || "Impor Database",
-        nopen: nopen || "",
-        nip: nip || nopen || "",
+        nopen: cleanNopen,
+        nip: nip || cleanNopen || "",
         pension_salary: salary,
         birth_date: birth_date || "1954-05-10",
         age: age || 65,
@@ -3390,14 +3427,18 @@ app.post("/api/imports", requireAuth, requireRoles("super_admin", "admin_ops", "
         notes: "",
         activities: initialActivities,
         documents: [],
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
+        created_at: rowNowIso,
+        updated_at: rowNowIso
       });
       inserted++;
     }
 
+    if (leadsToPrepend.length > 0) {
+      store.leads.unshift(...leadsToPrepend.reverse());
+    }
+
     const createdBatch = {
-      id: `imp-${Date.now()}`,
+      id: `imp-${crypto.randomUUID()}`,
       filename: sanitizeSafeFilename(req.file.originalname, "impor_leads.xlsx"),
       user_name: req.user.name,
       uploaded_by_id: req.user.id,
@@ -3435,8 +3476,8 @@ app.get("/api/applications", requireAuth, (req, res) => {
   let list = store.applications.filter((a) => canAccessApplication(req.user, a));
 
   const { q, stage, branch, date_from, date_to, manager_id } = req.query;
-  const page = Math.max(1, Number(req.query.page || 1));
-  const pageSize = Math.max(1, Number(req.query.page_size || 10));
+  const page = parseBoundedPage(req.query.page);
+  const pageSize = parseBoundedPageSize(req.query.page_size, 10);
 
   if (q) {
     const sq = String(q).toLowerCase();
@@ -3623,7 +3664,7 @@ app.post("/api/applications/:id/documents/:key", requireAuth, upload.single("fil
     doc.note = "";
 
     appItem.history.push({
-      id: `h-${Date.now()}`,
+      id: `h-${crypto.randomUUID()}`,
       action: "upload_dokumen",
       note: `Mengunggah ${doc.label} (${doc.filename})`,
       user_name: req.user.name,
@@ -3726,7 +3767,7 @@ app.post("/api/applications/:id/documents/:key/review", requireAuth, requireRole
       }
     }
     appItem.history.push({
-      id: `h-${Date.now()}`,
+      id: `h-${crypto.randomUUID()}`,
       action: `review_${normalizedStatus}`,
       note: `${doc.label}: ${normalizedStatus}${note ? ` (${note})` : ""}`,
       user_name: req.user.name,
@@ -3873,7 +3914,7 @@ app.post("/api/applications/:id/action", requireAuth, (req, res) => {
     }
 
     appItem.history.push({
-      id: `h-${Date.now()}`,
+      id: `h-${crypto.randomUUID()}`,
       action,
       note: note || `Tahap: ${appItem.stage}`,
       user_name: req.user.name,
@@ -3907,8 +3948,8 @@ app.get("/api/claims", requireAuth, (req, res) => {
   const store = getStore();
   let list = store.claims.filter((c) => canAccessClaim(req.user, c));
   const { q, status } = req.query;
-  const page = Math.max(1, Number(req.query.page || 1));
-  const pageSize = Math.max(1, Number(req.query.page_size || 10));
+  const page = parseBoundedPage(req.query.page);
+  const pageSize = parseBoundedPageSize(req.query.page_size, 10);
   if (q) {
     const sq = String(q).toLowerCase();
     list = list.filter((c) =>
@@ -3973,10 +4014,12 @@ app.post("/api/claims", requireAuth, upload.single("file"), (req, res) => {
   const isFixed = Boolean(["super_admin", "admin_ops"].includes(req.user.role) && req.body?.amount !== undefined && req.body?.amount !== null && String(req.body.amount).trim() !== "");
   const claim = withTransaction(() => {
     const seq = String(store.claims.length + 1).padStart(4, "0");
-    const ym = new Date().toISOString().slice(0, 7).replace("-", "");
-    const claimId = `clm-${Date.now()}`;
+    const ym = yearMonthWibCompact();
+    const claimId = `clm-${crypto.randomUUID()}`;
+    let bookingFileId = null;
     if (req.file) {
-      saveUploadedFile(`${claimId}-booking`, safeBookingFilename, uploadedMime, req.file.buffer);
+      bookingFileId = `${claimId}-booking-${crypto.randomUUID()}`;
+      saveUploadedFile(bookingFileId, safeBookingFilename, uploadedMime, req.file.buffer);
     }
 
     const createdClaim = {
@@ -3992,16 +4035,18 @@ app.post("/api/claims", requireAuth, upload.single("file"), (req, res) => {
       sales_manager_id: appItem.sales_manager_id || req.user.manager_id || null,
       sales_manager_name: appItem.sales_manager_name || req.user.manager_name || null,
       branch: appItem.branch,
-      booking_date: appItem.booking?.date || new Date().toISOString().slice(0, 10),
+      booking_date: appItem.booking?.date || todayWibIso(),
       credit_no: req.body?.credit_no || appItem.booking?.credit_no || "",
       amount: claimAmount,
       amount_fixed: isFixed,
       status: "DRAFT",
       notes: req.body?.notes || "",
       booking_proof: safeBookingFilename,
+      booking_file_id: bookingFileId,
       payment_proof: null,
+      payment_file_id: null,
       history: [
-        { id: `ch-${Date.now()}`, action: "DRAFT", note: req.body?.notes || "Klaim dibuat", user_name: req.user.name, at: new Date().toISOString() }
+        { id: `ch-${crypto.randomUUID()}`, action: "DRAFT", note: req.body?.notes || "Klaim dibuat", user_name: req.user.name, at: new Date().toISOString() }
       ],
       created_at: new Date().toISOString()
     };
@@ -4132,7 +4177,7 @@ app.post("/api/claims/:id/action", requireAuth, (req, res) => {
     if (action === "revision") claim.revision_note = note;
     if (action === "reject") claim.reject_reason = note;
     claim.history.push({
-      id: `ch-${Date.now()}`,
+      id: `ch-${crypto.randomUUID()}`,
       action: action === "set_amount" ? "SET_AMOUNT" : claim.status,
       note: note || (action === "set_amount" ? `Nominal insentif ditetapkan Admin menjadi Rp${claim.amount.toLocaleString("id-ID")}` : (action === "approve" ? "Klaim disetujui (APPROVED); menunggu pembayaran" : "")),
       user_name: req.user.name,
@@ -4156,7 +4201,7 @@ app.post("/api/claims/:id/pay", requireAuth, requireRoles("super_admin", "admin_
   if (claim.status !== "APPROVED") {
     return res.status(400).json({ detail: "Pembayaran klaim hanya dapat dilakukan setelah klaim berstatus APPROVED." });
   }
-  if (!req.file && !getUploadedFile(`${claim.id}-payment`)) {
+  if (!req.file && !getUploadedFile(claim.payment_file_id || `${claim.id}-payment`)) {
     return res.status(400).json({ detail: "Bukti transfer/pembayaran wajib diunggah untuk menyelesaikan pembayaran klaim." });
   }
 
@@ -4185,15 +4230,17 @@ app.post("/api/claims/:id/pay", requireAuth, requireRoles("super_admin", "admin_
 
   withTransaction(() => {
     if (req.file) {
-      saveUploadedFile(`${claim.id}-payment`, safePayFilename, payFileMime, req.file.buffer);
+      const paymentFileId = `${claim.id}-payment-${crypto.randomUUID()}`;
+      saveUploadedFile(paymentFileId, safePayFilename, payFileMime, req.file.buffer);
       claim.payment_proof = safePayFilename;
+      claim.payment_file_id = paymentFileId;
     }
     if (parsedAmount !== null) claim.amount = Math.round(parsedAmount);
     claim.status = "PAID";
     claim.paid_at = new Date().toISOString();
     claim.paid_by = req.user.name;
     claim.payment_note = req.body?.note || "";
-    claim.history.push({ id: `ch-${Date.now()}`, action: "PAID", note: claim.payment_note, user_name: req.user.name, at: claim.paid_at });
+    claim.history.push({ id: `ch-${crypto.randomUUID()}`, action: "PAID", note: claim.payment_note, user_name: req.user.name, at: claim.paid_at });
     addAuditLog(req.user, "pay_claim", claim.claim_no, `Membayar klaim ${claim.claim_no} sebesar Rp${claim.amount.toLocaleString("id-ID")}`, req.ip);
   });
   res.json(serializeClaimForUser(claim, req.user));
@@ -4221,8 +4268,10 @@ app.post("/api/claims/:id/proof", requireAuth, upload.single("file"), (req, res)
   }
   const safeProofFilename = sanitizeSafeFilename(req.file.originalname, "bukti_akad.pdf");
   withTransaction(() => {
-    saveUploadedFile(`${claim.id}-booking`, safeProofFilename, detected.mime, req.file.buffer);
+    const nextBookingFileId = `${claim.id}-booking-${crypto.randomUUID()}`;
+    saveUploadedFile(nextBookingFileId, safeProofFilename, detected.mime, req.file.buffer);
     claim.booking_proof = safeProofFilename;
+    claim.booking_file_id = nextBookingFileId;
   });
   res.json(serializeClaimForUser(claim, req.user));
 });
@@ -4235,7 +4284,11 @@ app.get("/api/claims/:id/file/:type", requireAuth, (req, res) => {
     return res.status(403).json({ detail: "Anda tidak memiliki akses untuk mengunduh berkas klaim ini." });
   }
   const fileType = req.params.type === "payment" ? "payment" : "booking";
-  const stored = getUploadedFile(`${claim.id}-${fileType}`);
+  const targetFileId =
+    fileType === "payment"
+      ? (claim.payment_file_id || `${claim.id}-payment`)
+      : (claim.booking_file_id || `${claim.id}-booking`);
+  const stored = getUploadedFile(targetFileId);
   if (stored) {
     const safeFilename = sanitizeSafeFilename(stored.filename, `bukti_${fileType}.pdf`);
     res.setHeader("Content-Type", stored.mime_type || "application/pdf");
@@ -4553,8 +4606,8 @@ app.patch("/api/users/:id", requireAuth, requireRoles("super_admin", "admin_ops"
 app.get("/api/audit-logs", requireAuth, requireRoles("super_admin", "admin_ops"), (req, res) => {
   const store = getStore();
   const { q, action } = req.query;
-  const page = Math.max(1, Number(req.query.page || 1));
-  const pageSize = Math.max(1, Number(req.query.page_size || 20));
+  const page = parseBoundedPage(req.query.page);
+  const pageSize = parseBoundedPageSize(req.query.page_size, 20);
   let list = store.audit_logs;
   const actions = Array.from(new Set(list.map((a) => a.action)));
   if (q) {

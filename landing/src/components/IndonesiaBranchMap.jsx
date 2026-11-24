@@ -308,14 +308,14 @@ export default function IndonesiaBranchMap({
               <div className="flex items-baseline justify-between gap-2">
                 <span
                   className={`text-[11px] font-bold uppercase tracking-[0.12em] ${
-                    isActive ? "text-[#078D67]" : "text-[#17223B]/45"
+                    isActive ? "text-[#078D67]" : "text-[#475569]"
                   }`}
                 >
                   {kw.code}
                 </span>
                 <span
                   className={`text-[11.5px] font-semibold tabular-nums ${
-                    isActive ? "text-[#351080]" : "text-[#17223B]/45"
+                    isActive ? "text-[#351080]" : "text-[#475569]"
                   }`}
                 >
                   {kw.branches.length} kota
@@ -349,7 +349,7 @@ export default function IndonesiaBranchMap({
             className={`border-b-2 pb-0.5 transition-colors ${
               viewMode === "all"
                 ? "border-[#351080] text-[#351080]"
-                : "border-transparent text-[#17223B]/55 hover:text-[#17223B]"
+                : "border-transparent text-[#475569] hover:text-[#17223B]"
             }`}
           >
             Seluruh Indonesia
@@ -362,7 +362,7 @@ export default function IndonesiaBranchMap({
             className={`border-b-2 pb-0.5 transition-colors ${
               viewMode === "focus"
                 ? "border-[#351080] text-[#351080]"
-                : "border-transparent text-[#17223B]/55 hover:text-[#17223B]"
+                : "border-transparent text-[#475569] hover:text-[#17223B]"
             }`}
           >
             Perbesar Wilayah
@@ -555,7 +555,7 @@ export default function IndonesiaBranchMap({
         </svg>
       </div>
 
-      <p className="mt-2 min-h-[20px] text-[12.5px] text-[#17223B]/55" aria-live="polite">
+      <p className="mt-2 min-h-[20px] text-[12.5px] text-[#475569]" aria-live="polite">
         {hintText}
       </p>
 
@@ -588,7 +588,7 @@ export default function IndonesiaBranchMap({
                 >
                   {formatBranchTitle(branchName)}
                 </div>
-                <div className="mt-0.5 text-[12.5px] text-[#17223B]/55">
+                <div className="mt-0.5 text-[12.5px] text-[#475569]">
                   {isKenOffice
                     ? "Kantor PT KEN & cabang"
                     : isCenter

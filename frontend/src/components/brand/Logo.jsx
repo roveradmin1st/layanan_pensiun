@@ -7,13 +7,17 @@ const SIZES = {
 };
 
 export const Logo = ({ variant = "horizontal", size = "md", className = "", ...rest }) => (
-  <img
-    src={`/brand/layanan-pensiunan-logo-${variant}.png`}
-    alt="LAYANAN PENSIUNAN — Solusi Kredit Pensiun"
-    className={`lp-logo w-auto ${SIZES[variant][size]} ${className}`}
-    draggable={false}
-    {...rest}
-  />
+  <picture className="inline-flex shrink-0 items-center">
+    <source srcSet={`/brand/layanan-pensiunan-logo-${variant}.webp`} type="image/webp" />
+    <img
+      src={`/brand/layanan-pensiunan-logo-${variant}.png`}
+      alt="LAYANAN PENSIUNAN — Solusi Kredit Pensiun"
+      decoding="async"
+      className={`lp-logo w-auto ${SIZES[variant][size]} ${className}`}
+      draggable={false}
+      {...rest}
+    />
+  </picture>
 );
 
 export const PartnerLogo = ({ bankKey, size = "md", className = "" }) => {

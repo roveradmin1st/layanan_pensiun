@@ -200,13 +200,128 @@ function isRelevantXlsxXmlEntry(rawName) {
 }
 
 /**
- * Ekstrak file dari arsip ZIP (.xlsx) secara native menggunakan magic bytes PK\x03\x04
+ * Helper dekompresi entry XML tunggal dengan batas anggaran memori ketat (maks 16 MB/entry, 32 MB total)
+ */
+function inflateAndStoreRelevantXml(entries, name, compression, rawData, state) {
+  if (entries.size >= MAX_ZIP_ENTRIES) {
+    throw new Error("File XLSX melebihi batas maksimum entry XML yang diizinkan (maks 30 entry).");
+  }
+  if (compression === 0) {
+    if (state.totalDecompressedBytes + rawData.length > MAX_TOTAL_DECOMPRESSED_BYTES) {
+      throw new Error("Ukuran hasil ekstraksi file XLSX melebihi batas aman memori (maks 32 MB).");
+    }
+    state.totalDecompressedBytes += rawData.length;
+    entries.set(name, rawData);
+  } else if (compression === 8) {
+    const remainingBudget = MAX_TOTAL_DECOMPRESSED_BYTES - state.totalDecompressedBytes;
+    if (remainingBudget <= 0) {
+      throw new Error("Ukuran hasil dekompresi file XLSX melebihi batas aman memori (maks 32 MB).");
+    }
+    try {
+      const decompressed = zlib.inflateRawSync(rawData, {
+        maxOutputLength: Math.min(MAX_DECOMPRESSED_XML_BYTES, remainingBudget)
+      });
+      state.totalDecompressedBytes += decompressed.length;
+      entries.set(name, decompressed);
+    } catch (err) {
+      if (err?.code === "ERR_BUFFER_TOO_LARGE" || /maxOutputLength|too large|buffer/i.test(String(err?.message || ""))) {
+        throw new Error("Ukuran hasil dekompresi file XLSX melebihi batas aman memori (maks 32 MB).");
+      }
+      // Abaikan jika entri tertentu gagal decompress karena format lain
+    }
+  }
+}
+
+/**
+ * Cari lokasi End of Central Directory (EOCD 0x06054b50) dari bagian akhir buffer ZIP
+ */
+function findZipEocdOffset(buffer) {
+  if (!buffer || buffer.length < 22) return -1;
+  const minPos = Math.max(0, buffer.length - 65558);
+  for (let i = buffer.length - 22; i >= minPos; i--) {
+    if (buffer.readUInt32LE(i) === 0x06054b50) {
+      const commentLen = buffer.readUInt16LE(i + 20);
+      if (i + 22 + commentLen <= buffer.length) {
+        return i;
+      }
+    }
+  }
+  return -1;
+}
+
+/**
+ * Ekstrak file dari arsip ZIP (.xlsx) secara native:
+ * 1. Utamakan Central Directory (0x02014b50 via EOCD 0x06054b50) agar mendukung penuh
+ *    XLSX streaming (Google Sheets / LibreOffice / Apache POI bit-3 data descriptor di mana
+ *    compressedSize pada Local Header bernilai 0).
+ * 2. Fallback ke pemindaian Local File Header (0x04034b50) bila buffer tidak memiliki EOCD.
  */
 function extractZipEntries(buffer) {
   const entries = new Map();
+  const state = { totalDecompressedBytes: 0 };
+
+  const eocdPos = findZipEocdOffset(buffer);
+  if (eocdPos !== -1) {
+    const totalCdEntries = buffer.readUInt16LE(eocdPos + 10);
+    const cdSize = buffer.readUInt32LE(eocdPos + 12);
+    const cdOffset = buffer.readUInt32LE(eocdPos + 16);
+
+    if (totalCdEntries > MAX_ZIP_HEADERS_SCANNED) {
+      throw new Error("File XLSX tidak valid: jumlah komponen ZIP melebihi batas aman (maks 200 entry).");
+    }
+
+    if (cdOffset < buffer.length && cdOffset + cdSize <= buffer.length) {
+      let cdPos = cdOffset;
+      let cdScanned = 0;
+      const cdEnd = cdOffset + cdSize;
+
+      while (cdPos + 46 <= cdEnd && cdScanned < totalCdEntries) {
+        if (buffer.readUInt32LE(cdPos) !== 0x02014b50) break;
+        cdScanned++;
+        if (cdScanned > MAX_ZIP_HEADERS_SCANNED) {
+          throw new Error("File XLSX tidak valid: jumlah komponen ZIP melebihi batas aman (maks 200 entry).");
+        }
+
+        const compression = buffer.readUInt16LE(cdPos + 10);
+        const compressedSize = buffer.readUInt32LE(cdPos + 20);
+        const nameLen = buffer.readUInt16LE(cdPos + 28);
+        const extraLen = buffer.readUInt16LE(cdPos + 30);
+        const commentLen = buffer.readUInt16LE(cdPos + 32);
+        const localHeaderOffset = buffer.readUInt32LE(cdPos + 42);
+        const nextCdPos = cdPos + 46 + nameLen + extraLen + commentLen;
+        if (cdPos + 46 + nameLen > cdEnd) break;
+
+        const name = buffer
+          .toString("utf8", cdPos + 46, cdPos + 46 + nameLen)
+          .replace(/\\/g, "/")
+          .replace(/^\/+/, "");
+
+        if (
+          isRelevantXlsxXmlEntry(name) &&
+          compressedSize > 0 &&
+          localHeaderOffset + 30 <= buffer.length &&
+          buffer.readUInt32LE(localHeaderOffset) === 0x04034b50
+        ) {
+          const localNameLen = buffer.readUInt16LE(localHeaderOffset + 26);
+          const localExtraLen = buffer.readUInt16LE(localHeaderOffset + 28);
+          const dataStart = localHeaderOffset + 30 + localNameLen + localExtraLen;
+          if (dataStart + compressedSize <= buffer.length) {
+            const rawData = buffer.subarray(dataStart, dataStart + compressedSize);
+            inflateAndStoreRelevantXml(entries, name, compression, rawData, state);
+          }
+        }
+
+        cdPos = nextCdPos;
+      }
+
+      if (entries.size > 0) {
+        return entries;
+      }
+    }
+  }
+
   let pos = 0;
   let headersScanned = 0;
-  let totalDecompressedBytes = 0;
 
   while (pos < buffer.length - 30) {
     if (buffer.readUInt32LE(pos) !== 0x04034b50) {
@@ -236,44 +351,38 @@ function extractZipEntries(buffer) {
         pos = dataStart + compressedSize;
         continue;
       }
-
-      if (entries.size >= MAX_ZIP_ENTRIES) {
-        throw new Error("File XLSX melebihi batas maksimum entry XML yang diizinkan (maks 30 entry).");
-      }
-
       const rawData = buffer.subarray(dataStart, dataStart + compressedSize);
-      if (compression === 0) {
-        // STORE
-        if (totalDecompressedBytes + rawData.length > MAX_TOTAL_DECOMPRESSED_BYTES) {
-          throw new Error("Ukuran hasil ekstraksi file XLSX melebihi batas aman memori (maks 32 MB).");
-        }
-        totalDecompressedBytes += rawData.length;
-        entries.set(name, rawData);
-      } else if (compression === 8) {
-        // DEFLATE
-        const remainingBudget = MAX_TOTAL_DECOMPRESSED_BYTES - totalDecompressedBytes;
-        if (remainingBudget <= 0) {
-          throw new Error("Ukuran hasil dekompresi file XLSX melebihi batas aman memori (maks 32 MB).");
-        }
-        try {
-          const decompressed = zlib.inflateRawSync(rawData, {
-            maxOutputLength: Math.min(MAX_DECOMPRESSED_XML_BYTES, remainingBudget)
-          });
-          totalDecompressedBytes += decompressed.length;
-          entries.set(name, decompressed);
-        } catch (err) {
-          if (err?.code === "ERR_BUFFER_TOO_LARGE" || /maxOutputLength|too large|buffer/i.test(String(err?.message || ""))) {
-            throw new Error("Ukuran hasil dekompresi file XLSX melebihi batas aman memori (maks 32 MB).");
-          }
-          // Abaikan jika entri tertentu gagal decompress karena format lain
-        }
-      }
+      inflateAndStoreRelevantXml(entries, name, compression, rawData, state);
+      pos = dataStart + compressedSize;
+    } else {
+      pos = dataStart;
     }
-
-    pos = dataStart + compressedSize;
   }
 
   return entries;
+}
+
+/**
+ * Unescape entitas XML dengan urutan aman (&amp; WAJIB paling akhir agar tidak terjadi double-unescape)
+ */
+export function decodeXmlEntities(raw) {
+  if (!raw) return "";
+  return String(raw)
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/_x([0-9A-Fa-f]{4})_/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => {
+      const cp = parseInt(hex, 16);
+      return Number.isFinite(cp) && cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : "";
+    })
+    .replace(/&#(\d+);/g, (_, dec) => {
+      const cp = parseInt(dec, 10);
+      return Number.isFinite(cp) && cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : "";
+    })
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
 }
 
 /**
@@ -288,20 +397,19 @@ function parseSharedStrings(xmlBuf) {
   }
 
   const strings = [];
-  const siMatches = xml.matchAll(/<si\b[^>]*>(.*?)<\/si>/gis);
+  const siMatches = xml.matchAll(/<si\b([^>]*?)(?:\/>|>([\s\S]*?)<\/si>)/gi);
   for (const m of siMatches) {
-    const siContent = m[1];
+    const siContent = m[2];
+    if (siContent === undefined) {
+      strings.push("");
+      continue;
+    }
     const textPieces = [];
-    const tMatches = siContent.matchAll(/<t\b[^>]*>(.*?)<\/t>/gis);
+    const tMatches = siContent.matchAll(/<t\b([^>]*?)(?:\/>|>([\s\S]*?)<\/t>)/gi);
     for (const tm of tMatches) {
-      textPieces.push(
-        tm[1]
-          .replace(/&amp;/g, "&")
-          .replace(/&lt;/g, "<")
-          .replace(/&gt;/g, ">")
-          .replace(/&quot;/g, '"')
-          .replace(/&apos;/g, "'")
-      );
+      if (tm[2] !== undefined) {
+        textPieces.push(decodeXmlEntities(tm[2]));
+      }
     }
     strings.push(textPieces.join(""));
   }
@@ -330,15 +438,16 @@ function parseSheetRows(xmlBuf, sharedStrings = []) {
   }
 
   const rows = [];
-  const rowMatches = xml.matchAll(/<row\b[^>]*>(.*?)<\/row>/gis);
+  const rowMatches = xml.matchAll(/<row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/gi);
 
   for (const rm of rowMatches) {
-    const rowContent = rm[1];
+    const rowContent = rm[2];
+    if (rowContent === undefined) continue;
     const cells = [];
-    const cellMatches = rowContent.matchAll(/<c\b([^>]*)>(.*?)<\/c>/gis);
+    const cellMatches = rowContent.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/gi);
 
     for (const cm of cellMatches) {
-      const attrs = cm[1];
+      const attrs = cm[1] || "";
       const content = cm[2];
 
       const rawRefMatch = attrs.match(/\br="([^"]+)"/i);
@@ -346,32 +455,40 @@ function parseSheetRows(xmlBuf, sharedStrings = []) {
       if (rawRefMatch && !rMatch) {
         continue;
       }
-      const isString = /t="s"/i.test(attrs);
 
+      if (content === undefined) {
+        // Self-closing empty cell <c r="A2" s="1"/>: tidak menelan sel berikutnya
+        if (rMatch) {
+          const colIdx = colLettersToIndex(rMatch[1].toUpperCase());
+          if (colIdx >= 0 && colIdx <= MAX_COLUMNS) {
+            cells[colIdx] = "";
+          }
+        } else if (cells.length <= MAX_COLUMNS) {
+          cells.push("");
+        }
+        continue;
+      }
+
+      const isString = /\bt="s"/i.test(attrs);
       let val = "";
-      const vMatch = content.match(/<v>(.*?)<\/v>/is);
+      const vMatch = content.match(/<v\b[^>]*>([\s\S]*?)<\/v>/i);
       if (vMatch) {
         const rawVal = vMatch[1].trim();
         if (isString) {
           const strIdx = Number(rawVal);
           val = sharedStrings[strIdx] || "";
         } else {
-          val = rawVal;
+          val = decodeXmlEntities(rawVal);
         }
-      } else {
-        const isInlineStr = /t="inlineStr"/i.test(attrs);
-        if (isInlineStr) {
-          const tMatch = content.match(/<t\b[^>]*>(.*?)<\/t>/is);
-          val = tMatch ? tMatch[1] : "";
+      } else if (/\bt="inlineStr"/i.test(attrs)) {
+        const inlineParts = [];
+        for (const tm of content.matchAll(/<t\b([^>]*?)(?:\/>|>([\s\S]*?)<\/t>)/gi)) {
+          if (tm[2] !== undefined) {
+            inlineParts.push(decodeXmlEntities(tm[2]));
+          }
         }
+        val = inlineParts.join("");
       }
-
-      val = val
-        .replace(/&amp;/g, "&")
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&quot;/g, '"')
-        .replace(/&apos;/g, "'");
 
       if (rMatch) {
         const colIdx = colLettersToIndex(rMatch[1].toUpperCase());
@@ -468,7 +585,23 @@ export function detectHeaderIndices(headerRow = []) {
       map.nopen = idx;
     } else if (map.nip === -1 && (c.includes("nip") || c.includes("nik") || c.includes("nrp"))) {
       map.nip = idx;
-    } else if (map.salary === -1 && (c.includes("gaji") || c.includes("thp") || c.includes("penghasilan") || c.includes("os pokok") || c.includes("plafond") || c.includes("salary") || c.includes("nominal"))) {
+    } else if (
+      map.salary === -1 &&
+      !c.includes("plafon") &&
+      !c.includes("os pokok") &&
+      !c.includes("pokok pinjaman") &&
+      !c.includes("pinjaman") &&
+      !c.includes("kredit") &&
+      (c.includes("gaji") ||
+        c.includes("thp") ||
+        c.includes("penghasilan") ||
+        c.includes("manfaat pensiun") ||
+        c.includes("uang pensiun") ||
+        c.includes("salary") ||
+        c === "nominal" ||
+        c.includes("nominal gaji") ||
+        c.includes("nominal pensiun"))
+    ) {
       map.salary = idx;
     } else if (map.birth_date === -1 && (c.includes("lahir") || c.includes("birth") || c.includes("dob"))) {
       map.birth_date = idx;
@@ -675,11 +808,11 @@ export function parseImportFile(buffer, originalName = "", options = {}) {
           continue;
         }
 
-        // Deduplikasi intra-file antar sheet
-        if (phone && phone !== "080000000000" && batchPhones.has(phone)) continue;
+        // Deduplikasi intra-file antar sheet (abaikan telepon kosong)
+        if (phone && batchPhones.has(phone)) continue;
         if (nopen && batchNopens.has(nopen)) continue;
 
-        if (phone && phone !== "080000000000") batchPhones.add(phone);
+        if (phone) batchPhones.add(phone);
         if (nopen) batchNopens.add(nopen);
 
         const salary = parseSalary(colMap.salary !== -1 ? row[colMap.salary] : null, 4500000);
@@ -700,7 +833,7 @@ export function parseImportFile(buffer, originalName = "", options = {}) {
           row_index: normalizedRows.length + 1,
           sheet: sheetDef.name,
           name,
-          phone: phone || "080000000000",
+          phone: phone || "",
           city,
           branch_hint: branchHint,
           source,
@@ -755,10 +888,10 @@ export function parseImportFile(buffer, originalName = "", options = {}) {
         continue;
       }
 
-      if (phone && phone !== "080000000000" && batchPhones.has(phone)) continue;
+      if (phone && batchPhones.has(phone)) continue;
       if (nopen && batchNopens.has(nopen)) continue;
 
-      if (phone && phone !== "080000000000") batchPhones.add(phone);
+      if (phone) batchPhones.add(phone);
       if (nopen) batchNopens.add(nopen);
 
       const salary = parseSalary(colMap.salary !== -1 ? row[colMap.salary] : null, 4500000);
@@ -778,7 +911,7 @@ export function parseImportFile(buffer, originalName = "", options = {}) {
         row_index: normalizedRows.length + 1,
         sheet: "CSV",
         name,
-        phone: phone || "080000000000",
+        phone: phone || "",
         city,
         branch_hint: branchHint,
         source,

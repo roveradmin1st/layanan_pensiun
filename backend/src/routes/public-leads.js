@@ -11,6 +11,7 @@ import crypto from "node:crypto";
 import { withTransaction, addAuditLog } from "../db/database.js";
 import { normalizeBranch, resolveBranchFromCityOrText } from "../config/branches.js";
 import { parsePhone, sanitizeCellValue } from "../utils/lead-import-parser.js";
+import { todayWibIso } from "../utils/time-wib.js";
 
 export const ALLOWED_PUBLIC_INSTITUTIONS = Object.freeze([
   "TASPEN",
@@ -183,7 +184,9 @@ export function createPublicLeadsRouter({
       if (cleanCity.length < 2 || cleanCity.length > 80) {
         return res.status(400).json({ detail: "Kota / domisili wajib terdiri dari 2 hingga 80 karakter." });
       }
-      const targetBranch = normalizeBranch(resolveBranchFromCityOrText(cleanCity, cleanCity, "") || "PUSAT JAKARTA");
+      const targetBranch = normalizeBranch(
+        resolveBranchFromCityOrText(cleanCity, cleanCity, "", "PUSAT JAKARTA") || "PUSAT JAKARTA"
+      );
 
       let institution = "TASPEN";
       if (body.institution !== undefined && body.institution !== null && String(body.institution).trim() !== "") {
@@ -258,7 +261,7 @@ export function createPublicLeadsRouter({
         }
 
         const now = new Date().toISOString();
-        const todayIso = now.slice(0, 10);
+        const todayIso = todayWibIso();
         const formattedNote = `[${institution} • ${pensionStatus}]${cleanNotes ? " " + cleanNotes : ""}`;
 
         store.leads.unshift({

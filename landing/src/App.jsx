@@ -185,7 +185,34 @@ export default function App() {
   const [submitSuccess, setSubmitSuccess] = useState(null);
 
   const turnstileContainerRef = useRef(null);
-  const turnstileSiteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY || "";
+  const buildTimeTurnstileKey = String(import.meta.env.VITE_TURNSTILE_SITE_KEY || "").trim();
+  const [runtimeTurnstileKey, setRuntimeTurnstileKey] = useState(buildTimeTurnstileKey);
+  const turnstileSiteKey = buildTimeTurnstileKey || runtimeTurnstileKey;
+
+  useEffect(() => {
+    if (buildTimeTurnstileKey) return undefined;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 5_000);
+    fetch("/api/public/config", { method: "GET", signal: controller.signal })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        const dynamicKey =
+          typeof data?.turnstile_site_key === "string" ? data.turnstile_site_key.trim() : "";
+        if (dynamicKey) {
+          setRuntimeTurnstileKey(dynamicKey);
+        }
+      })
+      .catch(() => {
+        // Silent fallback when config endpoint is unavailable offline
+      })
+      .finally(() => {
+        window.clearTimeout(timeoutId);
+      });
+    return () => {
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [buildTimeTurnstileKey]);
 
   const activeGoal = useMemo(
     () => LOAN_GOALS.find((g) => g.id === selectedGoalId) || LOAN_GOALS[0],

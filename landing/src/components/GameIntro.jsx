@@ -17,7 +17,8 @@ import {
   PUBLIC_CALCULATOR_CONFIG,
   SITE_CONTENT
 } from "../config/site-content.js";
-import CorporateView from "./CorporateView.jsx";
+
+const CorporateView = React.lazy(() => import("./CorporateView.jsx"));
 
 /**
  * PENDAMPING INTERAKTIF KHUSUS LANSIA (TENANG, PROPORSIONAL, & BEBAS CELAH)
@@ -305,7 +306,7 @@ export default function GameIntro({
   const [activeKanwilCode, setActiveKanwilCode] = useState("WIL-1");
   const [branchSearch, setBranchSearch] = useState("");
   const [selectedBranchCity, setSelectedBranchCity] = useState(null);
-  const [soundOn, setSoundOn] = useState(true);
+  const [soundOn, setSoundOn] = useState(false);
   const [needsAudioUnlock, setNeedsAudioUnlock] = useState(false);
   const [progress, setProgress] = useState(() => (initialCorpFromHash ? 1 : 0));
 
@@ -610,7 +611,7 @@ export default function GameIntro({
   }, [fullLength, later]);
 
   const triggerWelcomeGateOpen = useCallback(
-    (fromUserTap = false) => {
+    (_fromUserTap = false) => {
       if (gateOpenedRef.current) return;
       gateOpenedRef.current = true;
       setGateStage("opening");
@@ -618,9 +619,7 @@ export default function GameIntro({
       fallbackStartRef.current = performance.now() + 260;
       rafRef.current = requestAnimationFrame(tick);
 
-      if (fromUserTap) {
-        playClip(GAME_INTRO_CONFIG.voiceClips.welcome, true);
-      } else {
+      if (soundOnRef.current) {
         const audioTimer = window.setTimeout(() => {
           playClip(GAME_INTRO_CONFIG.voiceClips.welcome);
         }, 260);
@@ -885,25 +884,33 @@ export default function GameIntro({
 
   if (corporateSection) {
     return (
-      <CorporateView
-        initialSection={corporateSection}
-        initialArticleId={corporateArticleId}
-        onBackToCompanion={handleCloseCorporate}
-        onSelectCityForConsult={(selectedCity) => {
-          setCorporateSection(null);
-          setCorporateArticleId(null);
-          handleOpenLeadStep(selectedCity, "konsultasi-cabang");
-        }}
-        onStartSimulation={() => {
-          setCorporateSection(null);
-          setCorporateArticleId(null);
-          if (phase === "ask-profile" || phase === "ask-loan" || phase === "result") {
-            pushHistoryView(phase, null, selectedBranchCity, null);
-          } else {
-            handleSelectMenu(MASCOT_INTENT_MENUS[0]);
-          }
-        }}
-      />
+      <React.Suspense
+        fallback={
+          <div className="flex min-h-[100dvh] items-center justify-center bg-[#F6F5F2] p-6 text-base font-semibold text-[#17223B]">
+            Memuat halaman informasi resmi…
+          </div>
+        }
+      >
+        <CorporateView
+          initialSection={corporateSection}
+          initialArticleId={corporateArticleId}
+          onBackToCompanion={handleCloseCorporate}
+          onSelectCityForConsult={(selectedCity) => {
+            setCorporateSection(null);
+            setCorporateArticleId(null);
+            handleOpenLeadStep(selectedCity, "konsultasi-cabang");
+          }}
+          onStartSimulation={() => {
+            setCorporateSection(null);
+            setCorporateArticleId(null);
+            if (phase === "ask-profile" || phase === "ask-loan" || phase === "result") {
+              pushHistoryView(phase, null, selectedBranchCity, null);
+            } else {
+              handleSelectMenu(MASCOT_INTENT_MENUS[0]);
+            }
+          }}
+        />
+      </React.Suspense>
     );
   }
 
@@ -920,8 +927,7 @@ export default function GameIntro({
     >
       <audio
         ref={audioRef}
-        src={GAME_INTRO_CONFIG.voiceClips.welcome}
-        preload="auto"
+        preload="none"
         onEnded={() => {
           if (phaseRef.current === "dialog") {
             setPhase("choices");
@@ -983,15 +989,15 @@ export default function GameIntro({
           HEADER INSTITUSIONAL BERSIH (TANPA IKON DEKORATIF AI)
           ==================================================================== */}
       <header
-        className={`relative z-40 w-full shrink-0 border-b border-[#17223B]/8 bg-white/85 backdrop-blur-sm transition-opacity duration-700 ${
+        className={`relative z-40 w-full shrink-0 border-b border-[#17223B]/10 bg-white/90 backdrop-blur-sm transition-opacity duration-700 ${
           gateStage === "closed" ? "opacity-0" : "opacity-100"
         }`}
       >
-        <div className="mx-auto flex h-[58px] w-full max-w-[1200px] items-center justify-between gap-2 px-3 sm:h-[64px] sm:px-8">
+        <div className="mx-auto flex min-h-[60px] w-full max-w-[1200px] items-center justify-between gap-1.5 px-2.5 sm:min-h-[66px] sm:gap-4 sm:px-8">
           <button
             type="button"
             onClick={handleResetToChoices}
-            className="inline-flex items-center focus:outline-none"
+            className="inline-flex min-h-[44px] shrink-0 items-center py-1 focus:outline-none"
             title="Kembali ke Menu Pilihan Awal"
           >
             <img
@@ -1001,50 +1007,50 @@ export default function GameIntro({
             />
           </button>
 
-          <div className="flex items-center gap-2 sm:gap-5">
+          <div className="flex items-center gap-1 sm:gap-4">
             <nav
               aria-label="Informasi Perusahaan"
-              className="flex items-center gap-2 text-[11.5px] font-semibold text-[#17223B]/80 sm:gap-4 sm:text-[13.5px]"
+              className="flex items-center gap-0.5 text-[12.5px] font-bold text-[#17223B] sm:gap-2 sm:text-[14px]"
             >
               <button
                 type="button"
                 onClick={(e) => openCorporatePage("profil", e)}
                 data-testid="open-company-profile-btn"
-                className="transition-colors hover:text-[#351080]"
+                className="inline-flex min-h-[42px] items-center rounded-lg px-1.5 transition-colors hover:bg-[#351080]/8 hover:text-[#351080] sm:min-h-[44px] sm:px-2.5"
               >
                 <span className="hidden sm:inline">Profil Perusahaan</span>
                 <span className="sm:hidden">Profil</span>
               </button>
 
-              <span className="h-3.5 w-[1px] bg-[#17223B]/15" aria-hidden="true" />
+              <span className="hidden h-3.5 w-[1px] bg-[#17223B]/20 sm:inline-block" aria-hidden="true" />
 
               <button
                 type="button"
                 onClick={(e) => openCorporatePage("edukasi", e)}
                 data-testid="open-education-btn"
-                className="transition-colors hover:text-[#351080]"
+                className="inline-flex min-h-[42px] items-center rounded-lg px-1.5 transition-colors hover:bg-[#351080]/8 hover:text-[#351080] sm:min-h-[44px] sm:px-2.5"
               >
                 Edukasi
               </button>
 
-              <span className="h-3.5 w-[1px] bg-[#17223B]/15" aria-hidden="true" />
+              <span className="hidden h-3.5 w-[1px] bg-[#17223B]/20 sm:inline-block" aria-hidden="true" />
 
               <button
                 type="button"
                 onClick={(e) => openCorporatePage("karir", e)}
                 data-testid="open-careers-btn"
-                className="transition-colors hover:text-[#351080]"
+                className="inline-flex min-h-[42px] items-center rounded-lg px-1.5 transition-colors hover:bg-[#351080]/8 hover:text-[#351080] sm:min-h-[44px] sm:px-2.5"
               >
                 Karir
               </button>
 
-              <span className="h-3.5 w-[1px] bg-[#17223B]/15" aria-hidden="true" />
+              <span className="hidden h-3.5 w-[1px] bg-[#17223B]/20 sm:inline-block" aria-hidden="true" />
 
               <button
                 type="button"
                 onClick={(e) => openCorporatePage("mitra", e)}
                 data-testid="open-investor-btn"
-                className="transition-colors hover:text-[#351080]"
+                className="inline-flex min-h-[42px] items-center rounded-lg px-1.5 transition-colors hover:bg-[#351080]/8 hover:text-[#351080] sm:min-h-[44px] sm:px-2.5"
               >
                 Mitra
               </button>
@@ -1056,12 +1062,12 @@ export default function GameIntro({
               data-testid="mascot-voice-toggle"
               aria-pressed={soundOn && !needsAudioUnlock}
               title={soundOn ? "Matikan Suara Panduan" : "Nyalakan Suara Panduan"}
-              className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-[12px] font-semibold transition-colors sm:h-9 sm:px-3 ${
+              className={`inline-flex min-h-[42px] min-w-[42px] items-center justify-center gap-1.5 rounded-lg px-2 text-[13px] font-bold transition-colors sm:min-h-[44px] sm:px-3 ${
                 needsAudioUnlock
                   ? "bg-[#078D67] text-white"
                   : soundOn
-                    ? "bg-[#351080]/10 text-[#351080] hover:bg-[#351080]/15"
-                    : "bg-[#F6F5F2] text-[#17223B]/60 lp-ring"
+                    ? "bg-[#351080]/12 text-[#351080] hover:bg-[#351080]/18"
+                    : "bg-[#F6F5F2] text-[#334155] lp-ring"
               }`}
             >
               {soundOn && !needsAudioUnlock ? (
@@ -1070,7 +1076,7 @@ export default function GameIntro({
                 <VolumeX className="h-4 w-4" />
               )}
               <span className="hidden md:inline">
-                {needsAudioUnlock ? "Dengar Suara" : soundOn ? "Suara" : "Senyap"}
+                {needsAudioUnlock ? "Dengar Suara" : soundOn ? "Suara Aktif" : "Suara"}
               </span>
             </button>
           </div>
@@ -1145,20 +1151,20 @@ export default function GameIntro({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div
                 data-testid="voice-status-pill"
-                className="text-[11.5px] font-bold uppercase tracking-[0.12em] text-[#351080]"
+                className="text-[12.5px] font-bold uppercase tracking-[0.12em] text-[#351080]"
               >
                 {GAME_INTRO_CONFIG.speakerName}
               </div>
 
-              <div className="flex items-center gap-3">
-                {needsAudioUnlock && phase === "dialog" && (
+              <div className="flex items-center gap-2">
+                {(!soundOn || needsAudioUnlock) && phase === "dialog" && (
                   <button
                     type="button"
                     data-testid="mobile-unlock-audio-btn"
                     onClick={handleUnlockGreetingAudio}
-                    className="inline-flex items-center gap-1 rounded-md bg-[#078D67] px-2.5 py-1 text-[11.5px] font-bold text-white transition-colors hover:bg-[#056C4F]"
+                    className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg bg-[#078D67] px-3 py-1.5 text-[13px] font-bold text-white transition-colors hover:bg-[#056C4F]"
                   >
-                    <Volume2 className="h-3.5 w-3.5" />
+                    <Volume2 className="h-4 w-4" />
                     <span>Dengar Sapaan</span>
                   </button>
                 )}
@@ -1167,7 +1173,7 @@ export default function GameIntro({
                   type="button"
                   onClick={handleReplaySpeech}
                   data-testid="replay-voice-btn"
-                  className="inline-flex items-center gap-1 text-[11.5px] font-semibold text-[#17223B]/60 hover:text-[#351080]"
+                  className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg px-2 py-1 text-[13px] font-semibold text-[#334155] hover:bg-[#351080]/8 hover:text-[#351080]"
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                   <span>Ulangi Sapaan</span>
@@ -1179,7 +1185,8 @@ export default function GameIntro({
               <p
                 key={phase === "dialog" ? `dlg-${currentPageIdx}` : "choices-prompt"}
                 data-testid="mascot-speech-text"
-                className="lp-fade-in font-display text-[16px] font-semibold leading-[1.45] text-[#17223B] sm:text-[18px]"
+                aria-live="polite"
+                className="lp-fade-in font-display text-[16px] font-semibold leading-[1.48] text-[#17223B] sm:text-[18px]"
               >
                 {companionSpeech}
               </p>
@@ -1189,7 +1196,7 @@ export default function GameIntro({
                   type="button"
                   data-testid="open-gate-btn"
                   onClick={handleStageTap}
-                  className="shrink-0 rounded-lg bg-[#351080] px-4 py-2 text-[13px] font-semibold text-white transition-colors hover:bg-[#5720B8]"
+                  className="inline-flex min-h-[42px] shrink-0 items-center rounded-lg bg-[#351080] px-4 py-2 text-[14px] font-bold text-white transition-colors hover:bg-[#5720B8]"
                 >
                   Lanjut →
                 </button>
@@ -1223,7 +1230,7 @@ export default function GameIntro({
                 </div>
 
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[#17223B]/10 pt-2.5 text-[12px]">
-                  <span className="text-[#17223B]/60">
+                  <span className="text-[#475569]">
                     <button
                       type="button"
                       onClick={(e) => openCorporatePage("profil", e)}
@@ -1418,7 +1425,7 @@ export default function GameIntro({
                           ))}
                         </div>
                         <div className="mt-2 flex h-11 items-center overflow-hidden rounded-xl bg-[#F6F5F2] lp-ring focus-within:bg-white focus-within:ring-2 focus-within:ring-[#351080]">
-                          <span className="pl-3.5 pr-2 text-[14px] font-bold text-[#17223B]/55">
+                          <span className="pl-3.5 pr-2 text-[14px] font-bold text-[#475569]">
                             Rp
                           </span>
                           <input
@@ -1473,7 +1480,7 @@ export default function GameIntro({
                             <Plus className="h-5 w-5" />
                           </button>
                         </div>
-                        <div className="mt-1.5 text-[12px] text-[#17223B]/60">
+                        <div className="mt-1.5 text-[12px] text-[#475569]">
                           Maks. lama cicilan: <strong>{maxAllowedTenorYears} tahun</strong>
                         </div>
                         {estimate.isSeniorSpecialScheme && (
@@ -1683,7 +1690,7 @@ export default function GameIntro({
                               onClick={() => onTenorChange(yr)}
                               className={`h-10 rounded-xl text-[13px] font-bold transition-colors ${
                                 disabled
-                                  ? "cursor-not-allowed bg-slate-100 text-slate-300"
+                                  ? "cursor-not-allowed bg-slate-100 text-slate-500"
                                   : effectiveTenorYears === yr
                                     ? "bg-[#351080] text-white"
                                     : "bg-[#F6F5F2] text-[#17223B] lp-ring hover:bg-[#EDE9F8]"
@@ -1718,7 +1725,7 @@ export default function GameIntro({
                           3. Perkiraan Cicilan Pinjaman Lama / Bulan (Opsional)
                         </label>
                         <div className="mt-1.5 flex h-11 items-center overflow-hidden rounded-xl bg-[#F6F5F2] lp-ring focus-within:bg-white focus-within:ring-2 focus-within:ring-[#351080]">
-                          <span className="pl-3.5 pr-2 text-[14px] font-bold text-[#17223B]/55">
+                          <span className="pl-3.5 pr-2 text-[14px] font-bold text-[#475569]">
                             Rp
                           </span>
                           <input
@@ -1802,7 +1809,7 @@ export default function GameIntro({
                         >
                           ± {formatRupiah(estimate.remainingSalary)}
                         </div>
-                        <div className="mt-0.5 text-[12px] text-[#17223B]/60">
+                        <div className="mt-0.5 text-[12px] text-[#475569]">
                           Tetap utuh untuk kebutuhan sehari-hari
                         </div>
                       </div>
@@ -1818,7 +1825,7 @@ export default function GameIntro({
                           {formatRupiah(estimate.installmentLow)} –{" "}
                           {formatRupiah(estimate.installmentHigh)}
                         </div>
-                        <div className="mt-0.5 text-[12px] text-[#17223B]/60">
+                        <div className="mt-0.5 text-[12px] text-[#475569]">
                           Dana {formatRupiahCompact(plafond)} • {effectiveTenorYears} Tahun • Usia
                           saat lunas: <strong>{estimate.ageAtMaturity} thn</strong>
                         </div>
@@ -1881,7 +1888,7 @@ export default function GameIntro({
                       </div>
                     </div>
 
-                    <div className="space-y-1 text-[12px] leading-[1.55] text-[#17223B]/60">
+                    <div className="space-y-1 text-[12px] leading-[1.55] text-[#475569]">
                       <p>
                         *Angka di atas adalah estimasi awal dan bukan persetujuan kredit mengikat.
                         Rincian uang terima bersih dihitung tertulis oleh petugas cabang sesuai Bank
@@ -2041,7 +2048,7 @@ export default function GameIntro({
                             value={branchSearch}
                             onChange={(e) => setBranchSearch(e.target.value)}
                             placeholder="Cari kota / kabupaten (contoh: Medan, Simalungun, Bandung)..."
-                            className="h-10 w-full rounded-xl bg-[#F6F5F2] px-3.5 text-[13.5px] font-semibold text-[#17223B] placeholder:text-[#17223B]/45 lp-ring focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#351080]"
+                            className="h-10 w-full rounded-xl bg-[#F6F5F2] px-3.5 text-[13.5px] font-semibold text-[#17223B] placeholder:text-[#475569] lp-ring focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#351080]"
                           />
                         </div>
 
@@ -2136,7 +2143,7 @@ export default function GameIntro({
                             <span>Kembali</span>
                           </button>
 
-                          <span className="text-[12px] font-semibold text-[#17223B]/60">
+                          <span className="text-[12px] font-semibold text-[#475569]">
                             7 Wilayah • Kantor Pusat &amp; 29 Cabang Kota
                           </span>
                         </div>
@@ -2352,7 +2359,7 @@ export default function GameIntro({
                           </button>
                         </div>
 
-                        <div className="text-center text-[11.5px] text-[#17223B]/60">
+                        <div className="text-center text-[11.5px] text-[#475569]">
                           Gratis tanpa biaya di muka. Data pribadi dilindungi sesuai UU PDP tanpa
                           unggah KTP.
                         </div>

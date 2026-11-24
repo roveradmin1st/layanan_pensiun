@@ -1,6 +1,6 @@
 # Status Server dan Kesiapan Operasional — Layanan Pensiunan
 
-Tanggal acuan konteks server terkini: **23 November 2026** (finalisasi branch landing page publik `feat/landing-page-20261122`; baseline produksi aktif VPS tetap di `6a791a34b4f90111fabe3e5ce55fef08a8395913`).
+Tanggal acuan konteks server terkini: **24 November 2026** (eksekusi Gelombang 1 P0 pada branch `fix/p0-core-integrity-and-ux-20261124` di atas commit produksi aktif `0f9d43e73119f8db263b629b0a18042477d9321c`; belum dipasang ke VPS produksi hingga CI GitHub Actions hijau dan deployment diinstruksikan pemilik).
 Dasar fakta server: hasil pelaporan controller VPS (`lp-release` / `ops/server_release.py`) per 15 November 2026, verifikasi commit pada repository `https://github.com/roveradmin1st/layanan_pensiun.git`, serta catatan hardening host VPS per **22 November 2026**. Catatan audit sebelumnya (8–9 November 2026 pada rilis `c76e823`/`fe1025a`) dan persiapan awal (7 November 2026) dipertahankan di bawah sebagai riwayat historis bertanggal.
 
 ## 1. Kondisi Server Aktual yang Terkonfirmasi (Sinkronisasi 15–22 November 2026)
@@ -280,3 +280,38 @@ Dibangun di atas commit `24849af0ef32e8f471aa4fe229138f1b663b6e52` (branch harde
    - **Meta OpenGraph Absolut & Canonical (`landing/index.html`):** `og:image` & `twitter:image` diubah ke `https://layananpensiunan.id/brand/og-preview.jpg` serta ditambahkan `og:url` dan `<link rel="canonical" href="https://layananpensiunan.id/" />`.
    - **Atribusi Sumber Iklan UTM (`landing/src/App.jsx`):** Membaca `utm_source`, `utm_medium`, `utm_campaign` sekali saat kunjungan awal dengan sanitasi ketat (`/[a-zA-Z0-9_-]{1,40}/`) lalu menyertakan `[Sumber: ...]` pada `notes` (`POST /api/public/leads`) tanpa mengubah skema backend maupun kontrak database.
    - **Verifikasi Lokal Tahap 2:** Build `landing/` lulus, **80/80** `npm --prefix backend test` lulus (`0` fail), serta uji pratinjau browser + verifikasi SQLite sementara memastikan logo `.webp`, meta absolut, dan sanitasi UTM (normal & karakter berbahaya) bekerja tepat.
+
+---
+
+## 10. Gelombang 1 (P0) — Core Data Integrity, Parser, Branch Routing & Mobile/Landing UX (24 November 2026 — Branch `fix/p0-core-integrity-and-ux-20261124`)
+
+Dibangun secara terisolasi murni di atas commit produksi aktif `0f9d43e73119f8db263b629b0a18042477d9321c` (`feat/landing-page-20261122`, tanpa mencampur cabang Kalkulator BNI yang tetap dijaga untuk Gelombang 2) dan **belum dipasang ke VPS produksi** (menunggu verifikasi CI GitHub Actions hijau, pembukaan `GET /api/public/config` pada Nginx publik VPS, serta instruksi deployment pemilik):
+
+1. **Integritas Database & Anti Boot-Brick (`backend/src/db/database.js`, `backend/src/server.js`):**
+   - Seluruh pembuatan ID entitas berbasis `Date.now()` (`sim-`, `lead-`, `app-`, `clm-`, `imp-`, `prop-`, `ldoc-`, `aud-`, `h-`, `act-`, `req-`, `ch-`) diganti menggunakan `crypto.randomUUID()` bebas tabrakan.
+   - `withTransaction()` menolak callback `async`/Promise secara deterministik, mendukung transaksi bersarang dengan SQLite `SAVEPOINT` + pemulihan properti objek *in-place* (`restoreStateInPlace`) sehingga referensi `stateCache` tidak pernah terlepas (*detached*), dan menjalankan `validateState(stateCache, { production: IS_PROD })` sebelum menulis ke SQLite (`saveStore()` dan pra-commit `withTransaction()`) sehingga state rusak tidak pernah ter-commit ke disk.
+   - `saveUploadedFile()` menggunakan `INSERT` murni tanpa menimpa BLOB dokumen milik entitas lain; unggahan ulang bukti klaim (`booking` / `payment`) memakai `booking_file_id` / `payment_file_id` berbasis UUID baru dengan *fallback* kompatibilitas mundur untuk data produksi lama.
+2. **Parser XLSX & Impor Leads Skala Besar (`backend/src/utils/lead-import-parser.js`, `backend/src/server.js`):**
+   - Ekstraksi sel `<c .../>` *self-closing* diperbaiki agar sel kosong berformat tanpa isi tidak menelan sel berikutnya pada baris yang sama.
+   - Pembacaan arsip ZIP XLSX mendukung direktori pusat (*End of Central Directory* `0x06054b50` + *Central Directory* `0x02014b50`, bit 3 *Data Descriptor*) untuk file hasil ekspor *streaming* (Google Sheets / LibreOffice) dengan *fallback* *Local File Header* yang aman.
+   - Urutan *unescaping* entitas XML diperbaiki satu lintasan (`&amp;` diproses paling akhir) sehingga string seperti `&amp;lt;` tidak mengalami *double-unescape*.
+   - Pemetaan header gaji diperketat (mengecualikan header mengandung `plafon*`, `os pokok`, `pinjaman`, `kredit`) dan *fallback* nomor HP kosong diubah dari `"080000000000"` menjadi `""`.
+   - `POST /api/imports` menggunakan struktur `Set` berkinerja `O(R + L)` untuk deduplikasi (mengabaikan string kosong `""` pada cek duplikat nomor HP), dan seluruh endpoint paginasi (`/api/simulations`, `/api/leads`, `/api/applications`, `/api/claims`, `/api/audit-logs`) dibatasi `page >= 1` dan `1 <= page_size <= 200`.
+3. **Zona Waktu WIB (`Asia/Jakarta`), Aktuaria & Routing Cabang (`backend/src/utils/time-wib.js`, `backend/src/engines/calc-engine.js`, `backend/src/config/branches.js`, `backend/src/routes/public-leads.js`, `backend/src/server.js`):**
+   - Helper terpusat `todayWibIso()`, `yearMonthWibCompact()`, dan `isoTimestampToWibDate()` menggantikan pemotongan tanggal UTC `toISOString().slice(0, 10)` di seluruh kalkulator, pencatatan klaim/simulasi/pengajuan, kuota permintaan leads harian, dan leads publik (bebas pergeseran tanggal pukul `00:00–06:59 WIB`).
+   - `evaluateAms2Core` menggunakan `addMonthsClamped()` untuk tanggal jatuh tempo kredit sehingga simulasi pada tanggal 31 tidak lagi kehilangan 1 bulan tenor maksimum akibat luapan kalender JS `setMonth`.
+   - Pencocokan cabang di `branches.js` menggunakan batas kata (`\b`) dan pengurutan alias dari terpanjang ke terpendek sehingga `"KOTA SOLOK"` masuk ke `"PADANG"` (bukan `"SOLO"`), `"BANJARBARU"` masuk ke `"BANJARMASIN"` (bukan `"TASIKMALAYA"`), dan kota yang benar-benar tidak dikenali pada `public-leads.js` jatuh ke `"PUSAT JAKARTA"`.
+4. **UI Mobile CRM, Kalkulator & Optimasi Aset (`frontend/src/`):**
+   - `ListCard` pada `frontend/src/components/common/index.jsx` merender `{footer || children}` serta mendukung item `meta` baik berupa tuple `[label, value]` maupun string tunggal (memulihkan tampilan 6 halaman mobile CRM dan memunculkan kembali tombol `Ubah Akun` di `Users.jsx`).
+   - Template WhatsApp di `SimExtras.jsx` menambahkan percabangan eksplisit `bsi.sub_product === "PENSIUN"`, dan tombol `"Ulangi dari 0"` (beserta tombol reset per bank) di `Calculator.jsx` membersihkan parameter URL `?lead=` agar simulasi baru tidak salah menempel pada nasabah sebelumnya.
+   - Kedua logo PNG di `frontend/public/brand/` dioptimasi ukurannya dan dilayani melalui `<picture>` WebP + fallback PNG di `Logo.jsx` tanpa memutus referensi yang ada.
+5. **Landing Page Runtime Turnstile, Ergonomi Lansia & Pembersihan Dependensi (`landing/`, `docs/RUNBOOK.md`):**
+   - Endpoint baru `GET /api/public/config` dibuka pada *Public Surface Guard* (`X-LP-Surface: public-landing`) untuk mengembalikan `{ turnstile_site_key: process.env.TURNSTILE_SITE_KEY || "" }` secara dinamis saat *runtime*, dan dibaca otomatis oleh `landing/src/App.jsx` bila *build-time key* kosong (dokumentasi `location = /api/public/config` ditambahkan pada [RUNBOOK.md](RUNBOOK.md)).
+   - `landing/index.html` menempatkan blok `<noscript>` di atas *splash screen* (`z-index: 100000`) serta menyediakan kartu *fallback* CSS otomatis `5,5 detik` apabila jaringan/skrip lambat memuat.
+   - Kontras teks abu-abu tipis ditingkatkan memenuhi standar keterbacaan lansia WCAG AA (`>= 4,5:1`), target sentuh tombol *header* diperbesar (`>= 42–44px`), komponen `CorporateView` dipisah dengan `React.lazy` (bundle awal turun dari `341,45 kB` menjadi `240,18 kB`), dan pemutaran `.mp3` ditunda sepenuhnya (`preload="none"`, tanpa `src` awal, default suara nonaktif) hingga pengguna mengaktifkan suara.
+   - Ke-17 dependensi tak terpakai di `landing/package.json` dihapus sehingga `npm audit --omit=dev` pada `landing/` mencapai **`0 vulnerabilities`**.
+6. **Verifikasi Lokal Pra-Push (24 November 2026):**
+   - Suite unit & integrasi backend (`npm --prefix backend test`, termasuk suite baru `tests/p0-core-integrity-20261124.test.mjs`): **84/84 pengujian LULUS 100%** pada database sementara.
+   - Suite HTTP keamanan, RBAC, dan aturan bisnis (`node backend/tests/security-and-api.test.mjs`): **LULUS 100%**.
+   - Uji peramban E2E produksi sintetis (`node ops/browser-smoke.mjs`): **LULUS 100%** (*login/password gate*, pengaturan produksi, penugasan supervisor Siantar, *review* dokumen individual, dan persetujuan/pembayaran klaim).
+   - Build produksi `frontend/` dan `landing/` serta audit kerentanan `landing/` (`0 vulnerabilities`): **LULUS 100%**.

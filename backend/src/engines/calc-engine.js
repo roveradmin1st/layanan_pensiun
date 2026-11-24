@@ -22,6 +22,7 @@ import {
   medicalStatus as simasPensiunMedicalStatus,
   payment as pensiunPayment
 } from "./bsi-pensiun-preview.js";
+import { todayWibIso } from "../utils/time-wib.js";
 
 const REGISTERED_PRODUCT_KEYS = new Set(Object.keys(DEFAULT_PARTNER_PARAMETERS).filter((key) => {
   const cfg = DEFAULT_PARTNER_PARAMETERS[key];
@@ -163,7 +164,7 @@ export function getNearestAge30_360(dobDate, startDate) {
   return Math.floor((d360 + 180) / 360);
 }
 
-export function computeAgeDetail(birthDateIso, processDateIso = new Date().toISOString().slice(0, 10)) {
+export function computeAgeDetail(birthDateIso, processDateIso = todayWibIso()) {
   const b = parseIsoLocalDate(birthDateIso);
   const p = parseIsoLocalDate(processDateIso);
   if (!b || isNaN(b.getTime()) || !p || isNaN(p.getTime())) {
@@ -188,7 +189,7 @@ export function computeAgeDetail(birthDateIso, processDateIso = new Date().toISO
 }
 
 export function computeSimasInsurance(plafond, birthDateIso, tenorMonths, simasConfig, options = {}) {
-  const procDateIso = options.processDateIso || new Date().toISOString().slice(0, 10);
+  const procDateIso = options.processDateIso || todayWibIso();
   const ageDetail = computeAgeDetail(birthDateIso, procDateIso);
   const nearestAge = options.nearestAge !== undefined ? Number(options.nearestAge) : ageDetail.insuranceAge;
   const minEntryAge = Number(simasConfig?.minEntryAge) || 45;
@@ -556,7 +557,7 @@ function evaluateBsiPensiunCore(body, defaultProcessDate, productCfg) {
       ? String(body.process_date).trim().slice(0, 10)
       : body.bsi_proyeksi_cair && String(body.bsi_proyeksi_cair).trim() !== ""
       ? String(body.bsi_proyeksi_cair).trim().slice(0, 10)
-      : defaultProcessDate || new Date().toISOString().slice(0, 10);
+      : defaultProcessDate || todayWibIso();
   const rawPolicy =
     body.insurance_start_date && String(body.insurance_start_date).trim() !== ""
       ? String(body.insurance_start_date).trim().slice(0, 10)
@@ -1369,7 +1370,7 @@ function evaluateBsiCore(body, productCfg, defaultProcessDate) {
     body.process_date !== undefined && body.process_date !== null && String(body.process_date).trim() !== "";
   const processDateStr = hasExplicitProcDate
     ? String(body.process_date).trim().slice(0, 10)
-    : (defaultProcessDate || new Date().toISOString().slice(0, 10));
+    : (defaultProcessDate || todayWibIso());
   const procDate = parseIsoLocalDate(processDateStr);
   const dobDate = parseIsoLocalDate(body.birth_date);
   const ageObj = computeAgeDetail(body.birth_date, processDateStr);
@@ -1603,7 +1604,7 @@ function evaluateAms2Core(body, cfg) {
   const processDate =
     body.process_date && parseIsoLocalDate(body.process_date)
       ? String(body.process_date).slice(0, 10)
-      : new Date().toISOString().slice(0, 10);
+      : todayWibIso();
   const dob = parseIsoLocalDate(body.birth_date);
   const at = parseIsoLocalDate(processDate) || new Date();
   let age = 0;
@@ -1630,9 +1631,9 @@ function evaluateAms2Core(body, cfg) {
   let recMaxTenor = 0;
   if (dob && at && finalLimit) {
     const months = (finalLimit.getFullYear() - at.getFullYear()) * 12 + (finalLimit.getMonth() - at.getMonth());
-    const candidateEnd = new Date(at);
-    candidateEnd.setMonth(candidateEnd.getMonth() + Math.max(0, months));
-    recMaxTenor = Math.max(0, months);
+    const safeMonths = Math.max(0, months);
+    const candidateEnd = addMonthsClamped(at, safeMonths);
+    recMaxTenor = safeMonths;
     if (candidateEnd > finalLimit) recMaxTenor = Math.max(0, recMaxTenor - 1);
     recMaxTenor = Math.min(maxTenorCap, recMaxTenor);
   }
@@ -2391,7 +2392,7 @@ export function calculateMax(body, allParams) {
   const bankKey = body.bank_key ?? "ams2";
   const cfg = registeredPartner(allParams, bankKey);
   if (!cfg) return rejectUnknownPartner(bankKey);
-  const processDate = new Date().toISOString().slice(0, 10);
+  const processDate = todayWibIso();
   const ageObj = computeAgeDetail(body.birth_date, processDate);
   const age = ageObj.years;
   const salary = Math.max(0, Number(body.salary || 0));
@@ -2839,7 +2840,7 @@ export function calculatePreview(body, allParams) {
   // 2. BSI Mitraguna Prima+ Prapensiun (PP10/PP3) & BSI Pensiun Berkah + Simas Jiwa
   // Ditangani langsung dengan evaluateBsiScenario tanpa siklus calculateMax -> calculatePreview -> calculateMax
   if (bankKey === "bsi_prapen" || cfg.engine === "bsi_simas") {
-    const defaultProcessDate = new Date().toISOString().slice(0, 10);
+    const defaultProcessDate = todayWibIso();
     const productCode = normalizeBsiProductInput(body);
     const resolved = resolveBsiProductConfig(allParams, productCode);
     if (!resolved.ok) {

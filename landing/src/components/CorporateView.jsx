@@ -433,7 +433,7 @@ export default function CorporateView({
                     Nilai Kerja Perusahaan — PRIMA
                   </h3>
                 </div>
-                <span className="text-[12.5px] font-semibold text-[#17223B]/55">
+                <span className="text-[12.5px] font-semibold text-[#475569]">
                   Berlaku di seluruh cabang &amp; mitra
                 </span>
               </div>
@@ -727,7 +727,7 @@ export default function CorporateView({
               <div>
                 <div className="flex flex-wrap items-center justify-between gap-2 text-[12px] font-bold uppercase tracking-wider">
                   <span className="text-[#078D67]">{activeEduArticle.category}</span>
-                  <span className="text-[#17223B]/45">
+                  <span className="text-[#475569]">
                     Panduan 0{activeEduIndex + 1} dari 0{SITE_CONTENT.education.articles.length}
                   </span>
                 </div>
@@ -751,7 +751,7 @@ export default function CorporateView({
               </div>
 
               <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-[#17223B]/10 pt-4">
-                <span className="text-[12.5px] font-medium text-[#17223B]/60">
+                <span className="text-[12.5px] font-medium text-[#475569]">
                   Pilih topik panduan lain di bawah ini
                 </span>
                 <button
@@ -911,7 +911,7 @@ export default function CorporateView({
                   {SITE_CONTENT.marketingCareers.visionHeadline}
                 </h3>
               </div>
-              <span className="text-[12.5px] font-semibold text-[#17223B]/60">
+              <span className="text-[12.5px] font-semibold text-[#475569]">
                 Sasaran Strategis Bertahap
               </span>
             </div>
@@ -936,7 +936,7 @@ export default function CorporateView({
               ))}
             </div>
 
-            <p className="mt-5 border-t border-[#17223B]/10 pt-3.5 text-[12px] leading-[1.55] text-[#17223B]/58">
+            <p className="mt-5 border-t border-[#17223B]/10 pt-3.5 text-[12px] leading-[1.55] text-[#475569]">
               {SITE_CONTENT.marketingCareers.visionNote}
             </p>
           </div>
@@ -1199,7 +1199,7 @@ export default function CorporateView({
               ))}
             </div>
 
-            <p className="mt-4 text-[12px] leading-[1.6] text-[#17223B]/58">
+            <p className="mt-4 text-[12px] leading-[1.6] text-[#475569]">
               {SITE_CONTENT.investorRelations.portfolioCaveat}
             </p>
           </div>
@@ -1467,13 +1467,13 @@ export default function CorporateView({
               <div className="font-bold text-[#17223B]">
                 {SITE_CONTENT.companyProfile.legalEntity}
               </div>
-              <div className="mt-0.5 text-[#17223B]/60">
+              <div className="mt-0.5 text-[#475569]">
                 Unit Utama: Layanan Pensiunan (7 Kanwil • Pusat &amp; 29 Kota Cabang)
               </div>
             </div>
           </div>
 
-          <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-[#17223B]/10 pt-5 text-[12.5px] text-[#17223B]/55">
+          <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-[#17223B]/10 pt-5 text-[12.5px] text-[#475569]">
             <span>
               © {new Date().getFullYear()} Layanan Pensiunan —{" "}
               {SITE_CONTENT.companyProfile.parentCompany}. Kepatuhan Perlindungan Data Pribadi (UU

@@ -106,6 +106,39 @@ export function AiSummary({ sim }) {
             `Petugas Pendamping: ${sim.created_by_name || "Petugas Layanan Pensiunan"}`,
             `_Estimasi simulasi fasilitas pembiayaan pensiun DASA CIPTA BERKARYA_`
           ].join("\n");
+        } else if (isBsi && bsi?.sub_product === "PENSIUN") {
+          const blokirPensionCnt = bsi?.blokir_pension_count ?? 0;
+          const sisaGajiPensiun = bsi?.sisa_gaji_pensiun ?? ((r.pension_salary || r.salary || 0) - (r.coop_installment || 0));
+          const angsPensiun = Math.round(bsi?.pension_installment || r.coop_installment || 0);
+          waText = [
+            `*LAYANAN PENSIUNAN — PENSIUN BERKAH (BANK BSI)*`,
+            `No. Referensi: ${sim.sim_no}`,
+            ``,
+            `Yth. Bapak/Ibu *${r.name}*${bsi?.nip ? ` (Nopen/NIP: ${bsi.nip})` : ""},`,
+            `Berikut rincian estimasi fasilitas pembiayaan pensiun Anda:`,
+            `• Plafond: Rp${Math.round(r.plafond || 0).toLocaleString("id-ID")}`,
+            `• Jangka Waktu: ${r.tenor} Bulan`,
+            `• Akad / Skema: ${bsi?.akad || "MMQ"} (${bsi?.is_atribusi ? "Atribusi Premi" : "Reguler"})`,
+            `• Angsuran Bulanan: Rp${angsPensiun.toLocaleString("id-ID")}/bulan`,
+            ``,
+            `*Rincian Biaya & Blokir Angsuran:*`,
+            `• Administrasi (${r.proaq_pct ?? 1}%): Rp${Math.round(r.proaq || 0).toLocaleString("id-ID")}`,
+            `• Asuransi Simas Pensiun: ${bsi?.is_atribusi ? "Dicicil di Margin (Atribusi)" : `Rp${Math.round(bsi?.premi_asuransi_tertanggung || r.risk || 0).toLocaleString("id-ID")}`}`,
+            `• Materai: Rp${Math.round(r.admin_fee || 100000).toLocaleString("id-ID")}`,
+            `• Blokir ${blokirPensionCnt}x Angsuran: Rp${Math.round(bsi?.blokir_pensiun ?? r.retention ?? (angsPensiun * blokirPensionCnt)).toLocaleString("id-ID")}`,
+            ...(Number(r.buka_blokir_lama || bsi?.buka_blokir_lama || 0) > 0
+              ? [`• Buka Blokir Yang Lama: Rp${Math.round(r.buka_blokir_lama || bsi?.buka_blokir_lama || 0).toLocaleString("id-ID")}`]
+              : []),
+            ...(Number(r.take_over || bsi?.pelunasan_lama || 0) > 0
+              ? [`• Pelunasan Yang Lama: Rp${Math.round(r.take_over || bsi?.pelunasan_lama || 0).toLocaleString("id-ID")}`]
+              : []),
+            ``,
+            `• *Terima Bersih: Rp${Math.round(r.net_disbursement || 0).toLocaleString("id-ID")}*`,
+            `• Sisa Gaji Pensiun: Rp${Math.round(sisaGajiPensiun || 0).toLocaleString("id-ID")}/bulan`,
+            ``,
+            `Petugas Pendamping: ${sim.created_by_name || "Petugas Layanan Pensiunan"}`,
+            `_Estimasi simulasi fasilitas pembiayaan Bank Syariah Indonesia (BSI)_`
+          ].join("\n");
         } else if (isBsi) {
           const isTriBerkah = bsi?.sub_product === "PP3";
           const headerTitle = isTriBerkah ? "PRA PENSIUN TRI BERKAH" : "PRA PENSIUN DEKADE BERKAH";

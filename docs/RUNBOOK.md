@@ -67,6 +67,12 @@ selesai dan diuji, gunakan controller yang sama melalui terminal operator.
 4. **Batas Prosedur yang Terbukti vs. Alat Historis:**
    - **Sudah Terbukti Bekerja:** Controller `/usr/local/bin/lp-release`, validasi lokal/CI (`python3 ops/ci.py` pada database sementara), `server_backup.py`, `server_doctor.py`, dan `server_export.py`.
    - **Ditunda / Jangan Dijalankan Ulang:** `ops/production_cutover.py` (alat transisi awal UAT→produksi yang gagal pada 8 Nov 2026) dan `/srv/layanan-pensiunan/deploy.sh` (izin eksekusi dicabut ke `0600`). Setiap `git push` tidak otomatis memperbarui VPS.
+5. **Kontrak Nginx Vhost Publik (`layananpensiunan.id` & `www.layananpensiunan.id`):**
+   - Seluruh proxy ke `http://127.0.0.1:4000` pada vhost publik wajib menyertakan `proxy_set_header X-LP-Surface "public-landing";`.
+   - Pada blok `/api/*` di vhost publik, izinkan **hanya**:
+     - `POST /api/public/leads` (penerimaan form konsultasi publik), dan
+     - `GET /api/public/config` (`HEAD` diizinkan; mengembalikan `{ "turnstile_site_key": "..." }` secara dinamis dari `TURNSTILE_SITE_KEY` di `/etc/layanan-pensiunan/runtime.env`, `Cache-Control: no-store`).
+   - Seluruh jalur `/api/*` lainnya pada vhost publik wajib tetap ditolak dengan `return 404;`.
 
 ---
 

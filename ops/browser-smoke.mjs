@@ -18,7 +18,7 @@ let running, browser;
 const checks = [];
 try {
   fs.rmSync(path.join(fixture.root, 'frontend/dist'), { recursive: true });
-  fs.symlinkSync(path.join(root, 'frontend/dist'), path.join(fixture.root, 'frontend/dist'), 'dir');
+  fs.symlinkSync(path.join(root, 'frontend/dist'), path.join(fixture.root, 'frontend/dist'), process.platform === 'win32' ? 'junction' : 'dir');
   const setup = runFixture(fixture, `import {getStore,saveStore,db,DOC_TEMPLATE} from './src/db/database.js';
 import {hashPassword} from './src/security/passwords.js';
 import fs from 'node:fs';
@@ -32,7 +32,21 @@ state.leads=[];state.lead_requests=[];state.imports=[];state.parameter_proposals
 saveStore();db.close();`, 'development', temporary);
   assert.equal(setup.status, 0, setup.stderr);
   running = await startFixture(fixture, 'production');
-  browser = await chromium.launch(process.argv.includes('--system-chromium') ? { executablePath: '/usr/bin/chromium', headless: true } : { headless: true });
+  const winChrome = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+  if (process.argv.includes('--system-chromium')) {
+    const sysExec = process.platform === 'win32' && fs.existsSync(winChrome) ? winChrome : '/usr/bin/chromium';
+    browser = await chromium.launch({ executablePath: sysExec, headless: true });
+  } else {
+    try {
+      browser = await chromium.launch({ headless: true });
+    } catch (launchErr) {
+      if (process.platform === 'win32' && fs.existsSync(winChrome) && String(launchErr?.message || '').includes('Executable')) {
+        browser = await chromium.launch({ executablePath: winChrome, headless: true });
+      } else {
+        throw launchErr;
+      }
+    }
+  }
   const context = await browser.newContext({ viewport: { width: 1440, height: 1050 }, serviceWorkers: 'block' });
   await context.route('**/*', async route => {
     const url = route.request().url();
