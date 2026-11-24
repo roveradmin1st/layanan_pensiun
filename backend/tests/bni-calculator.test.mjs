@@ -594,7 +594,7 @@ db.close();`);
 
     running = await startFixture(fixture);
     const api = async (method, route, { token, body } = {}) => {
-      const headers = {};
+      const headers = { "X-Requested-With": "XMLHttpRequest" };
       if (token) headers.Authorization = `Bearer ${token}`;
       if (body !== undefined) headers["Content-Type"] = "application/json";
       const res = await fetch(`${running.base}${route}`, {
@@ -893,7 +893,7 @@ test("BNI: aktivasi eksplisit pada SQLite production lama menjaga data dan kompa
   const api = async (route, { token, body, method = body ? "POST" : "GET" } = {}) => {
     const response = await fetch(running.base + route, {
       method,
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), "Content-Type": "application/json" },
+      headers: { "X-Requested-With": "XMLHttpRequest", ...(token ? { Authorization: `Bearer ${token}` } : {}), "Content-Type": "application/json" },
       body: body ? JSON.stringify(body) : undefined
     });
     return { status: response.status, data: await response.json() };
@@ -1192,7 +1192,7 @@ db.close();`, "development");
 
     const loginRes = await fetch(`${running.base}/api/auth/login`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "X-Requested-With": "XMLHttpRequest", "Content-Type": "application/json" },
       body: JSON.stringify({ email: "marketing@layananpensiunan.id", password: PASSWORD })
     });
     assert.equal(loginRes.status, 200);
@@ -1200,7 +1200,7 @@ db.close();`, "development");
 
     const saveBadDate = await fetch(`${running.base}/api/simulations`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      headers: { "X-Requested-With": "XMLHttpRequest", Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ ...ceoInput, bni_tmt_pensiun_date: "2027-02-30" })
     });
     assert.equal(saveBadDate.status, 400);
@@ -1208,7 +1208,7 @@ db.close();`, "development");
 
     const saveNormalized = await fetch(`${running.base}/api/simulations`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      headers: { "X-Requested-With": "XMLHttpRequest", Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         ...ceoInput,
         bni_disbursement_date: " 2026-12-02 ",

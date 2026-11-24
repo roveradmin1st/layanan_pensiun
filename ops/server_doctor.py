@@ -39,13 +39,18 @@ def parse_env(text):
 
 def database_worker(path):
     if os.geteuid()==0:raise RuntimeError('Database inspection must run as lpapp.')
-    with closing(sqlite3.connect(path.resolve(strict=True).as_uri()+'?mode=ro',uri=True,timeout=15)) as db:
+    resolved=path.resolve(strict=True)
+    db_info=resolved.stat()
+    db_mode=db_info.st_mode&0o777
+    permissions_0600=(not path.is_symlink()) and stat.S_ISREG(db_info.st_mode) and (db_info.st_mode&0o077)==0
+    with closing(sqlite3.connect(resolved.as_uri()+'?mode=ro',uri=True,timeout=15)) as db:
         db.execute('BEGIN')
         if db.execute('PRAGMA quick_check').fetchall()!=[('ok',)]:raise RuntimeError('SQLite check failed.')
         state=json.loads(db.execute("SELECT payload FROM kv_store WHERE collection='enterprise_state'").fetchone()[0])
         defaults={hashlib.sha256(('lp_salt_2026_'+value).encode()).hexdigest() for value in DEFAULT_PASSWORDS}
         active=[user for user in state['users'] if user.get('active',True) is not False]
         return {'integrity':'ok','production_format':state.get('meta',{}).get('production_format'),
+                'db_mode':oct(db_mode),'permissions_0600':permissions_0600,
                 'active_accounts':len(active),'active_superadmins':sum(user['role']=='super_admin' for user in active),
                 'active_default_hashes':sum(user.get('password_hash') in defaults for user in active),
                 'active_weak_hashes':sum(not re.fullmatch(r'scrypt\$131072\$8\$1\$[0-9a-f]{32}\$[0-9a-f]{128}',user.get('password_hash','')) for user in active),
@@ -118,7 +123,7 @@ def main():
         result=run(['/usr/bin/sudo','-u','lpapp','-H','--','/usr/bin/python3','-I',str(Path(__file__).resolve()),'--database-worker',str(BASE/'shared/data/enterprise.sqlite')])
         if result.returncode:raise RuntimeError('Database inspection failed.')
         data=json.loads(result.stdout)
-        return {'ok':data['production_format']=='lp-production-20261109-v1' and data['active_superadmins']>0 and data['active_default_hashes']==0 and data['active_weak_hashes']==0,**data}
+        return {'ok':data['production_format']=='lp-production-20261109-v1' and data['active_superadmins']>0 and data['active_default_hashes']==0 and data['active_weak_hashes']==0 and data.get('permissions_0600') is True,**data}
     check('production_database_and_credentials',database)
     check('verified_local_backup_under_90_minutes',lambda:{'ok':(value:=backup_health(BASE/'backups/latest-verified.json'))['valid'],**value})
     check('disk_free_at_least_5_GiB',lambda:{'ok':(free:=shutil.disk_usage(BASE).free)>=5*1024**3,'free_GiB':round(free/1024**3,2)})

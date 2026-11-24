@@ -43,7 +43,7 @@ def snapshot(path):
 def request(port, route, body=None):
     conn=http.client.HTTPConnection('127.0.0.1',port,timeout=3)
     try:
-        conn.request('POST' if body is not None else 'GET',route,body=body,headers={'Content-Type':'application/json'})
+        conn.request('POST' if body is not None else 'GET',route,body=body,headers={'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'})
         reply=conn.getresponse();return reply.status,reply.read()
     finally: conn.close()
 

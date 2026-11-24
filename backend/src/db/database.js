@@ -44,12 +44,16 @@ if (IS_PROD) {
     db.close();
     throw new Error("PRODUCTION_DATABASE_INVALID: data asli dipertahankan; periksa backup dan log operator.");
   }
-  db.exec("PRAGMA journal_mode=WAL;");
+  db.exec(`
+    PRAGMA journal_mode=WAL;
+    CREATE TABLE IF NOT EXISTS audit_events (id TEXT PRIMARY KEY,surface TEXT NOT NULL,user_id TEXT NOT NULL,user_name TEXT NOT NULL,role TEXT NOT NULL,action TEXT NOT NULL,entity TEXT NOT NULL,detail TEXT NOT NULL,ip TEXT NOT NULL,created_at TEXT NOT NULL);
+  `);
 } else {
   db.exec(`
     PRAGMA journal_mode=WAL;
     CREATE TABLE IF NOT EXISTS kv_store (collection TEXT PRIMARY KEY,payload TEXT NOT NULL,updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS uploaded_files (id TEXT PRIMARY KEY,filename TEXT NOT NULL,mime_type TEXT NOT NULL,data BLOB NOT NULL,created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS audit_events (id TEXT PRIMARY KEY,surface TEXT NOT NULL,user_id TEXT NOT NULL,user_name TEXT NOT NULL,role TEXT NOT NULL,action TEXT NOT NULL,entity TEXT NOT NULL,detail TEXT NOT NULL,ip TEXT NOT NULL,created_at TEXT NOT NULL);
   `);
 }
 
@@ -1378,23 +1382,71 @@ export function withTransaction(workFn) {
   }
 }
 
+function insertAuditEventRow(entry, surface = "internal") {
+  db.prepare(`
+    INSERT INTO audit_events (id, surface, user_id, user_name, role, action, entity, detail, ip, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    entry.id,
+    surface,
+    entry.user_id,
+    entry.user_name,
+    entry.role,
+    entry.action,
+    entry.entity,
+    entry.detail,
+    entry.ip,
+    entry.created_at
+  );
+}
+
 export function addAuditLog(user, action, entity, detail, ip = "127.0.0.1") {
   const store = getStore();
-  store.audit_logs.unshift({
+  const entry = {
     id: `aud-${crypto.randomUUID()}`,
     user_id: user?.id || "system",
     user_name: user?.name || "System",
     role: user?.role || "system",
-    action,
-    entity,
-    detail,
-    ip,
+    action: String(action || ""),
+    entity: String(entity || ""),
+    detail: String(detail || ""),
+    ip: String(ip || "127.0.0.1"),
     created_at: new Date().toISOString()
-  });
+  };
+  store.audit_logs.unshift(entry);
   if (store.audit_logs.length > 1000) store.audit_logs.length = 1000;
+  insertAuditEventRow(entry, "internal");
   if (!inTransaction) {
     saveStore();
   }
+}
+
+export function addPublicAuditLog(action, entity, detail, ip = "127.0.0.1") {
+  const entry = {
+    id: `paud-${crypto.randomUUID()}`,
+    user_id: "public-web",
+    user_name: "Website Landing Page",
+    role: "system",
+    action: String(action || ""),
+    entity: String(entity || ""),
+    detail: String(detail || ""),
+    ip: String(ip || "127.0.0.1"),
+    created_at: new Date().toISOString()
+  };
+  insertAuditEventRow(entry, "public");
+  return entry;
+}
+
+export function getAuditEvents({ surface = null, limit = 200 } = {}) {
+  const safeLimit = Math.min(1000, Math.max(1, Number.parseInt(String(limit || 200), 10) || 200));
+  if (surface) {
+    return db
+      .prepare("SELECT id, surface, user_id, user_name, role, action, entity, detail, ip, created_at FROM audit_events WHERE surface = ? ORDER BY created_at DESC, rowid DESC LIMIT ?")
+      .all(String(surface), safeLimit);
+  }
+  return db
+    .prepare("SELECT id, surface, user_id, user_name, role, action, entity, detail, ip, created_at FROM audit_events ORDER BY created_at DESC, rowid DESC LIMIT ?")
+    .all(safeLimit);
 }
 
 export function saveUploadedFile(id, filename, mimeType, buffer) {

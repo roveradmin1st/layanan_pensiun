@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Toaster } from "./components/ui/sonner";
 import { AuthProvider, useAuth } from "./context/AuthContext";
@@ -7,9 +7,11 @@ import Login from "./pages/Login";
 import InstallGate from "./pages/InstallGate";
 import { isAdmin } from "./lib/format";
 import { isStandalonePwa } from "./lib/api";
+import { applyPendingAppUpdate } from "./lib/pwa";
 import { Logo } from "./components/brand/Logo";
 import FilePreviewModal from "./components/pwa/FilePreviewModal";
 import PasswordChangeGate from "./components/auth/PasswordChangeGate";
+import AppErrorBoundary from "./components/common/AppErrorBoundary";
 
 const ForgotPassword = lazy(() => import("./pages/ForgotPassword"));
 const ResetPassword = lazy(() => import("./pages/ResetPassword"));
@@ -87,38 +89,81 @@ function LoginWithInstallGate() {
   );
 }
 
+function PwaUpdateBanner() {
+  const [updateReady, setUpdateReady] = useState(false);
+
+  useEffect(() => {
+    const onUpdateReady = () => setUpdateReady(true);
+    window.addEventListener("lp:sw-update-ready", onUpdateReady);
+    return () => window.removeEventListener("lp:sw-update-ready", onUpdateReady);
+  }, []);
+
+  if (!updateReady) return null;
+  return (
+    <div
+      role="status"
+      data-testid="pwa-update-banner"
+      className="fixed bottom-4 left-1/2 z-50 flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 items-center justify-between gap-3 rounded-xl border border-[#351080]/20 bg-[#17223B] px-4 py-3 text-xs text-white shadow-xl"
+    >
+      <span className="leading-snug">
+        Versi aplikasi terbaru tersedia. Simpan pekerjaan lalu muat ulang kapan saja.
+      </span>
+      <div className="flex shrink-0 items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => setUpdateReady(false)}
+          className="rounded-lg px-2 py-1.5 text-[11px] font-semibold text-slate-300 hover:bg-white/10"
+        >
+          Nanti
+        </button>
+        <button
+          type="button"
+          onClick={() => applyPendingAppUpdate()}
+          data-testid="pwa-update-reload-btn"
+          className="rounded-lg bg-[#078D67] px-3 py-1.5 text-[11px] font-bold text-white hover:bg-[#067253]"
+        >
+          Muat Ulang
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <Suspense fallback={<RouteFallback />}>
-          <Routes>
-            <Route path="/login" element={<LoginWithInstallGate />} />
-            <Route path="/install" element={<InstallGate onBypass={() => {
-              sessionStorage.setItem("lp_bypass_pwa", "1");
-              window.location.href = "/login";
-            }} />} />
-            <Route path="/lupa-sandi" element={<ForgotPassword />} />
-            <Route path="/reset-password" element={<ResetPassword />} />
-            <Route element={<Protected><AppLayout /></Protected>}>
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/leads" element={<Leads />} />
-              <Route path="/impor" element={<Protected admin><ImportLeads /></Protected>} />
-              <Route path="/kalkulator" element={<CalculatorPage />} />
-              <Route path="/kalkulator/bsi-pensiun-validasi" element={<PensionValidation />} />
-              <Route path="/simulasi" element={<Simulations />} />
-              <Route path="/progress" element={<Progress />} />
-              <Route path="/klaim" element={<Claims />} />
-              <Route path="/pengguna" element={<Protected admin><UsersPage /></Protected>} />
-              <Route path="/audit" element={<Protected centralOnly><AuditLog /></Protected>} />
-              <Route path="/pengaturan" element={<SettingsPage />} />
-            </Route>
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
-          </Routes>
-        </Suspense>
-      </BrowserRouter>
-      <FilePreviewModal />
-      <Toaster position="top-right" richColors />
-    </AuthProvider>
+    <AppErrorBoundary>
+      <AuthProvider>
+        <BrowserRouter>
+          <Suspense fallback={<RouteFallback />}>
+            <Routes>
+              <Route path="/login" element={<LoginWithInstallGate />} />
+              <Route path="/install" element={<InstallGate onBypass={() => {
+                sessionStorage.setItem("lp_bypass_pwa", "1");
+                window.location.href = "/login";
+              }} />} />
+              <Route path="/lupa-sandi" element={<ForgotPassword />} />
+              <Route path="/reset-password" element={<ResetPassword />} />
+              <Route element={<Protected><AppLayout /></Protected>}>
+                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/leads" element={<Leads />} />
+                <Route path="/impor" element={<Protected admin><ImportLeads /></Protected>} />
+                <Route path="/kalkulator" element={<CalculatorPage />} />
+                <Route path="/kalkulator/bsi-pensiun-validasi" element={<PensionValidation />} />
+                <Route path="/simulasi" element={<Simulations />} />
+                <Route path="/progress" element={<Progress />} />
+                <Route path="/klaim" element={<Claims />} />
+                <Route path="/pengguna" element={<Protected admin><UsersPage /></Protected>} />
+                <Route path="/audit" element={<Protected centralOnly><AuditLog /></Protected>} />
+                <Route path="/pengaturan" element={<SettingsPage />} />
+              </Route>
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            </Routes>
+          </Suspense>
+        </BrowserRouter>
+        <FilePreviewModal />
+        <PwaUpdateBanner />
+        <Toaster position="top-right" richColors />
+      </AuthProvider>
+    </AppErrorBoundary>
   );
 }

@@ -8,10 +8,13 @@
 
 import express from "express";
 import crypto from "node:crypto";
-import { withTransaction, addAuditLog } from "../db/database.js";
+import { withTransaction, addPublicAuditLog } from "../db/database.js";
 import { normalizeBranch, resolveBranchFromCityOrText } from "../config/branches.js";
 import { parsePhone, sanitizeCellValue } from "../utils/lead-import-parser.js";
 import { todayWibIso } from "../utils/time-wib.js";
+import { normalizeClientIp } from "../security/login-limiter.js";
+
+export const DEFAULT_PDP_CONSENT_VERSION = "UU-PDP-2026-v1";
 
 export const ALLOWED_PUBLIC_INSTITUTIONS = Object.freeze([
   "TASPEN",
@@ -48,7 +51,7 @@ export class PublicLeadLimiter {
   }
 
   normalizeIp(ip) {
-    return String(ip || "unknown").trim().toLowerCase().slice(0, 128) || "unknown";
+    return normalizeClientIp(ip);
   }
 
   sweep(currentTime) {
@@ -158,7 +161,22 @@ export function createPublicLeadsRouter({
         }
       }
 
-      // 4. Strict Whitelist Validation & Formula-Injection Sanitization
+      // 4. Strict Whitelist Validation, UU PDP Explicit Consent & Formula-Injection Sanitization
+      if (body.pdp_consent !== true) {
+        return res.status(400).json({
+          detail:
+            "Persetujuan Pelindungan Data Pribadi (UU No. 27 Tahun 2022 / UU PDP) wajib dicentang sebelum mengirim permohonan konsultasi."
+        });
+      }
+      let cleanConsentVersion = DEFAULT_PDP_CONSENT_VERSION;
+      if (body.consent_version !== undefined && body.consent_version !== null && body.consent_version !== "") {
+        if (typeof body.consent_version !== "string" || body.consent_version.length > 40) {
+          return res.status(400).json({ detail: "Versi persetujuan UU PDP tidak valid." });
+        }
+        const sanitizedVersion = sanitizeCellValue(body.consent_version.trim());
+        if (sanitizedVersion) cleanConsentVersion = sanitizedVersion.slice(0, 40);
+      }
+
       if (typeof body.name !== "string") {
         return res.status(400).json({ detail: "Nama lengkap wajib diisi (3–120 karakter)." });
       }
@@ -250,8 +268,7 @@ export function createPublicLeadsRouter({
       withTransaction((store) => {
         const isDuplicate = store.leads.some((l) => l.phone === normalizedPhone);
         if (isDuplicate) {
-          addAuditLog(
-            { id: "public-web", name: "Website Landing Page", role: "system" },
+          addPublicAuditLog(
             "public_lead_duplicate",
             targetBranch,
             `Inquiry publik duplikat diabaikan (${targetBranch})`,
@@ -283,14 +300,15 @@ export function createPublicLeadsRouter({
           sales_manager_id: null,
           sales_manager_name: null,
           notes: formattedNote,
+          consent_at: now,
+          consent_version: cleanConsentVersion,
           activities: [], // Seam #2: MUST be empty array so untouchedCount (<= 1 post allocation) stays accurate
           documents: [],
           created_at: now,
           updated_at: now
         });
 
-        addAuditLog(
-          { id: "public-web", name: "Website Landing Page", role: "system" },
+        addPublicAuditLog(
           "public_lead_inquiry",
           targetBranch,
           `Lead baru dari Website Landing Page (${cleanName} - ${targetBranch})`,

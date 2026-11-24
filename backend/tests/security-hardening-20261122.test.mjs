@@ -386,7 +386,7 @@ db.close();`,
     running = await startFixture(fixture, "development");
 
     const call = async (method, route, body = null, token = null, headers = {}) => {
-      const h = { ...headers };
+      const h = { "X-Requested-With": "XMLHttpRequest", ...headers };
       if (token) h.Authorization = `Bearer ${token}`;
       let payload = body;
       if (body !== null && !(body instanceof FormData) && typeof body !== "string" && !Buffer.isBuffer(body)) {

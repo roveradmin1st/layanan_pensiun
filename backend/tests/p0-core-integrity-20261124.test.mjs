@@ -371,7 +371,7 @@ db.close();`,
           "X-LP-Surface": "public-landing",
           "X-Forwarded-For": `198.51.100.${40 + idx}`
         },
-        body: JSON.stringify({ name: item.name, phone: item.phone, city: item.city })
+        body: JSON.stringify({ name: item.name, phone: item.phone, city: item.city, pdp_consent: true })
       });
       assert.equal(pubRes.status, 200);
     }
@@ -379,7 +379,7 @@ db.close();`,
     // Login Super Admin
     const loginRes = await fetch(`${running.base}/api/auth/login`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "X-Requested-With": "XMLHttpRequest", "Content-Type": "application/json" },
       body: JSON.stringify({ email: "superadmin@layananpensiunan.id", password: PASSWORD })
     });
     assert.equal(loginRes.status, 200);
@@ -387,14 +387,14 @@ db.close();`,
 
     // 3. Verifikasi batas maksimum page_size <= 200 & ketahanan terhadap input non-numerik
     const boundedRes = await fetch(`${running.base}/api/leads?page_size=99999`, {
-      headers: { Authorization: `Bearer ${token}` }
+      headers: { "X-Requested-With": "XMLHttpRequest", Authorization: `Bearer ${token}` }
     });
     assert.equal(boundedRes.status, 200);
     const boundedData = await boundedRes.json();
     assert.equal(boundedData.page_size, 200, "page_size wajib dibatasi maksimal 200");
 
     const nanPageRes = await fetch(`${running.base}/api/leads?page=abc&page_size=xyz`, {
-      headers: { Authorization: `Bearer ${token}` }
+      headers: { "X-Requested-With": "XMLHttpRequest", Authorization: `Bearer ${token}` }
     });
     assert.equal(nanPageRes.status, 200);
     const nanPageData = await nanPageRes.json();
@@ -423,7 +423,7 @@ db.close();`,
 
     const impRes = await fetch(`${running.base}/api/imports`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { "X-Requested-With": "XMLHttpRequest", Authorization: `Bearer ${token}` },
       body: importForm
     });
     assert.equal(impRes.status, 200);
@@ -431,7 +431,7 @@ db.close();`,
     assert.equal(impData.inserted, 3, "Ketiga baris tanpa nomor HP dengan NOPEN unik wajib tersimpan semuanya");
 
     const afterImpRes = await fetch(`${running.base}/api/leads?page_size=200`, {
-      headers: { Authorization: `Bearer ${token}` }
+      headers: { "X-Requested-With": "XMLHttpRequest", Authorization: `Bearer ${token}` }
     });
     const afterImpLeads = (await afterImpRes.json()).items;
     const imported1 = afterImpLeads.find((l) => l.nopen === "14001111001");
@@ -451,6 +451,7 @@ db.close();`,
         fetch(`${running.base}/api/simulations`, {
           method: "POST",
           headers: {
+            "X-Requested-With": "XMLHttpRequest",
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json"
           },
@@ -475,7 +476,7 @@ db.close();`,
     claimForm.set("file", new Blob([PDF], { type: "application/pdf" }), "akad_v1.pdf");
     const clmRes = await fetch(`${running.base}/api/claims`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { "X-Requested-With": "XMLHttpRequest", Authorization: `Bearer ${token}` },
       body: claimForm
     });
     assert.equal(clmRes.status, 200);
@@ -486,13 +487,13 @@ db.close();`,
     proofForm.set("file", new Blob([proofV2], { type: "application/pdf" }), "akad_v2.pdf");
     const proofRes = await fetch(`${running.base}/api/claims/${createdClaim.id}/proof`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { "X-Requested-With": "XMLHttpRequest", Authorization: `Bearer ${token}` },
       body: proofForm
     });
     assert.equal(proofRes.status, 200);
 
     const dlProofRes = await fetch(`${running.base}/api/claims/${createdClaim.id}/file/booking`, {
-      headers: { Authorization: `Bearer ${token}` }
+      headers: { "X-Requested-With": "XMLHttpRequest", Authorization: `Bearer ${token}` }
     });
     assert.equal(dlProofRes.status, 200);
     const dlBytes = Buffer.from(await dlProofRes.arrayBuffer());

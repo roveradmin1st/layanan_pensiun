@@ -277,6 +277,9 @@ export default function GameIntro({
   city,
   setCity,
   allCities,
+  pdpConsent,
+  setPdpConsent,
+  pdpConsentVersion = "UU-PDP-2026-v1",
   companyWebsite,
   setCompanyWebsite,
   submitting,
@@ -309,6 +312,16 @@ export default function GameIntro({
   const [soundOn, setSoundOn] = useState(false);
   const [needsAudioUnlock, setNeedsAudioUnlock] = useState(false);
   const [progress, setProgress] = useState(() => (initialCorpFromHash ? 1 : 0));
+  const [showPdpModal, setShowPdpModal] = useState(false);
+
+  useEffect(() => {
+    if (!showPdpModal) return undefined;
+    const onKeyDown = (ev) => {
+      if (ev.key === "Escape") setShowPdpModal(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showPdpModal]);
 
   const audioRef = useRef(null);
   const rafRef = useRef(0);
@@ -2329,6 +2342,44 @@ export default function GameIntro({
                           </div>
                         )}
 
+                        <div className="rounded-xl border border-[#351080]/15 bg-[#F6F5F2] p-3">
+                          <label
+                            htmlFor="lp-pdp-consent"
+                            className="flex min-h-[44px] cursor-pointer items-start gap-3 text-[13px] leading-[1.5] text-[#17223B]"
+                          >
+                            <input
+                              id="lp-pdp-consent"
+                              data-testid="checkbox-pdp-consent"
+                              type="checkbox"
+                              checked={Boolean(pdpConsent)}
+                              onChange={(e) => {
+                                if (setPdpConsent) setPdpConsent(e.target.checked);
+                                if (e.target.checked && submitError) setSubmitError("");
+                              }}
+                              required
+                              className="mt-0.5 h-5 w-5 shrink-0 rounded border-[#351080]/40 accent-[#078D67]"
+                            />
+                            <span>
+                              Saya menyetujui pengolahan data kontak dan estimasi simulasi saya
+                              untuk keperluan konsultasi oleh petugas cabang resmi sesuai{" "}
+                              <button
+                                type="button"
+                                data-testid="open-pdp-modal-btn"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setShowPdpModal(true);
+                                }}
+                                className="font-bold text-[#351080] underline decoration-[#351080]/50 underline-offset-2 hover:text-[#5720B8]"
+                              >
+                                Pemberitahuan Privasi &amp; Pelindungan Data Pribadi (UU No. 27
+                                Tahun 2022)
+                              </button>
+                              . *
+                            </span>
+                          </label>
+                        </div>
+
                         <div className="flex flex-col gap-2.5 pt-1 sm:flex-row">
                           <button
                             type="button"
@@ -2360,14 +2411,110 @@ export default function GameIntro({
                         </div>
 
                         <div className="text-center text-[11.5px] text-[#475569]">
-                          Gratis tanpa biaya di muka. Data pribadi dilindungi sesuai UU PDP tanpa
-                          unggah KTP.
+                          Gratis tanpa biaya di muka. Data pribadi dilindungi sesuai UU No. 27 Tahun
+                          2022 (UU PDP) tanpa unggah KTP.
                         </div>
                       </form>
                     )}
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showPdpModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="lp-pdp-modal-title"
+          data-testid="pdp-privacy-modal"
+          onClick={() => setShowPdpModal(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[#0D1527]/70 p-4 backdrop-blur-sm"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[88dvh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl sm:p-6"
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-slate-200 pb-3">
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-wider text-[#078D67]">
+                  Kepatuhan UU No. 27 Tahun 2022 (UU PDP)
+                </p>
+                <h2
+                  id="lp-pdp-modal-title"
+                  className="mt-0.5 font-display text-[17px] font-bold text-[#17223B]"
+                >
+                  Pemberitahuan Privasi &amp; Pelindungan Data Pribadi
+                </h2>
+              </div>
+              <button
+                type="button"
+                aria-label="Tutup Pemberitahuan Privasi"
+                onClick={() => setShowPdpModal(false)}
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-sm font-bold text-slate-600 hover:bg-slate-200"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-3 text-[13.5px] leading-[1.6] text-[#17223B]/85">
+              <div>
+                <h3 className="font-bold text-[#17223B]">1. Data yang Dikumpulkan &amp; Tujuan</h3>
+                <p className="mt-0.5">
+                  Layanan Pensiunan hanya mengumpulkan nama lengkap, nomor HP/WhatsApp, kota
+                  domisili, status/instansi pensiun, dan estimasi simulasi untuk keperluan
+                  menghubungi serta mendampingi konsultasi pembiayaan pensiun melalui petugas
+                  cabang resmi terdekat.
+                </p>
+              </div>
+
+              <div>
+                <h3 className="font-bold text-[#17223B]">2. Pembatasan &amp; Keamanan Data</h3>
+                <p className="mt-0.5">
+                  Situs ini tidak meminta unggah foto KTP, SK Pensiun, PIN, maupun kode OTP. Data
+                  Bapak/Ibu disimpan secara terbatas di sistem internal dan tidak diperjualbelikan
+                  kepada pihak ketiga yang tidak berkepentingan.
+                </p>
+              </div>
+
+              <div>
+                <h3 className="font-bold text-[#17223B]">3. Hak Subjek Data (UU PDP)</h3>
+                <p className="mt-0.5">
+                  Sesuai UU No. 27 Tahun 2022 tentang Pelindungan Data Pribadi, Bapak/Ibu berhak
+                  memperoleh kejelasan penggunaan data, memperbarui atau melengkapi data, menarik
+                  kembali persetujuan, serta meminta penghentian pemrosesan atau penghapusan data
+                  pribadi kapan saja melalui petugas cabang resmi kami.
+                </p>
+              </div>
+
+              <div className="rounded-xl bg-[#F6F5F2] px-3.5 py-2 text-[12px] text-[#475569]">
+                Versi Pemberitahuan Privasi: <strong className="text-[#17223B]">{pdpConsentVersion}</strong>
+              </div>
+            </div>
+
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                data-testid="close-pdp-modal-btn"
+                onClick={() => setShowPdpModal(false)}
+                className="inline-flex h-11 items-center justify-center rounded-xl bg-slate-100 px-4 text-[13.5px] font-bold text-[#17223B] hover:bg-slate-200"
+              >
+                Tutup
+              </button>
+              <button
+                type="button"
+                data-testid="accept-pdp-modal-btn"
+                onClick={() => {
+                  if (setPdpConsent) setPdpConsent(true);
+                  if (submitError) setSubmitError("");
+                  setShowPdpModal(false);
+                }}
+                className="inline-flex h-11 items-center justify-center rounded-xl bg-[#078D67] px-5 text-[13.5px] font-bold text-white hover:bg-[#056C4F]"
+              >
+                Saya Mengerti &amp; Setuju
+              </button>
             </div>
           </div>
         </div>

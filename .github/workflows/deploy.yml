@@ -101,18 +101,24 @@ jobs:
           eval "$(ssh-agent -s)" > /dev/null
           printf '%s\n' "$SSH_KEY" | tr -d '\r' | ssh-add - > /dev/null
 
-          REMOTE_TMP="/tmp/release-${TARGET_SHA}.tar.gz"
-          echo "Transferring release package to ${SSH_USER}@${SSH_HOST}:${REMOTE_TMP}..."
-          scp -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" "$ARCHIVE_PATH" "${SSH_USER}@${SSH_HOST}:${REMOTE_TMP}"
+          REMOTE_STAGING_DIR=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" "${SSH_USER}@${SSH_HOST}" 'mkdir -p "$HOME/.lp-deploy-staging" && chmod 700 "$HOME/.lp-deploy-staging" && realpath "$HOME/.lp-deploy-staging"')
+          if [ -z "$REMOTE_STAGING_DIR" ] || [[ "$REMOTE_STAGING_DIR" != /* ]]; then
+            echo "::error::Failed to prepare private ~/.lp-deploy-staging directory on VPS."
+            exit 1
+          fi
+          REMOTE_ARCHIVE="${REMOTE_STAGING_DIR}/release-${TARGET_SHA}.tar.gz"
+          echo "Transferring release package to ${SSH_USER}@${SSH_HOST}:${REMOTE_ARCHIVE}..."
+          scp -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" "$ARCHIVE_PATH" "${SSH_USER}@${SSH_HOST}:${REMOTE_ARCHIVE}"
 
-          echo "Executing release controller on VPS..."
-          DEPLOY_CMD="sudo /usr/local/bin/lp-release apply --archive ${REMOTE_TMP} --commit ${TARGET_SHA}"
+          echo "Executing release controller on VPS (systemd-run resilient wrapper)..."
+          UNIT_NAME="lp-release-${TARGET_SHA:0:12}-$(date +%s)"
+          DEPLOY_CMD="if sudo -n systemd-run --version >/dev/null 2>&1; then sudo systemd-run --unit=${UNIT_NAME} --collect --wait --pipe --property=KillMode=process /usr/local/bin/lp-release apply --archive '${REMOTE_ARCHIVE}' --commit '${TARGET_SHA}'; else sudo /usr/local/bin/lp-release apply --archive '${REMOTE_ARCHIVE}' --commit '${TARGET_SHA}'; fi"
           set +e
           RECEIPT_JSON=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" "${SSH_USER}@${SSH_HOST}" "$DEPLOY_CMD")
           SSH_EXIT=$?
           set -e
 
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" "${SSH_USER}@${SSH_HOST}" "rm -f ${REMOTE_TMP}" || true
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" "${SSH_USER}@${SSH_HOST}" "rm -f '${REMOTE_ARCHIVE}'" || true
 
           if [ $SSH_EXIT -ne 0 ]; then
             echo "::error::Deployment controller returned non-zero exit code: $SSH_EXIT"

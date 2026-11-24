@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 
 const AuthCtx = createContext(null);
 
+// Sesi disimpan sepenuhnya di cookie HttpOnly `lp_token`; tidak ada token di Web Storage.
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
 
@@ -13,7 +14,6 @@ export function AuthProvider({ children }) {
     } catch {
       try {
         const { data } = await api.post("/auth/refresh");
-        if (data?.access_token) sessionStorage.setItem("lp_access_token", data.access_token);
         setUser(data?.user || data);
       } catch {
         setUser(false);
@@ -34,7 +34,6 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     const { data } = await api.post("/auth/login", { email, password });
-    if (data?.access_token) sessionStorage.setItem("lp_access_token", data.access_token);
     const u = data?.user || data;
     setUser(u);
     return u;
@@ -42,7 +41,6 @@ export function AuthProvider({ children }) {
 
   const quickRole = async (role) => {
     const { data } = await api.post("/auth/quick-role", { role });
-    if (data?.access_token) sessionStorage.setItem("lp_access_token", data.access_token);
     const u = data?.user || data;
     setUser(u);
     return u;
@@ -50,7 +48,7 @@ export function AuthProvider({ children }) {
 
   const logout = async () => {
     await api.post("/auth/logout").catch(() => {});
-    sessionStorage.removeItem("lp_access_token");
+    window.dispatchEvent(new Event("auth:logout"));
     setUser(false);
   };
 

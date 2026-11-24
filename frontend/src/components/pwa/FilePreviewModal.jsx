@@ -25,7 +25,18 @@ export default function FilePreviewModal() {
       });
     };
     window.addEventListener("lp:preview-file", onPreview);
-    return () => window.removeEventListener("lp:preview-file", onPreview);
+    // Tutup otomatis & cabut blob URL saat sesi berakhir agar dokumen KYC tidak tertinggal di layar.
+    const onLogout = () => {
+      setDoc((prev) => {
+        if (prev?.url) URL.revokeObjectURL(prev.url);
+        return null;
+      });
+    };
+    window.addEventListener("auth:logout", onLogout);
+    return () => {
+      window.removeEventListener("lp:preview-file", onPreview);
+      window.removeEventListener("auth:logout", onLogout);
+    };
   }, []);
 
   const handleClose = (nextOpen) => {

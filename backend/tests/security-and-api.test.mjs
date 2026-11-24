@@ -15,7 +15,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BASE_URL = process.env.API_BASE_URL || "http://localhost:4000";
 
 async function api(method, endpoint, { token, body, headers = {}, isForm = false } = {}) {
-  const reqHeaders = { ...headers };
+  const reqHeaders = { "X-Requested-With": "XMLHttpRequest", ...headers };
   if (token) reqHeaders.Authorization = `Bearer ${token}`;
   let payload = body;
   if (body && !isForm) {

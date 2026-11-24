@@ -45,7 +45,7 @@ APP_USER = "lpapp"
 APP_NAME = "layanan-pensiunan-api"
 DEFAULT_PORT = 4000
 DATA_CONTRACT = "lp-production-20261109-v1"
-CONTROLLER_VERSION = "1.1.0"
+CONTROLLER_VERSION = "1.2.0"
 
 FORBIDDEN_ENV_KEYS = frozenset({
     "NODE_OPTIONS",
@@ -281,7 +281,11 @@ def run_as_app(
 def http_request(port: int, route: str, method: str = "GET", body: bytes | None = None) -> tuple[int, bytes]:
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
     try:
-        headers = {"Content-Type": "application/json"} if body is not None else {}
+        headers = {}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        if method.upper() not in ("GET", "HEAD", "OPTIONS"):
+            headers["X-Requested-With"] = "XMLHttpRequest"
         conn.request(method, route, body=body, headers=headers)
         res = conn.getresponse()
         return res.status, res.read()
@@ -669,8 +673,11 @@ def execute_backup_safely(base: Path = BASE_DIR) -> dict:
             raise RuntimeError(f"BACKUP_NOT_VERIFIED: Backup script failed with exit code {res.returncode}")
         try:
             out_data = json.loads(res.stdout)
-            if out_data.get("status") == "skipped":
-                raise RuntimeError("BACKUP_NOT_VERIFIED: Backup script returned skipped (lock busy).")
+            status_str = str(out_data.get("status", "")).strip().lower()
+            if status_str.startswith("skipped"):
+                raise RuntimeError(
+                    f"BACKUP_NOT_VERIFIED: Backup script returned {out_data.get('status')} (lock busy)."
+                )
         except json.JSONDecodeError:
             pass
 
@@ -833,6 +840,23 @@ def write_receipt(base: Path, app_user: pwd.struct_passwd, receipt: dict) -> Non
     atomic_write_json(receipts_dir / "latest-receipt.json", receipt, mode=0o640, uid=0, gid=app_user.pw_gid)
 
 
+def safe_cleanup_release_dir(release_dir: Path) -> None:
+    """Safely remove a retired/staging release directory after unlinking backend/data symlink."""
+    if not os.path.lexists(release_dir):
+        return
+    if release_dir.is_symlink():
+        release_dir.unlink()
+        return
+    data_link = release_dir / "backend/data"
+    if data_link.is_symlink():
+        data_link.unlink()
+    elif os.path.lexists(data_link):
+        raise RuntimeError(
+            f"SAFETY_ABORT: Refusing to delete directory containing non-symlink backend/data: {data_link}"
+        )
+    shutil.rmtree(release_dir, ignore_errors=True)
+
+
 def execute_apply(
     archive_path: Path,
     commit_sha: str | None = None,
@@ -842,6 +866,7 @@ def execute_apply(
     require_root()
 
     app_user = get_app_user(base)
+    planned_archive_sha256 = sha256_file(archive_path) if archive_path.is_file() and not archive_path.is_symlink() else None
     plan_info = execute_plan(archive_path, commit_sha, base=base, runtime_env_path=runtime_env_path)
     target_commit = plan_info["commit"]
 
@@ -892,8 +917,16 @@ def execute_apply(
         staging_dir.mkdir(mode=0o750, parents=True, exist_ok=False)
         set_owner(staging_dir, 0, app_user.pw_gid)
 
-        # Step 3: Extract & verify archive
+        # Step 3: Extract & verify archive (re-verify commit & digest after backup + lock acquisition against TOCTOU)
+        if planned_archive_sha256 is not None and sha256_file(archive_path) != planned_archive_sha256:
+            raise ValueError(
+                "INVALID_ARTIFACT: Release archive changed on disk after backup/lock acquisition (TOCTOU detected)."
+            )
         manifest = inspect_archive(archive_path)
+        if manifest.get("commit") != target_commit:
+            raise ValueError(
+                f"INVALID_ARTIFACT: Archive commit {manifest.get('commit')} does not match target commit {target_commit} after lock acquisition."
+            )
         with tarfile.open(archive_path, "r:gz") as tar:
             for member in tar.getmembers():
                 norm = member.name.replace("\\", "/")
@@ -943,7 +976,7 @@ def execute_apply(
         if final_release_dir.exists():
             tmp_replace = releases_dir / f"replace-{uuid.uuid4().hex[:8]}"
             os.rename(final_release_dir, tmp_replace)
-            shutil.rmtree(tmp_replace, ignore_errors=True)
+            safe_cleanup_release_dir(tmp_replace)
 
         os.rename(staging_dir, final_release_dir)
         sync_dir(releases_dir)

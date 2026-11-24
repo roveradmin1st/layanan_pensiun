@@ -1,4 +1,17 @@
+import { useLayoutEffect, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
+
+function caretPositionForDigitCount(formatted, digitTarget) {
+  if (!formatted || digitTarget <= 0) return 0;
+  let seen = 0;
+  for (let i = 0; i < formatted.length; i += 1) {
+    if (formatted[i] >= "0" && formatted[i] <= "9") {
+      seen += 1;
+      if (seen === digitTarget) return i + 1;
+    }
+  }
+  return formatted.length;
+}
 
 export default function CurrencyInput({
   value,
@@ -10,7 +23,25 @@ export default function CurrencyInput({
   disabled,
   ...rest
 }) {
+  const inputRef = useRef(null);
+  const pendingDigitsBeforeCaretRef = useRef(null);
+  const [caretTick, setCaretTick] = useState(0);
+
   const display = value === "" || value == null ? "" : Number(value).toLocaleString("id-ID");
+
+  useLayoutEffect(() => {
+    if (pendingDigitsBeforeCaretRef.current === null) return;
+    const targetDigits = pendingDigitsBeforeCaretRef.current;
+    pendingDigitsBeforeCaretRef.current = null;
+    const el = inputRef.current;
+    if (!el || typeof document === "undefined" || document.activeElement !== el) return;
+    const nextPos = caretPositionForDigitCount(display, targetDigits);
+    try {
+      el.setSelectionRange(nextPos, nextPos);
+    } catch {
+      /* ignore unsupported input selection */
+    }
+  }, [display, caretTick]);
 
   return (
     <div className="relative flex items-center">
@@ -18,6 +49,7 @@ export default function CurrencyInput({
         Rp
       </span>
       <input
+        ref={inputRef}
         id={id}
         required={required}
         disabled={disabled}
@@ -25,7 +57,16 @@ export default function CurrencyInput({
         placeholder={placeholder}
         value={display}
         onChange={(e) => {
-          const d = e.target.value.replace(/\D/g, "");
+          const raw = e.target.value;
+          const selStart = typeof e.target.selectionStart === "number" ? e.target.selectionStart : raw.length;
+          const digitsBeforeCaret = raw.slice(0, selStart).replace(/\D/g, "").length;
+          const d = raw.replace(/\D/g, "");
+          const leadingZerosBeforeCaret =
+            d.length > 1 && d.startsWith("0")
+              ? Math.min(digitsBeforeCaret, d.length - d.replace(/^0+/, "").length)
+              : 0;
+          pendingDigitsBeforeCaretRef.current = Math.max(0, digitsBeforeCaret - leadingZerosBeforeCaret);
+          setCaretTick((t) => t + 1);
           onChange(d === "" ? "" : Number(d));
         }}
         className={cn(
@@ -37,4 +78,3 @@ export default function CurrencyInput({
     </div>
   );
 }
-

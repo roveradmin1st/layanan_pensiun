@@ -18,7 +18,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BACKEND_ROOT = path.resolve(__dirname, "..");
 
 async function httpJson(base, route, { method = "GET", token, body, rawBody, headers = {} } = {}) {
-  const reqHeaders = { ...headers };
+  const reqHeaders = { "X-Requested-With": "XMLHttpRequest", ...headers };
   if (token) reqHeaders.Authorization = `Bearer ${token}`;
   let payload = rawBody;
   if (rawBody !== undefined) {

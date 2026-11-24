@@ -272,7 +272,7 @@ db.close();`
     running = await startFixture(fixture, "production");
 
     const call = async (method, route, body, token) => {
-      const headers = {};
+      const headers = { "X-Requested-With": "XMLHttpRequest" };
       if (token) headers.Authorization = `Bearer ${token}`;
       if (body && !(body instanceof FormData)) headers["Content-Type"] = "application/json";
       const response = await fetch(running.base + route, {

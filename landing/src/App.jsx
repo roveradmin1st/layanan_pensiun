@@ -178,11 +178,13 @@ export default function App() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [city, setCity] = useState("");
+  const [pdpConsent, setPdpConsent] = useState(false);
   const [companyWebsite, setCompanyWebsite] = useState(""); // Honeypot
   const [turnstileToken, setTurnstileToken] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [submitSuccess, setSubmitSuccess] = useState(null);
+  const pdpConsentVersion = "UU-PDP-2026-v1";
 
   const turnstileContainerRef = useRef(null);
   const buildTimeTurnstileKey = String(import.meta.env.VITE_TURNSTILE_SITE_KEY || "").trim();
@@ -635,6 +637,12 @@ export default function App() {
       setSubmitError("Mohon isi atau pilih Kota / Kabupaten tempat tinggal Bapak/Ibu.");
       return;
     }
+    if (!pdpConsent) {
+      setSubmitError(
+        "Mohon centang persetujuan Pemberitahuan Privasi & Pelindungan Data Pribadi (UU No. 27 Tahun 2022) sebelum mengirim."
+      );
+      return;
+    }
     if (turnstileSiteKey && !turnstileToken) {
       setSubmitError("Mohon centang verifikasi keamanan di atas sebelum mengirim.");
       return;
@@ -686,6 +694,8 @@ export default function App() {
         ? 0
         : Math.max(0, Math.min(100_000_000, Math.round(salary))),
       notes: simulationSummary,
+      pdp_consent: true,
+      consent_version: pdpConsentVersion,
       company_website: companyWebsite
     };
 
@@ -724,6 +734,7 @@ export default function App() {
       });
       setName("");
       setPhone("");
+      setPdpConsent(false);
       setCompanyWebsite("");
       setTurnstileToken("");
     } catch (err) {
@@ -789,6 +800,9 @@ export default function App() {
       city={city}
       setCity={setCity}
       allCities={ALL_CITIES}
+      pdpConsent={pdpConsent}
+      setPdpConsent={setPdpConsent}
+      pdpConsentVersion={pdpConsentVersion}
       companyWebsite={companyWebsite}
       setCompanyWebsite={setCompanyWebsite}
       submitting={submitting}

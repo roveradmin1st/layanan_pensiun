@@ -49,7 +49,7 @@ def request(base, route, body=None, token=None):
     if token: headers['Authorization']='Bearer '+token
     payload=None
     if body is not None:
-        headers['Content-Type']='application/json';payload=json.dumps(body).encode()
+        headers['Content-Type']='application/json';headers['X-Requested-With']='XMLHttpRequest';payload=json.dumps(body).encode()
     connection=http.client.HTTPConnection('127.0.0.1',url.port,timeout=10)
     try:
         connection.request('POST' if body is not None else 'GET',route,body=payload,headers=headers)

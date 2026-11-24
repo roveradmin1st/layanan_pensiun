@@ -26,7 +26,7 @@ def run(args, cwd, env=None):
 
 
 def request(base, route, body=None, token=None):
-    headers = {'Content-Type': 'application/json'}
+    headers = {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'}
     if token: headers['Authorization'] = 'Bearer ' + token
     req = Request(base + route, data=json.dumps(body).encode() if body else None, headers=headers)
     try:

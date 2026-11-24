@@ -519,7 +519,7 @@ test("T21 & T22: Product-scoped API endpoints enforce Dual Control per product a
     const baseUrl = running.base;
 
     const apiCall = async (method, endpoint, { token, body } = {}) => {
-      const headers = {};
+      const headers = { "X-Requested-With": "XMLHttpRequest" };
       if (token) headers.Authorization = `Bearer ${token}`;
       if (body !== undefined) headers["Content-Type"] = "application/json";
       const res = await fetch(`${baseUrl}${endpoint}`, {

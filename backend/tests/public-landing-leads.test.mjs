@@ -157,7 +157,7 @@ db.close();`,
     running = await startFixture(fixture, "development");
 
     const call = async (method, route, body = null, token = null, extraHeaders = {}) => {
-      const headers = { ...extraHeaders };
+      const headers = { "X-Requested-With": "XMLHttpRequest", ...extraHeaders };
       if (token) headers.Authorization = `Bearer ${token}`;
       let payload = body;
       if (body !== null && typeof body !== "string") {
@@ -228,6 +228,7 @@ db.close();`,
       "POST",
       "/api/public/leads",
       {
+        pdp_consent: true,
         name: "=H. AHMAD PRAPENSIUN",
         phone: "+62 813-9988-7701",
         city: "Kota Bandung",
@@ -250,6 +251,7 @@ db.close();`,
       "POST",
       "/api/public/leads",
       {
+        pdp_consent: true,
         name: "HJ. SITI PURNABAKTI",
         phone: "081399887702",
         city: "Bandung",
@@ -299,6 +301,7 @@ db.close();`,
       "POST",
       "/api/public/leads",
       {
+        pdp_consent: true,
         name: "DUPLIKAT NOMOR",
         phone: "+6281399887701",
         city: "Bandung"
@@ -313,6 +316,7 @@ db.close();`,
       "POST",
       "/api/public/leads",
       {
+        pdp_consent: true,
         name: "BOT SPAMMER",
         phone: "081399887799",
         city: "Bandung",
@@ -359,6 +363,7 @@ db.close();`,
         "POST",
         "/api/public/leads",
         {
+          pdp_consent: true,
           name: `Nasabah Rate ${i}`,
           phone: `08135555000${i}`,
           city: "Siantar"
@@ -372,6 +377,7 @@ db.close();`,
       "POST",
       "/api/public/leads",
       {
+        pdp_consent: true,
         name: "Nasabah Rate 6",
         phone: "081355550006",
         city: "Siantar"

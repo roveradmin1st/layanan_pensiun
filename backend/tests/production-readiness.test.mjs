@@ -101,7 +101,7 @@ state.claims=[{id:'claim-fixture',claim_no:'CLM-FIXTURE',application_id:'app-fix
 saveStore();db.close();`));
     running = await startFixture(fixture, 'production');
     const call = async (method, route, body, token, extraHeaders = {}) => {
-      const headers = { ...extraHeaders };
+      const headers = { "X-Requested-With": "XMLHttpRequest", ...extraHeaders };
       if (token) headers.Authorization = `Bearer ${token}`;
       if (body && !(body instanceof FormData)) headers['Content-Type'] = 'application/json';
       const response = await fetch(running.base + route, { method, headers, body: body ? (body instanceof FormData ? body : JSON.stringify(body)) : undefined });
@@ -235,7 +235,7 @@ saveStore();db.close();`));
       assert.equal((await call('POST', route + '/pay', form(250000), opsToken)).status, 409);
     });
     await t.test('Malformed multipart stays bounded and the server remains available; repeated login gets 429', async () => {
-      const bad = await fetch(running.base + '/api/applications/app-fixture/documents/kk', { method: 'POST', headers: { Authorization: 'Bearer ' + superToken, 'Content-Type': 'multipart/form-data; boundary=test' }, body: '--test\r\nContent-Disposition: form-data; name="file"; filename="x.pdf"\r\n\r\nunfinished' });
+      const bad = await fetch(running.base + '/api/applications/app-fixture/documents/kk', { method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest', Authorization: 'Bearer ' + superToken, 'Content-Type': 'multipart/form-data; boundary=test' }, body: '--test\r\nContent-Disposition: form-data; name="file"; filename="x.pdf"\r\n\r\nunfinished' });
       assert.equal(bad.status, 400);
       assert.equal((await call('GET', '/api/auth/me', null, superToken)).status, 200);
       for (let i = 0; i < 10; i++) assert.equal((await call('POST', '/api/auth/login', { email: 'limited@example.test', password: 'wrong' })).status, 401);

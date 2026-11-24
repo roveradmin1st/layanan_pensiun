@@ -653,6 +653,59 @@ class DeploymentAutomationTests(unittest.TestCase):
 
         self.assertTrue(server_release.check_sqlite_quick(db_file))
 
+    def test_wave3_ops_hardening_skipped_backup_toctou_and_symlink_cleanup(self):
+        # 1. execute_backup_safely must reject skipped_lock_busy (startswith("skipped"))
+        env = FakeServerEnvironment(self.root / "wave3-ops")
+        self._patch_env(env)
+        fake_backup_script = env.base / "ops/server_backup.py"
+        fake_backup_script.parent.mkdir(parents=True, exist_ok=True)
+        fake_backup_script.write_text("# stub\n", encoding="utf-8")
+        skipped_proc = subprocess.CompletedProcess(
+            ["/usr/bin/python3", "-I", str(fake_backup_script)],
+            0,
+            stdout=json.dumps({"status": "skipped_lock_busy"}),
+            stderr="",
+        )
+        with mock.patch("subprocess.run", return_value=skipped_proc):
+            with self.assertRaisesRegex(RuntimeError, "BACKUP_NOT_VERIFIED"):
+                server_release.execute_backup_safely(env.base)
+
+        # 2. execute_apply must detect TOCTOU archive swap after execute_plan / backup
+        tar_a = self.root / "release-a.tar.gz"
+        tar_b = self.root / "release-b.tar.gz"
+        commit_b = "b" * 40
+        package_release.create_release_package(commit=self.commit, output_path=tar_a, root=self.repo)
+        package_release.create_release_package(commit=commit_b, output_path=tar_b, root=self.repo)
+
+        def swap_during_backup(_base):
+            shutil.copyfile(tar_b, tar_a)
+            return env.backup_meta
+
+        with mock.patch.object(server_release, "execute_backup_safely", side_effect=swap_during_backup):
+            with self.assertRaisesRegex(ValueError, "INVALID_ARTIFACT"):
+                server_release.execute_apply(
+                    tar_a,
+                    self.commit,
+                    base=env.base,
+                    runtime_env_path=env.runtime_env,
+                )
+
+        # 3. safe_cleanup_release_dir must unlink backend/data symlink without touching shared/data
+        retired = env.releases / "retired-rel"
+        (retired / "backend").mkdir(parents=True)
+        (retired / "backend/data").symlink_to(env.shared)
+        server_release.safe_cleanup_release_dir(retired)
+        self.assertFalse(retired.exists())
+        self.assertTrue(env.live_db.is_file())
+        self.assertEqual(server_release.sha256_file(env.live_db), env.live_db_sha256)
+
+        # 4. safe_cleanup_release_dir must refuse deleting non-symlink backend/data directory
+        unsafe_rel = env.releases / "unsafe-rel"
+        (unsafe_rel / "backend/data").mkdir(parents=True)
+        with self.assertRaisesRegex(RuntimeError, "SAFETY_ABORT"):
+            server_release.safe_cleanup_release_dir(unsafe_rel)
+        self.assertTrue((unsafe_rel / "backend/data").is_dir())
+
 
 if __name__ == "__main__":
     unittest.main()

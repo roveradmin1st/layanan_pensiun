@@ -64,5 +64,18 @@ class DoctorExportTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):export.receive(folder,'../escape.sqlite.gpg',io.BytesIO(payload))
             self.assertEqual(len(list(folder.iterdir())),1)
 
+    def test_database_worker_checks_0600_permissions(self):
+        from test_production import fixture
+        with tempfile.TemporaryDirectory() as directory:
+            db_path=Path(directory)/'enterprise.sqlite'
+            fixture(db_path)
+            db_path.chmod(0o600)
+            ok_data=doctor.database_worker(db_path)
+            self.assertTrue(ok_data['permissions_0600'])
+            self.assertEqual(ok_data['db_mode'],'0o600')
+            db_path.chmod(0o644)
+            bad_data=doctor.database_worker(db_path)
+            self.assertFalse(bad_data['permissions_0600'])
+
 
 if __name__=='__main__':unittest.main()
