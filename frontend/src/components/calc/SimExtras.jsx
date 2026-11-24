@@ -66,13 +66,51 @@ export function AiSummary({ sim }) {
       if (format === "whatsapp") {
         const r = sim.result || {};
         const isBsi = r.bank_key === "bsi_prapen" || !!r.bsi_details;
+        const isBniFleksi = r.bank_key === "bank_bni" || !!r.bni_details;
         const isCapital = r.bank_key === "bank_capital" || !!r.capital_details;
         const isAms2 = r.bank_key === "ams2";
         const bsi = r.bsi_details;
+        const bni = r.bni_details;
         const cap = r.capital_details;
         let waText = "";
 
-        if (isCapital) {
+        if (isBniFleksi) {
+          const isPraPurna = bni?.product_code === "4";
+          const praScheduleLines = isPraPurna && (bni?.bni_disbursement_date || bni?.bni_tmt_pensiun_date)
+            ? [
+                ...(bni?.bni_disbursement_date ? [`• Rencana Pencairan: ${bni.bni_disbursement_date}`] : []),
+                ...(bni?.bni_tmt_pensiun_date ? [`• TMT Pensiun: ${bni.bni_tmt_pensiun_date}`] : [])
+              ]
+            : [];
+          waText = [
+            `*LAYANAN PENSIUNAN — SIMULASI BANK BNI FLEKSI PENSIUN*`,
+            `No. Referensi: ${sim.sim_no}`,
+            `Produk: Kode ${bni?.product_code || "-"} — ${bni?.product_name || "BNI Fleksi"}`,
+            ``,
+            `Yth. Bapak/Ibu *${r.name || "-"}*,`,
+            `Berikut rincian estimasi fasilitas BNI Fleksi Anda:`,
+            `• Gaji Bulanan: Rp${Math.round(r.salary || 0).toLocaleString("id-ID")} (DBR ${bni?.dbr_pct ?? 90}%)`,
+            ...praScheduleLines,
+            `• Plafond Pengajuan: Rp${Math.round(r.plafond || 0).toLocaleString("id-ID")} (Maks Rp${Math.round(bni?.max_plafond ?? r.plafond ?? 0).toLocaleString("id-ID")})`,
+            `• Jangka Waktu: ${r.tenor} Bulan (${bni?.insurance_tenor_years || Math.ceil((r.tenor || 0) / 12)} Thn AJK) • Bunga ${r.bank_rate}% p.a.`,
+            `• Angsuran Bulanan: Rp${Math.round(r.coop_installment || 0).toLocaleString("id-ID")}/bulan (DSR ${r.ratio_pct}%)`,
+            ``,
+            `*Rincian Biaya, AJK CAR & Blokir:*`,
+            `• Biaya Bank (Admin + Provisi ${bni?.provisi_pct ?? 0}% + BTL ${bni?.btl_pct ?? 3.5}%): Rp${Math.round(bni?.bank_fees ?? r.total_fees ?? 0).toLocaleString("id-ID")}`,
+            `• Premi AJK CAR (${bni?.ajk_rate_permil ?? 0} permil): Kotor Rp${Math.round(bni?.gross_ajk_premium ?? 0).toLocaleString("id-ID")} | Subsidi BNI -Rp${Math.round(bni?.bni_subsidy_premium ?? 0).toLocaleString("id-ID")} | Nasabah Rp${Math.round(bni?.customer_ajk_premium ?? 0).toLocaleString("id-ID")}`,
+            `• Blokir Angsuran (${bni?.blokir_angsuran_count ?? 3}x) + Tabungan (${bni?.blokir_tabungan_count ?? 1}x)${(bni?.blokir_prapensiun_count ?? 0) > 0 ? ` + Prapensiun (${bni.blokir_prapensiun_count}x)` : ""}: Rp${Math.round(r.retention || 0).toLocaleString("id-ID")}`,
+            ...(Number(r.take_over || 0) > 0
+              ? [`• Take Over (TO): Rp${Math.round(r.take_over || 0).toLocaleString("id-ID")}`]
+              : []),
+            ``,
+            `• *Terima Bersih: Rp${Math.round(r.net_disbursement || 0).toLocaleString("id-ID")}*`,
+            `• Sisa Gaji per Bulan: Rp${Math.round(r.remaining_salary || 0).toLocaleString("id-ID")}/bulan`,
+            `• Status Validasi: ${r.overall_ok ? "MEMENUHI KETENTUAN" : "PERLU PENYESUAIAN"}`,
+            ``,
+            `Petugas Pendamping: ${sim.created_by_name || "Petugas Layanan Pensiunan"}`,
+            `_Estimasi simulasi fasilitas kredit pensiun Bank BNI (BNI Fleksi Pensiun)_`
+          ].join("\n");
+        } else if (isCapital) {
           const isCapPensiun = cap?.product === "pensiun";
           const maxTenorVal = cap?.max_credit_months || cap?.credit_months || r.tenor || 0;
           const reqTenorVal = cap?.credit_months ?? r.tenor ?? 0;

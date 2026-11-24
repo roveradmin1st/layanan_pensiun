@@ -20,7 +20,7 @@ export const Logo = ({ variant = "horizontal", size = "md", className = "", ...r
   </picture>
 );
 
-export const PartnerLogo = ({ bankKey, size = "md", className = "" }) => {
+export const PartnerLogo = ({ bankKey, size = "md", variant = "icon", className = "" }) => {
   const sizeMap = {
     xs: "h-7 w-7",
     sm: "h-8 w-8",
@@ -83,13 +83,55 @@ export const PartnerLogo = ({ bankKey, size = "md", className = "" }) => {
   }
 
   if (bankKey === "bank_bni") {
+    if (variant === "lockup") {
+      const lockupMap = {
+        xs: "h-6",
+        sm: "h-7",
+        md: "h-9",
+        lg: "h-11",
+        xl: "h-12",
+      };
+      return (
+        <img
+          src="/brand/logo-bni.png"
+          alt="Bank BNI"
+          className={`w-auto object-contain shrink-0 ${lockupMap[size] || lockupMap.md} ${className}`}
+          draggable={false}
+        />
+      );
+    }
+
+    if (variant === "pill") {
+      const pillMap = {
+        xs: "h-7 px-2 py-1 rounded-lg",
+        sm: "h-8 px-2.5 py-1.5 rounded-xl",
+        md: "h-10 px-3 py-1.5 rounded-xl",
+        lg: "h-12 px-3.5 py-2 rounded-2xl",
+        xl: "h-14 px-4 py-2.5 rounded-2xl",
+      };
+      return (
+        <div
+          className={`inline-flex items-center justify-center border border-slate-200/80 bg-white shadow-xs shrink-0 ${pillMap[size] || pillMap.md} ${className}`}
+          title="Bank BNI"
+        >
+          <img
+            src="/brand/logo-bni.png"
+            alt="Bank BNI"
+            className="h-full w-auto object-contain"
+            draggable={false}
+          />
+        </div>
+      );
+    }
+
+    const radiusCls = size === "xs" || size === "sm" ? "rounded-lg" : "rounded-xl";
     return (
-      <div
-        className={`flex items-center justify-center rounded-full bg-teal-50 text-teal-700 border border-teal-200 font-extrabold shadow-xs shrink-0 text-[10px] tracking-tight ${sz} ${className}`}
-        title="Bank BNI"
-      >
-        BNI
-      </div>
+      <img
+        src="/brand/logo-bni-mark.png"
+        alt="Bank BNI"
+        className={`${radiusCls} border border-[#F15A23]/30 bg-[#F15A23] object-cover shadow-xs shrink-0 ${sz} ${className}`}
+        draggable={false}
+      />
     );
   }
 

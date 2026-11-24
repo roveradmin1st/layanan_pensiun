@@ -1,6 +1,6 @@
 # Status Server dan Kesiapan Operasional — Layanan Pensiunan
 
-Tanggal acuan konteks server terkini: **24 November 2026** (eksekusi Gelombang 1 P0 pada branch `fix/p0-core-integrity-and-ux-20261124` di atas commit produksi aktif `0f9d43e73119f8db263b629b0a18042477d9321c`; belum dipasang ke VPS produksi hingga CI GitHub Actions hijau dan deployment diinstruksikan pemilik).
+Tanggal acuan konteks server terkini: **24 November 2026** (Gelombang 1 P0 commit `918e0b42347db5e5b2ab53955135ba37cb488f36` telah LIVE di VPS dengan `status=active_verified`, `18/18 server_doctor` hijau, dan `GET /api/public/config` aktif di Nginx `layananpensiunan.id`; Gelombang 2 integrasi Kalkulator BNI pada branch `feat/wave2-bni-integration-20261124` dibangun murni di atas `918e0b42347db5e5b2ab53955135ba37cb488f36` dan belum dipasang ke VPS hingga CI hijau dan deployment diinstruksikan pemilik).
 Dasar fakta server: hasil pelaporan controller VPS (`lp-release` / `ops/server_release.py`) per 15 November 2026, verifikasi commit pada repository `https://github.com/roveradmin1st/layanan_pensiun.git`, serta catatan hardening host VPS per **22 November 2026**. Catatan audit sebelumnya (8–9 November 2026 pada rilis `c76e823`/`fe1025a`) dan persiapan awal (7 November 2026) dipertahankan di bawah sebagai riwayat historis bertanggal.
 
 ## 1. Kondisi Server Aktual yang Terkonfirmasi (Sinkronisasi 15–22 November 2026)
@@ -315,3 +315,28 @@ Dibangun secara terisolasi murni di atas commit produksi aktif `0f9d43e73119f8db
    - Suite HTTP keamanan, RBAC, dan aturan bisnis (`node backend/tests/security-and-api.test.mjs`): **LULUS 100%**.
    - Uji peramban E2E produksi sintetis (`node ops/browser-smoke.mjs`): **LULUS 100%** (*login/password gate*, pengaturan produksi, penugasan supervisor Siantar, *review* dokumen individual, dan persetujuan/pembayaran klaim).
    - Build produksi `frontend/` dan `landing/` serta audit kerentanan `landing/` (`0 vulnerabilities`): **LULUS 100%**.
+   - **GitHub Actions CI & Aktivasi VPS (24 November 2026):** Run [#45361118775](https://github.com/roveradmin1st/layanan_pensiun/actions/runs/45361118775) (**SUCCESS**, artefak `runtime-release-918e0b42347db5e5b2ab53955135ba37cb488f36`, `3,21 MiB`). Rilis `918e0b42347db5e5b2ab53955135ba37cb488f36` dilaporkan pemilik sudah **LIVE di VPS** (`status=active_verified`, `18/18 server_doctor` hijau, dan `GET /api/public/config` aktif pada Nginx `layananpensiunan.id`).
+
+---
+
+## 11. Gelombang 2 — Integrasi Bersih Modul Kalkulator BNI (24 November 2026 — Branch `feat/wave2-bni-integration-20261124`)
+
+Dibangun di worktree terisolasi murni di atas baseline produksi aktif `918e0b42347db5e5b2ab53955135ba37cb488f36` (`fix/p0-core-integrity-and-ux-20261124`), mem-porting varian BNI paling mutakhir dari `feat/bni-demo-ceo-20261119` (`b9b4172`) beserta aset logo resmi BNI (`logo-bni.png`, `logo-bni-mark.png`, `logo-bni-pdf.jpg`) tanpa mengubah `landing/`, `/api/public/*`, patch hardening `6381be5`, maupun perbaikan P0 `918e0b42`, dan **belum dipasang ke VPS produksi** (menunggu CI hijau dan instruksi deployment pemilik):
+
+1. **Mesin Hitung & Kompatibilitas Produksi BNI (`backend/src/config/bni-product-config.js`, `backend/src/engines/bni-calc-engine.js`, `backend/src/config/default-parameters.js`, `backend/src/db/database.js`):**
+   - Mendukung penuh BNI Fleksi Reguler (Kode 1) dan BNI Fleksi Pra Purna (Kode 4) dengan Skema AJK CAR Menurun, subsidi premi s.d. `150 permil`, jadwal Pra Purna (`bni_disbursement_date`, `bni_tmt_pensiun_date`), rekomendasi plafon & tenor otomatis, blokir angsuran/tabungan/prapensiun, serta penolakan eksplisit `UNAVAILABLE` untuk produk/kombinasi yang belum terkonfirmasi.
+   - Menjaga *read-only* SQLite boot pada mode produksi (`IS_PROD`): database produksi lama yang masih menyimpan konfigurasi `bank_bni` versi `partner_bank` (`active: false`) tetap dapat boot bersih tanpa mutasi otomatis hingga Super Admin mengeksekusi `POST /api/calc/params/bank_bni/activate` (`{ confirm: true }`) yang menyimpan `partner_parameters.bank_bni.fleksi` secara aman dan kompatibel untuk rollback.
+2. **Penutupan 4 Jebakan Keamanan & Integritas Gelombang 2:**
+   - **SVG XSS & PDF `permil` ASCII (`backend/src/engines/calc-engine.js`):** Seluruh interpolasi dinamis pada blok SVG `if (isBniFleksi)` dibungkus `escapeXml(...)`; seluruh teks permil pada PDF BNI beraksen oranye (`/ImBni` `/DCTDecode`) menggunakan teks ASCII `permil` agar tidak hilang menjadi spasi oleh `escapePdfText()`.
+   - **`SIMULATION_INPUT_WHITELIST` BNI (`backend/src/server.js`):** Mendaftarkan seluruh field resmi BNI (`bni_product_code`, `bni_insurance_scheme`, `insurance_scheme`, `bni_dbr_pct`, `dbr_pct`, `bni_disbursement_date`, `bni_tmt_pensiun_date`, `blokir_angsuran_count`, `blokir_tabungan_count`, `blokir_prapensiun_count`) sehingga `POST /api/simulations` mempertahankan atribut BNI sambil tetap memangkas field liar.
+   - **Validasi Parameter BNI & Dual-Control (`backend/src/server.js`):** `sanitizeBniParamUpdates()` dan `validateAndApplyPartnerUpdate()` memanggil `hasForbiddenKeys()` (rekursif) dan menolak payload berbahaya / terkunci dengan `HTTP 400` (`err.status = 400`, bukan `500`), baik pada `PUT /api/calc/params/bank_bni` langsung maupun pada persetujuan proposal `POST /api/calc/params/proposals/:id/decide` di dalam `withTransaction()`.
+   - **Zona Waktu WIB & UUID Non-Kolisi (`backend/src/engines/bni-calc-engine.js`, `backend/src/engines/calc-engine.js`, `backend/src/server.js`):** Seluruh default tanggal proses memakai `todayWibIso()` (`Asia/Jakarta`), dan seluruh ID entitas tetap memakai `crypto.randomUUID()` (0 sisa `Date.now()` ID).
+3. **Frontend BNI Selaras P0 (`frontend/src/`):**
+   - `Logo.jsx` mempertahankan `<picture>` `.webp`/`.png` untuk logo utama sekaligus menambahkan varian `PartnerLogo` BNI (`lockup`, `pill`, `icon`).
+   - `Calculator.jsx` dan `ResultView.jsx` menampilkan alur kalkulator & hasil akhir BNI lengkap dengan `detachLeadQueryParam()` pada seluruh tombol reset termasuk `resetBniFleksiForm`.
+   - `SimExtras.jsx` menambahkan template ringkasan WhatsApp khusus BNI Fleksi sambil mempertahankan cabang P0 `bsi.sub_product === "PENSIUN"`, dan `Settings.jsx` menambahkan panel konfigurasi/aktivasi BNI sambil mempertahankan proteksi `user.capabilities?.web_backup === false`.
+4. **Verifikasi Lokal Pra-Push (24 November 2026):**
+   - Suite unit & integrasi backend (`npm --prefix backend test`, mencakup 10 suite presisi workbook BNI `tests/bni-calculator.test.mjs` dan 3 suite keamanan Gelombang 2 `tests/bni-wave2-security-20261124.test.mjs`): **97/97 pengujian LULUS 100%** pada database sementara.
+   - Suite HTTP keamanan, RBAC, dan aturan bisnis (`node backend/tests/security-and-api.test.mjs`): **LULUS 100%**.
+   - Uji peramban E2E produksi sintetis (`node ops/browser-smoke.mjs`): **LULUS 100%**.
+   - Build produksi `frontend/` (`2599 modul`) dan `landing/` (`0` perubahan pada `landing/`): **LULUS 100%**.

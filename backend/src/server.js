@@ -13,6 +13,12 @@ import { fileURLToPath } from "node:url";
 
 import { DEFAULT_PARTNER_PARAMETERS } from "./config/default-parameters.js";
 import {
+  BNI_UNDERWRITING_REVIEW_MESSAGE,
+  canActivateLegacyBniFleksi,
+  getBniFleksiConfig,
+  requiresBniUnderwritingReview
+} from "./config/bni-product-config.js";
+import {
   BSI_PRODUCT_CODES,
   createDefaultBsiProducts,
   splitMaturityAgeMonths,
@@ -29,6 +35,7 @@ import {
   generateSimulationSvgBuffer
 } from "./engines/calc-engine.js";
 import {
+  activateLegacyBniFleksi,
   getStore,
   saveStore,
   withTransaction,
@@ -931,7 +938,8 @@ app.get("/api/banks", requireAuth, (req, res) => {
   const banks = order
     .filter((key) => canAccessBank(req.user, key))
     .map((key) => {
-      const item = p[key];
+      const bni = key === "bank_bni" ? getBniFleksiConfig(p[key]) : null;
+      const item = bni || p[key];
       const isLegacyBsiLabel =
         key === "bsi_prapen" &&
         (!item?.shortName || item.shortName === "BSI · Prapensiun");
@@ -942,7 +950,7 @@ app.get("/api/banks", requireAuth, (req, res) => {
           ? "BSI — Mitraguna Prapensiun & Pensiun Berkah"
           : (item?.name || key),
         engine: item?.engine || "partner_bank",
-        supported: item?.active !== false,
+        supported: key === "bank_bni" ? bni?.active === true : item?.active !== false,
         description: isLegacyBsiLabel
           ? DEFAULT_PARTNER_PARAMETERS.bsi_prapen.description
           : (item?.description || "")
@@ -1122,7 +1130,8 @@ app.get("/api/calc/limits", requireAuth, (req, res) => {
   const store = getStore();
   const p = store.partner_parameters || {};
   const limits = {};
-  for (const [key, partner] of Object.entries(p)) {
+  for (const [key, storedPartner] of Object.entries(p)) {
+    const partner = key === "bank_bni" ? getBniFleksiConfig(storedPartner) : storedPartner;
     if (typeof partner === "object" && partner !== null && canAccessBank(req.user, key)) {
       if (key === "bsi_prapen" && partner.products) {
         const pp10Summary = summarizeBsiProductLimits(partner.products.PP10);
@@ -1140,6 +1149,23 @@ app.get("/api/calc/limits", requireAuth, (req, res) => {
             PP10: pp10Summary,
             PENSIUN: pensiunSummary
           }
+        };
+      } else if (key === "bank_bni" && partner.engine === "bni_fleksi") {
+        limits[key] = {
+          name: partner.name || key,
+          engine: partner.engine,
+          policyVersion: partner.policyVersion,
+          maxTenorMonths: partner.maxTenorMonths,
+          maxEndAgeYears: partner.maxEndAgeYears,
+          maxEndAgeMonths: partner.maxEndAgeMonths,
+          maxPlafondAbsolute: partner.maxPlafondAbsolute,
+          minEntryAgeYears: partner.minEntryAgeYears,
+          maxEntryAgeYears: partner.maxEntryAgeYears,
+          maxInstallmentRatio: partner.maxInstallmentRatio,
+          dbrPresets: partner.dbrPresets || [90, 85, 80, 70],
+          subsidyPermilCap: partner.subsidyPermilCap ?? 150,
+          products: partner.products,
+          insuranceSchemes: partner.insuranceSchemes
         };
       } else {
         limits[key] = {
@@ -1195,28 +1221,108 @@ const PERCENT_RATE_KEYS = new Set([
   "disbursementCostPercent"
 ]);
 
-function hasForbiddenKeys(obj) {
-  if (!obj || typeof obj !== "object") return false;
+function hasForbiddenKeys(obj, depth = 0) {
+  if (!obj || typeof obj !== "object" || depth > 8) return false;
+  if (Array.isArray(obj)) {
+    return obj.some((item) => hasForbiddenKeys(item, depth + 1));
+  }
   for (const key of Object.getOwnPropertyNames(obj)) {
     if (FORBIDDEN_PARAM_KEYS.has(key)) return true;
+    const val = obj[key];
+    if (val && typeof val === "object" && hasForbiddenKeys(val, depth + 1)) return true;
   }
   return false;
 }
 
+function sanitizeBniParamUpdates(updates) {
+  if (!updates || typeof updates !== "object" || Array.isArray(updates)) {
+    return { ok: false, status: 400, detail: "Payload perubahan parameter BNI tidak valid." };
+  }
+  if (hasForbiddenKeys(updates)) {
+    return {
+      ok: false,
+      status: 400,
+      errorCode: "FORBIDDEN_PARAM_KEY",
+      detail: "Properti parameter berbahaya tidak diizinkan."
+    };
+  }
+  const allowedBniKeys = new Set(["maxInstallmentRatio", "subsidyPermilCap"]);
+  const sanitized = {};
+  for (const [k, v] of Object.entries(updates)) {
+    if (FORBIDDEN_PARAM_KEYS.has(k)) {
+      return {
+        ok: false,
+        status: 400,
+        errorCode: "FORBIDDEN_PARAM_KEY",
+        detail: "Properti parameter berbahaya tidak diizinkan."
+      };
+    }
+    if (!allowedBniKeys.has(k)) {
+      return {
+        ok: false,
+        status: 400,
+        errorCode: "BNI_PARAM_MANAGED_BY_MATRIX",
+        detail: `Parameter '${k}' pada BNI Fleksi dikunci mengikuti matriks workbook MKSA v4 Jul26. Field yang dapat diubah: maxInstallmentRatio, subsidyPermilCap.`
+      };
+    }
+    const num = typeof v === "number" || (typeof v === "string" && v.trim()) ? Number(v) : NaN;
+    if (!Number.isFinite(num)) {
+      return { ok: false, status: 400, detail: `Nilai '${k}' harus berupa angka valid.` };
+    }
+    if (k === "maxInstallmentRatio" && (num < 10 || num > 100)) {
+      return { ok: false, status: 400, detail: "Batas DBR default BNI harus antara 10% s.d. 100%." };
+    }
+    if (k === "subsidyPermilCap" && (num < 0 || num > 500)) {
+      return { ok: false, status: 400, detail: "Batas subsidi premi AJK BNI harus antara 0 permil s.d. 500 permil." };
+    }
+    sanitized[k] = num;
+  }
+  if (Object.keys(sanitized).length === 0) {
+    return { ok: false, status: 400, detail: "Tidak ada parameter BNI yang diubah." };
+  }
+  return { ok: true, updates: sanitized };
+}
+
+function applyBniParamUpdates(partner, updates) {
+  if (!Object.entries(updates).some(([key, value]) => partner[key] !== value)) return;
+  Object.assign(partner, updates);
+  partner.revision = (partner.revision ?? 1) + 1;
+}
+
+function createValidationHttpError(result) {
+  const err = new Error(result?.detail || "Payload perubahan parameter tidak valid.");
+  err.status = result?.status || 400;
+  if (result?.errorCode) err.errorCode = result.errorCode;
+  return err;
+}
+
 function validateAndApplyPartnerUpdate(partnerKey, target, rawUpdates, { apply = false } = {}) {
+  const fail = (result) => {
+    if (apply) throw createValidationHttpError(result);
+    return result;
+  };
   if (!ALLOWED_PARTNER_KEYS.has(partnerKey) || !target || typeof target !== "object") {
-    return { ok: false, status: 404, detail: `Mitra bank '${partnerKey}' tidak ditemukan.` };
+    return fail({ ok: false, status: 404, detail: `Mitra bank '${partnerKey}' tidak ditemukan.` });
   }
   if (!rawUpdates || typeof rawUpdates !== "object" || Array.isArray(rawUpdates)) {
-    return { ok: false, status: 400, detail: "Payload perubahan parameter tidak valid." };
+    return fail({ ok: false, status: 400, detail: "Payload perubahan parameter tidak valid." });
   }
   if (hasForbiddenKeys(rawUpdates)) {
-    return { ok: false, status: 400, detail: "Properti parameter berbahaya tidak diizinkan." };
+    return fail({ ok: false, status: 400, errorCode: "FORBIDDEN_PARAM_KEY", detail: "Properti parameter berbahaya tidak diizinkan." });
+  }
+
+  if (partnerKey === "bank_bni") {
+    const bniChecked = sanitizeBniParamUpdates(rawUpdates);
+    if (!bniChecked.ok) return fail(bniChecked);
+    if (apply) {
+      applyBniParamUpdates(target, bniChecked.updates);
+    }
+    return { ok: true, sanitizedUpdates: bniChecked.updates };
   }
 
   const schemaRef = DEFAULT_PARTNER_PARAMETERS[partnerKey];
   if (!schemaRef || typeof schemaRef !== "object") {
-    return { ok: false, status: 404, detail: `Skema mitra bank '${partnerKey}' tidak ditemukan.` };
+    return fail({ ok: false, status: 404, detail: `Skema mitra bank '${partnerKey}' tidak ditemukan.` });
   }
 
   const sanitized = {};
@@ -1334,7 +1440,7 @@ function validateAndApplyPartnerUpdate(partnerKey, target, rawUpdates, { apply =
   }
 
   if (Object.keys(sanitized).length === 0) {
-    return { ok: false, status: 400, detail: "Tidak ada perubahan parameter yang valid untuk disimpan." };
+    return fail({ ok: false, status: 400, detail: "Tidak ada perubahan parameter yang valid untuk disimpan." });
   }
 
   if (apply) {
@@ -1343,9 +1449,17 @@ function validateAndApplyPartnerUpdate(partnerKey, target, rawUpdates, { apply =
   return { ok: true, sanitizedUpdates: sanitized };
 }
 
+function calcPartnersForUser(store, user) {
+  const { bank_bni: storedBni, ...partners } = store.partner_parameters;
+  if (canAccessBank(user, "bank_bni") && storedBni) partners.bank_bni = getBniFleksiConfig(storedBni) || storedBni;
+  return partners;
+}
+
 app.get("/api/calc/params", requireAuth, requireRoles("super_admin", "admin_ops"), (req, res) => {
   const store = getStore();
   const ams2 = store.partner_parameters.ams2;
+  const storedBni = store.partner_parameters.bank_bni;
+  const bniAccess = canAccessBank(req.user, "bank_bni");
   const tiers = Array.isArray(ams2.tiers) ? ams2.tiers : DEFAULT_PARTNER_PARAMETERS.ams2.tiers;
   res.json({
     formula_version: store.partner_parameters.version || "2.5.0-ENTERPRISE",
@@ -1368,8 +1482,9 @@ app.get("/api/calc/params", requireAuth, requireRoles("super_admin", "admin_ops"
       coop_rate_annual: t.coopRateAnnual,
       risk_pct: t.riskReserveRate
     })),
-    partners: store.partner_parameters,
-    proposals: store.parameter_proposals || []
+    partners: calcPartnersForUser(store, req.user),
+    bni_activation_available: bniAccess && req.user.role === "super_admin" && canActivateLegacyBniFleksi(storedBni),
+    proposals: (store.parameter_proposals || []).filter((proposal) => bniAccess || proposal.partner_key !== "bank_bni")
   });
 });
 
@@ -1483,8 +1598,22 @@ app.post("/api/calc/params/bsi_prapen/products/:productCode/reset", requireAuth,
     product_code: productCode,
     policy_version: nextVersion,
     product: resetProd,
-    partners: store.partner_parameters
+    partners: calcPartnersForUser(store, req.user)
   });
+});
+
+app.post("/api/calc/params/bank_bni/activate", requireAuth, requireRoles("super_admin"), (req, res) => {
+  if (!canAccessBank(req.user, "bank_bni")) {
+    return res.status(403).json({ detail: "Anda tidak memiliki kewenangan pada Bank BNI." });
+  }
+  if (!req.is("application/json") || req.body?.confirm !== true) {
+    return res.status(400).json({ detail: "Konfirmasi aktivasi BNI diperlukan." });
+  }
+  const activated = activateLegacyBniFleksi(req.user, req.ip);
+  if (!activated) {
+    return res.status(409).json({ error_code: "BNI_ACTIVATION_UNAVAILABLE", detail: "Konfigurasi lama BNI perlu ditinjau sebelum aktivasi." });
+  }
+  return res.json(activated);
 });
 
 app.put("/api/calc/params/:partnerKey", requireAuth, requireRoles("super_admin", "admin_ops"), (req, res) => {
@@ -1496,13 +1625,20 @@ app.put("/api/calc/params/:partnerKey", requireAuth, requireRoles("super_admin",
   if (!updates || typeof updates !== "object" || Array.isArray(updates)) {
     return res.status(400).json({ detail: "Payload perubahan parameter tidak valid." });
   }
+  if (hasForbiddenKeys(updates)) {
+    return res.status(400).json({ error_code: "FORBIDDEN_PARAM_KEY", detail: "Properti parameter berbahaya tidak diizinkan." });
+  }
   const textErr = validateTextLengthLimit({ reason }, ["reason"]);
   if (textErr) return res.status(400).json({ detail: textErr });
   if (!canAccessBank(req.user, partnerKey)) {
     return res.status(403).json({ detail: "Anda tidak memiliki kewenangan pada mitra bank ini." });
   }
   const store = getStore();
-  const target = Object.hasOwn(store.partner_parameters, partnerKey) ? store.partner_parameters[partnerKey] : null;
+  const storedTarget = Object.hasOwn(store.partner_parameters, partnerKey) ? store.partner_parameters[partnerKey] : null;
+  const target = partnerKey === "bank_bni" ? getBniFleksiConfig(storedTarget) : storedTarget;
+  if (partnerKey === "bank_bni" && target?.active !== true) {
+    return res.status(409).json({ error_code: "MISSING_BNI_CONFIG", detail: "Aktifkan BNI Fleksi terlebih dahulu." });
+  }
   if (!target) {
     return res.status(404).json({ detail: `Mitra bank '${partnerKey}' tidak ditemukan.` });
   }
@@ -1530,7 +1666,10 @@ app.put("/api/calc/params/:partnerKey", requireAuth, requireRoles("super_admin",
 
   const validation = validateAndApplyPartnerUpdate(partnerKey, target, updates, { apply: false });
   if (!validation.ok) {
-    return res.status(validation.status || 400).json({ detail: validation.detail });
+    return res.status(validation.status || 400).json({
+      ...(validation.errorCode ? { error_code: validation.errorCode } : {}),
+      detail: validation.detail
+    });
   }
 
   // Dual Control: Admin Operasional creates proposal; Super Admin applies directly
@@ -1544,7 +1683,7 @@ app.put("/api/calc/params/:partnerKey", requireAuth, requireRoles("super_admin",
         proposed_by_name: `${req.user.name} (Admin Operasional)`,
         created_at: new Date().toISOString(),
         status: "PENDING",
-        reason: reason || "Usulan penyesuaian parameter mitra bank",
+        reason: reason || (partnerKey === "bank_bni" ? "Usulan penyesuaian batas BNI Fleksi" : "Usulan penyesuaian parameter mitra bank"),
         changes: validation.sanitizedUpdates
       };
       store.parameter_proposals.unshift(createdProp);
@@ -1553,17 +1692,25 @@ app.put("/api/calc/params/:partnerKey", requireAuth, requireRoles("super_admin",
     });
     return res.json({
       mode: "proposed",
-      message: "Usulan perubahan parameter dikirim ke Super Admin untuk persetujuan (Dual Control).",
+      message: partnerKey === "bank_bni"
+        ? "Usulan perubahan parameter BNI dikirim ke Super Admin untuk persetujuan (Dual Control)."
+        : "Usulan perubahan parameter dikirim ke Super Admin untuk persetujuan (Dual Control).",
       proposal: prop
     });
   }
 
-  // Super Admin direct update (Non-BSI)
+  // Super Admin direct update (Non-BSI & BNI)
   withTransaction(() => {
     validateAndApplyPartnerUpdate(partnerKey, target, validation.sanitizedUpdates, { apply: true });
     store.partner_parameters.lastUpdated = new Date().toISOString();
     store.partner_parameters.updatedBy = `${req.user.name} (Super Admin)`;
-    addAuditLog(req.user, "update_partner_params", partnerKey, `Memperbarui parameter mitra ${target.name}`, req.ip);
+    addAuditLog(
+      req.user,
+      "update_partner_params",
+      partnerKey,
+      partnerKey === "bank_bni" ? "Memperbarui parameter BNI Fleksi" : `Memperbarui parameter mitra ${target.name}`,
+      req.ip
+    );
   });
   res.json({
     mode: "applied",
@@ -1583,6 +1730,30 @@ app.post("/api/calc/params/proposals/:id/decide", requireAuth, requireRoles("sup
   if (!prop) return res.status(404).json({ detail: "Usulan tidak ditemukan." });
   if (prop.status !== "PENDING") {
     return res.status(409).json({ detail: "Usulan perubahan parameter ini sudah diputuskan sebelumnya." });
+  }
+
+  let bniDecision = null;
+  if (prop.partner_key === "bank_bni") {
+    if (!canAccessBank(req.user, "bank_bni")) {
+      return res.status(403).json({ detail: "Anda tidak memiliki kewenangan pada Bank BNI." });
+    }
+    if (decision === "APPROVE") {
+      if (hasForbiddenKeys(prop.changes)) {
+        return res.status(400).json({ error_code: "FORBIDDEN_PARAM_KEY", detail: "Properti parameter berbahaya tidak diizinkan." });
+      }
+      const partner = getBniFleksiConfig(store.partner_parameters.bank_bni);
+      if (partner?.active !== true) {
+        return res.status(409).json({ error_code: "MISSING_BNI_CONFIG", detail: "Aktifkan BNI Fleksi terlebih dahulu." });
+      }
+      const checked = sanitizeBniParamUpdates(prop.changes);
+      if (!checked.ok) {
+        return res.status(checked.status || 400).json({
+          ...(checked.errorCode ? { error_code: checked.errorCode } : {}),
+          detail: checked.detail
+        });
+      }
+      bniDecision = { partner, updates: checked.updates };
+    }
   }
 
   if (decision === "APPROVE" && prop.partner_key === "bsi_prapen") {
@@ -1644,19 +1815,22 @@ app.post("/api/calc/params/proposals/:id/decide", requireAuth, requireRoles("sup
       ok: true,
       proposal: prop,
       product: validation.nextProduct,
-      partners: store.partner_parameters
+      partners: calcPartnersForUser(store, req.user)
     });
   }
 
   let approvedNonBsiUpdates = null;
-  if (decision === "APPROVE" && prop.partner_key !== "bsi_prapen") {
+  if (decision === "APPROVE" && prop.partner_key !== "bsi_prapen" && prop.partner_key !== "bank_bni") {
     const partnerTarget =
       ALLOWED_PARTNER_KEYS.has(prop.partner_key) && Object.hasOwn(store.partner_parameters, prop.partner_key)
         ? store.partner_parameters[prop.partner_key]
         : null;
     const validation = validateAndApplyPartnerUpdate(prop.partner_key, partnerTarget, prop.changes, { apply: false });
     if (!validation.ok) {
-      return res.status(validation.status || 400).json({ detail: validation.detail });
+      return res.status(validation.status || 400).json({
+        ...(validation.errorCode ? { error_code: validation.errorCode } : {}),
+        detail: validation.detail
+      });
     }
     approvedNonBsiUpdates = validation.sanitizedUpdates;
   }
@@ -1666,7 +1840,11 @@ app.post("/api/calc/params/proposals/:id/decide", requireAuth, requireRoles("sup
     prop.decided_by = req.user.name;
     prop.decided_at = new Date().toISOString();
 
-    if (decision === "APPROVE" && approvedNonBsiUpdates && Object.hasOwn(store.partner_parameters, prop.partner_key) && prop.partner_key !== "bsi_prapen") {
+    if (decision === "APPROVE" && bniDecision) {
+      validateAndApplyPartnerUpdate("bank_bni", bniDecision.partner, bniDecision.updates, { apply: true });
+      store.partner_parameters.lastUpdated = new Date().toISOString();
+      store.partner_parameters.updatedBy = `${req.user.name} (Super Admin)`;
+    } else if (decision === "APPROVE" && approvedNonBsiUpdates && Object.hasOwn(store.partner_parameters, prop.partner_key) && prop.partner_key !== "bsi_prapen") {
       validateAndApplyPartnerUpdate(prop.partner_key, store.partner_parameters[prop.partner_key], approvedNonBsiUpdates, { apply: true });
       store.partner_parameters.lastUpdated = new Date().toISOString();
       store.partner_parameters.updatedBy = `${req.user.name} (Super Admin)`;
@@ -1674,18 +1852,22 @@ app.post("/api/calc/params/proposals/:id/decide", requireAuth, requireRoles("sup
     const targetKey = prop.product_key ? `${prop.partner_key}:${prop.product_key}` : prop.partner_key;
     addAuditLog(req.user, `proposal_${prop.status.toLowerCase()}`, targetKey, `${prop.status} usulan parameter ${prop.partner_name}`, req.ip);
   });
-  res.json({ ok: true, proposal: prop, partners: store.partner_parameters });
+  res.json({ ok: true, proposal: prop, partners: calcPartnersForUser(store, req.user) });
 });
 
 app.post("/api/calc/params/reset", requireAuth, requireRoles("super_admin"), (req, res) => {
   const store = getStore();
   withTransaction(() => {
-    store.partner_parameters = structuredClone(DEFAULT_PARTNER_PARAMETERS);
+    const next = structuredClone(DEFAULT_PARTNER_PARAMETERS);
+    // Aktivasi dan parameter BNI dikelola melalui aksi BNI tersendiri.
+    if (Object.hasOwn(store.partner_parameters, "bank_bni")) next.bank_bni = store.partner_parameters.bank_bni;
+    else delete next.bank_bni;
+    store.partner_parameters = next;
     store.partner_parameters.lastUpdated = new Date().toISOString();
     store.partner_parameters.updatedBy = `${req.user.name} (Reset Default)`;
-    addAuditLog(req.user, "reset_partner_params", "all_partners", "Reset seluruh parameter mitra ke standar awal", req.ip);
+    addAuditLog(req.user, "reset_partner_params", "all_partners", "Reset parameter mitra lain ke standar awal. Parameter BNI dipertahankan.", req.ip);
   });
-  res.json({ ok: true, partners: store.partner_parameters });
+  res.json({ ok: true, partners: calcPartnersForUser(store, req.user) });
 });
 
 // ============================================================================
@@ -1703,17 +1885,47 @@ const CALC_NON_NEGATIVE_FIELDS = [
   "pelunasan_lama",
   "ongoing_installments",
   "blokir_count",
+  "blokir_angsuran_count",
+  "blokir_tabungan_count",
+  "blokir_prapensiun_count",
   "blokir_1_override",
   "blokir_2_override",
   "blokir_3_override"
 ];
+
+function validateCalcInput(body, bankKey) {
+  if (bankKey === "bank_bni") {
+    for (const key of [...CALC_NON_NEGATIVE_FIELDS, "bni_dbr_pct", "dbr_pct"]) {
+      const value = body[key];
+      if (value != null && typeof value !== "string" && typeof value !== "number") {
+        return `Parameter '${key}' harus berupa angka.`;
+      }
+    }
+    for (const key of ["name", "lead_id", "dapem"]) {
+      const value = body[key];
+      if (value != null && (typeof value !== "string" || value.length > 160)) {
+        return `Parameter '${key}' harus berupa teks maksimal 160 karakter.`;
+      }
+    }
+    for (const key of ["bni_disbursement_date", "bni_tmt_pensiun_date"]) {
+      const value = body[key];
+      if (value != null && (typeof value !== "string" || value.length > 40)) {
+        return `Parameter '${key}' harus berupa tanggal kalender YYYY-MM-DD.`;
+      }
+    }
+  }
+  return validateNonNegativeFields(body, CALC_NON_NEGATIVE_FIELDS);
+}
 
 function isInvalidProductErrorCode(code) {
   return (
     code === "UNKNOWN_PRODUCT" ||
     code === "UNKNOWN_BSI_PRODUCT" ||
     code === "MISSING_BSI_PRODUCT_CONFIG" ||
-    code === "MISSING_BSI_PARTNER_CONFIG"
+    code === "MISSING_BSI_PARTNER_CONFIG" ||
+    code === "MISSING_BNI_CONFIG" ||
+    code === "BNI_PRODUCT_UNKNOWN" ||
+    code === "BNI_INSURANCE_SCHEME_UNKNOWN"
   );
 }
 
@@ -1722,7 +1934,7 @@ app.post("/api/calc/max", requireAuth, (req, res) => {
   if (!canAccessBank(req.user, body.bank_key || "ams2")) {
     return res.status(403).json({ detail: "Anda tidak memiliki akses pada mitra bank yang dipilih." });
   }
-  const err = validateNonNegativeFields(body, CALC_NON_NEGATIVE_FIELDS);
+  const err = validateCalcInput(body, body.bank_key);
   if (err) return res.status(400).json({ detail: err });
   const store = getStore();
   const result = calculateMax(body, store.partner_parameters);
@@ -1737,7 +1949,7 @@ app.post("/api/calc/preview", requireAuth, (req, res) => {
   if (!canAccessBank(req.user, body.bank_key || "ams2")) {
     return res.status(403).json({ detail: "Anda tidak memiliki akses pada mitra bank yang dipilih." });
   }
-  const err = validateNonNegativeFields(body, CALC_NON_NEGATIVE_FIELDS);
+  const err = validateCalcInput(body, body.bank_key);
   if (err) return res.status(400).json({ detail: err });
   const store = getStore();
   const result = calculatePreview(body, store.partner_parameters);
@@ -1852,7 +2064,17 @@ const SIMULATION_INPUT_WHITELIST = [
   "capital_gp_manual",
   "mestika_salary_type",
   "mestika_has_dependents",
-  "mestika_dependent_type"
+  "mestika_dependent_type",
+  "bni_product_code",
+  "bni_insurance_scheme",
+  "insurance_scheme",
+  "bni_dbr_pct",
+  "dbr_pct",
+  "bni_disbursement_date",
+  "bni_tmt_pensiun_date",
+  "blokir_angsuran_count",
+  "blokir_tabungan_count",
+  "blokir_prapensiun_count"
 ];
 
 function pickWhitelistedSimulationInput(body) {
@@ -1879,8 +2101,11 @@ app.post("/api/simulations", requireAuth, (req, res) => {
   if (!canAccessBank(req.user, bankKey)) {
     return res.status(403).json({ detail: "Anda tidak memiliki akses untuk membuat simulasi pada mitra bank ini." });
   }
-  const err = validateNonNegativeFields(body, CALC_NON_NEGATIVE_FIELDS);
+  const err = validateCalcInput(body, bankKey);
   if (err) return res.status(400).json({ detail: err });
+  if (bankKey === "bank_bni" && !body.name?.trim()) {
+    return res.status(400).json({ detail: "Nama calon debitur wajib diisi untuk menyimpan simulasi BNI." });
+  }
 
   const store = getStore();
   let linkedLead = null;
@@ -1895,6 +2120,28 @@ app.post("/api/simulations", requireAuth, (req, res) => {
   }
 
   const result = calculatePreview(body, store.partner_parameters);
+  if (result.status === "UNAVAILABLE") {
+    return res.status(400).json({
+      error_code: result.error_code || "BNI_RULE_UNAVAILABLE",
+      detail: result.unavailable_reason || "Kombinasi produk atau tenor ini belum tersedia untuk disimpan."
+    });
+  }
+  if (result.status === "INVALID" || isInvalidProductErrorCode(result.error_code)) {
+    return res.status(400).json({
+      error_code: result.error_code || "BNI_INVALID_INPUT",
+      detail: result.stop_reason || (result.issues && result.issues[0]) || "Parameter atau input simulasi tidak valid."
+    });
+  }
+  if (
+    bankKey === "bank_bni" &&
+    body.expected_bni_policy_revision !== undefined &&
+    body.expected_bni_policy_revision !== result.bni_policy_revision
+  ) {
+    return res.status(409).json({
+      error_code: "BNI_PREVIEW_STALE",
+      detail: "Parameter BNI sudah berubah. Hitung ulang simulasi sebelum menyimpan."
+    });
+  }
   if (
     !Number.isFinite(result.plafond) ||
     result.plafond <= 0 ||
@@ -1914,6 +2161,20 @@ app.post("/api/simulations", requireAuth, (req, res) => {
       ? { sales_manager_id: req.user.id, sales_manager_name: req.user.name }
       : resolveSmForMarketing(store, mktUser, linkedLead?.sales_manager_id, linkedLead?.sales_manager_name);
 
+  const savedInput = pickWhitelistedSimulationInput(body);
+  if (bankKey === "bank_bni") {
+    delete savedInput.bni_disbursement_date;
+    delete savedInput.bni_tmt_pensiun_date;
+    savedInput.process_date = result.process_date;
+    savedInput.bni_dbr_pct = result.bni_details.dbr_pct;
+    if (result.bni_details.bni_disbursement_date) {
+      savedInput.bni_disbursement_date = result.bni_details.bni_disbursement_date;
+    }
+    if (result.bni_details.bni_tmt_pensiun_date) {
+      savedInput.bni_tmt_pensiun_date = result.bni_details.bni_tmt_pensiun_date;
+    }
+  }
+
   const sim = withTransaction(() => {
     const seq = String(store.simulations.length + 1).padStart(4, "0");
     const ym = yearMonthWibCompact();
@@ -1925,7 +2186,7 @@ app.post("/api/simulations", requireAuth, (req, res) => {
       bsi_product_code: result.bsi_product_code || null,
       policy_version: result.policy_version || null,
       dapem: body.dapem || "TASPEN",
-      input: pickWhitelistedSimulationInput(body),
+      input: savedInput,
       result,
       status: "saved",
       created_by: req.user.id,
@@ -1998,15 +2259,34 @@ app.post("/api/simulations/:id/ai-summary", requireAuth, (req, res) => {
   }
   const r = sim.result;
   const isBsi = r.bank_key === "bsi_prapen" || !!r.bsi_details;
+  const isBniFleksi = r.bank_key === "bank_bni" || !!r.bni_details;
   const isCapital = r.bank_key === "bank_capital" || !!r.capital_details;
   const isMestika = r.bank_key === "bank_mestika" || !!r.mestika_details;
   const isAms2 = r.bank_key === "ams2";
   const bsi = r.bsi_details || {};
+  const bni = r.bni_details || {};
   const cap = r.capital_details || {};
   const mst = r.mestika_details || {};
 
   let summary = "";
-  if (isMestika) {
+  if (isBniFleksi) {
+    const praDatesLine =
+      bni.product_code === "4" && (bni.bni_disbursement_date || bni.bni_tmt_pensiun_date)
+        ? `• Jadwal Pra Purna: Tgl Aplikasi ${r.process_date || "-"}${bni.bni_disbursement_date ? `, Rencana Tgl Pencairan ${bni.bni_disbursement_date}` : ""}${bni.bni_tmt_pensiun_date ? `, TMT Pensiun ${bni.bni_tmt_pensiun_date}` : ""}.`
+        : null;
+    summary = [
+      `RINGKASAN EKSEKUTIF SIMULASI BANK BNI FLEKSI PENSIUN (${sim.sim_no})`,
+      `• Debitur: ${r.name || "-"} (Usia Aplikasi ${bni.age_exact_text || `${r.age} tahun`}) — Produk ${bni.product_name || "BNI Fleksi"} (Kode ${bni.product_code || "-"}) • ${bni.insurance_scheme_label || "Skema Menurun"}.`,
+      ...(praDatesLine ? [praDatesLine] : []),
+      `• Gaji & Batas DBR: Rp${r.salary.toLocaleString("id-ID")} (DBR ${bni.dbr_pct ?? 90}% = Maks Angsuran Rp${(bni.max_installment ?? 0).toLocaleString("id-ID")}/bln).`,
+      `• Plafond & Tenor: Plafond Rp${r.plafond.toLocaleString("id-ID")} (Maks Rp${(bni.max_plafond ?? r.plafond).toLocaleString("id-ID")}) selama ${r.tenor} bulan (${bni.insurance_tenor_years || Math.ceil((r.tenor || 0) / 12)} thn AJK) • Bunga Efektif ${r.bank_rate}% p.a.`,
+      `• Angsuran & Biaya Bank: Angsuran Rp${r.coop_installment.toLocaleString("id-ID")}/bln (DSR ${r.ratio_pct}%) • Biaya Bank (Admin Rp${(bni.admin_fee ?? 0).toLocaleString("id-ID")} + Provisi ${bni.provisi_pct ?? 0}% + BTL ${bni.btl_pct ?? 3.5}%) = Rp${(bni.bank_fees ?? 0).toLocaleString("id-ID")}.`,
+      `• Asuransi AJK CAR (${bni.ajk_rate_permil ?? 0}‰): Gross Rp${(bni.gross_ajk_premium ?? 0).toLocaleString("id-ID")}, Subsidi BNI (s.d. ${bni.subsidy_cap_permil ?? 150}‰) -Rp${(bni.bni_subsidy_premium ?? 0).toLocaleString("id-ID")}, Ditanggung Nasabah Rp${(bni.customer_ajk_premium ?? 0).toLocaleString("id-ID")} (Underwriting: ${bni.underwriting_code || "-"}).`,
+      `• Blokir & Take Over: Blokir Angsuran (${bni.blokir_angsuran_count ?? 3}x), Tabungan (${bni.blokir_tabungan_count ?? 1}x), Prapensiun (${bni.blokir_prapensiun_count ?? 0}x) = Rp${r.retention.toLocaleString("id-ID")}${r.take_over > 0 ? `, Take Over Rp${r.take_over.toLocaleString("id-ID")}` : ""}.`,
+      `• Hasil Akhir: Terima Bersih Rp${r.net_disbursement.toLocaleString("id-ID")} dengan Sisa Gaji Rp${r.remaining_salary.toLocaleString("id-ID")}/bln.`,
+      `• Status Validasi: ${r.overall_ok ? "PASSED — Seluruh ketentuan BNI Fleksi & AJK CAR terpenuhi." : (r.issues || []).join(" ") || "NOT PASSED — Periksa catatan validasi."}`
+    ].join("\n");
+  } else if (isMestika) {
     const gajiDesc = mst.salary_type === "pensiun"
       ? `Sesuai Gaji Pensiun Rp${(mst.salary_input ?? r.salary).toLocaleString("id-ID")} (Estimasi Gaji Pokok -${mst.pension_deduction_pct ?? 13}% = Rp${(mst.basic_salary ?? r.salary).toLocaleString("id-ID")})`
       : `Sesuai Gaji IDPB Rp${(mst.basic_salary ?? r.salary).toLocaleString("id-ID")}`;
@@ -2096,6 +2376,13 @@ app.post("/api/simulations/:id/approve", requireAuth, (req, res) => {
   if (sim.status === "approved" || store.applications.some((a) => a.sim_id === sim.id)) {
     return res.status(409).json({ detail: "Simulasi ini sudah pernah diajukan menjadi aplikasi." });
   }
+  const bni = sim.result?.bni_details;
+  if (sim.bank_key === "bank_bni" && bni && (
+    bni.underwriting_requires_verification ||
+    requiresBniUnderwritingReview(bni.entry_age_years ?? sim.result.age, sim.input?.plafond || sim.result.plafond)
+  )) {
+    return res.status(409).json({ error_code: "BNI_UNDERWRITING_REVIEW_REQUIRED", detail: BNI_UNDERWRITING_REVIEW_MESSAGE });
+  }
   if (!sim.result || sim.result.overall_ok !== true) {
     return res.status(400).json({
       detail: "Simulasi tidak memenuhi syarat kelayakan (overall_ok = false) dan tidak dapat diajukan ke proses berkas."
@@ -2175,7 +2462,7 @@ app.post("/api/simulations/:id/approve", requireAuth, (req, res) => {
       sales_manager_name: smInfo.sales_manager_name,
       branch: normalizeBranch(sim.branch || req.user.branch || lead.branch || "BANDUNG"),
       bank_key: sim.bank_key || "ams2",
-      bank_name: partnerCfg.name,
+      bank_name: sim.bank_key === "bank_bni" ? sim.result.bank_name || partnerCfg.name : partnerCfg.name,
       debtor_type: sim.result.category,
       dapem: sim.dapem || "TASPEN",
       plafond: sim.result.plafond,
@@ -4771,7 +5058,10 @@ app.use((error, req, res, next) => {
   if (error.type === "entity.too.large") return res.status(413).json({ detail: "Ukuran permintaan melebihi batas yang diperbolehkan." });
   if (error instanceof SyntaxError && "body" in error) return res.status(400).json({ detail: "Format permintaan JSON tidak valid." });
   console.error("[API_ERROR]", req.method, req.path, error.code || error.name);
-  res.status(error.status || 500).json({ detail: error.status ? error.message : "Operasi gagal. Hubungi administrator jika masalah berulang." });
+  res.status(error.status || 500).json({
+    ...(error.errorCode ? { error_code: error.errorCode } : {}),
+    detail: error.status ? error.message : "Operasi gagal. Hubungi administrator jika masalah berulang."
+  });
 });
 
 // Validate/load state before accepting traffic; never reseed a failed production state.

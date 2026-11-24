@@ -10,6 +10,12 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_PARTNER_PARAMETERS, INDONESIA_PROVINCES } from "../config/default-parameters.js";
 import {
+  BNI_POLICY_VERSION,
+  canActivateLegacyBniFleksi,
+  createDefaultBniConfig,
+  getBniFleksiConfig
+} from "../config/bni-product-config.js";
+import {
   BSI_MIGRATION_ID,
   BSI_SCHEMA_VERSION,
   buildMigratedBsiPartner
@@ -811,8 +817,55 @@ function createInitialState() {
 
 let stateCache = null;
 
+function recordBniParameterSnapshot(state, legacy) {
+  if (!Array.isArray(state.parameter_migration_snapshots)) {
+    state.parameter_migration_snapshots = [];
+  }
+  if (
+    legacy &&
+    !state.parameter_migration_snapshots.some((s) => s.partner_key === "bank_bni" && s.migration_id === BNI_POLICY_VERSION)
+  ) {
+    state.parameter_migration_snapshots.push({
+      migration_id: BNI_POLICY_VERSION,
+      partner_key: "bank_bni",
+      migrated_at: new Date().toISOString(),
+      before_snapshot: structuredClone(legacy)
+    });
+  }
+}
+
+/** Upgrade fixture development. Production boot tetap hanya memvalidasi state. */
+function ensureBniParameterUpgrade(state) {
+  if (getBniFleksiConfig(state.partner_parameters?.bank_bni)) return false;
+  state.partner_parameters = state.partner_parameters || {};
+  recordBniParameterSnapshot(state, state.partner_parameters.bank_bni);
+  state.partner_parameters.bank_bni = structuredClone(DEFAULT_PARTNER_PARAMETERS.bank_bni);
+  return true;
+}
+
+/** Aktivasi oleh proses API penulis tunggal setelah tindakan Super Admin. */
+export function activateLegacyBniFleksi(user, ip) {
+  const legacy = getStore().partner_parameters.bank_bni;
+  const existing = getBniFleksiConfig(legacy);
+  if (existing?.active === true) return { mode: "already_active", partner: existing };
+  if (!canActivateLegacyBniFleksi(legacy)) return null;
+
+  const partner = createDefaultBniConfig();
+  partner.maxInstallmentRatio = legacy.maxInstallmentRatio;
+  partner.maxPlafondAbsolute = Math.min(partner.maxPlafondAbsolute, legacy.maxPlafondAbsolute);
+  partner.maxTenorMonths = Math.min(partner.maxTenorMonths, legacy.maxTenorMonths);
+  return withTransaction((state) => {
+    const targetLegacy = state.partner_parameters.bank_bni;
+    recordBniParameterSnapshot(state, targetLegacy);
+    // Release lama tetap membaca parameter asli, termasuk active=false.
+    targetLegacy.fleksi = partner;
+    addAuditLog(user, "activate_bni_fleksi", "bank_bni", `Aktivasi kalkulator BNI Fleksi ${partner.policyVersion}`, ip);
+    return { mode: "activated", partner };
+  });
+}
+
 export function ensureStoreUpgrades(state) {
-  // Demo fixture upgrades are never allowed to create accounts/transactions in production.
+  // Demo fixture upgrades are never allowed to create accounts/transactions or mutate state on production boot.
   if (IS_PROD) { validateState(state, { production: true }); return false; }
   let changed = false;
   const defaultPwdHash = demoPasswordHash("Password123!");
@@ -987,7 +1040,16 @@ export function ensureStoreUpgrades(state) {
     changed = true;
   }
 
-  for (const inactiveKey of ["bank_mantap", "bank_mnc", "bank_bni"]) {
+  if (!Array.isArray(state.parameter_migration_snapshots)) {
+    state.parameter_migration_snapshots = [];
+    changed = true;
+  }
+
+  if (ensureBniParameterUpgrade(state)) {
+    changed = true;
+  }
+
+  for (const inactiveKey of ["bank_mantap", "bank_mnc"]) {
     if (state.partner_parameters?.[inactiveKey] && state.partner_parameters[inactiveKey].active !== false) {
       state.partner_parameters[inactiveKey].active = false;
       changed = true;
@@ -998,10 +1060,6 @@ export function ensureStoreUpgrades(state) {
   state.partner_parameters = state.partner_parameters || {};
   if (state.partner_parameters.schemaVersion !== BSI_SCHEMA_VERSION) {
     state.partner_parameters.schemaVersion = BSI_SCHEMA_VERSION;
-    changed = true;
-  }
-  if (!Array.isArray(state.parameter_migration_snapshots)) {
-    state.parameter_migration_snapshots = [];
     changed = true;
   }
   const currentBsi = state.partner_parameters.bsi_prapen;
