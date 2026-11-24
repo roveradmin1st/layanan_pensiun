@@ -9,30 +9,53 @@ import crypto from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_PARTNER_PARAMETERS, INDONESIA_PROVINCES } from "../config/default-parameters.js";
+import {
+  BNI_POLICY_VERSION,
+  canActivateLegacyBniFleksi,
+  createDefaultBniConfig,
+  getBniFleksiConfig
+} from "../config/bni-product-config.js";
+import {
+  BSI_MIGRATION_ID,
+  BSI_SCHEMA_VERSION,
+  buildMigratedBsiPartner
+} from "../config/bsi-product-config.js";
 import { calculatePreview } from "../engines/calc-engine.js";
+import { validateState } from "./state-schema.js";
+import { todayWibIso } from "../utils/time-wib.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const IS_PROD = process.env.NODE_ENV === "production";
 const DATA_DIR = path.resolve(__dirname, "../../data");
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-
 const SQLITE_PATH = path.join(DATA_DIR, "enterprise.sqlite");
-const db = new DatabaseSync(SQLITE_PATH);
-
-db.exec(`
-  PRAGMA journal_mode = WAL;
-  CREATE TABLE IF NOT EXISTS kv_store (
-    collection TEXT PRIMARY KEY,
-    payload TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS uploaded_files (
-    id TEXT PRIMARY KEY,
-    filename TEXT NOT NULL,
-    mime_type TEXT NOT NULL,
-    data BLOB NOT NULL,
-    created_at TEXT NOT NULL
-  );
-`);
+if (IS_PROD && !fs.existsSync(SQLITE_PATH)) {
+  throw new Error("PRODUCTION_DATABASE_REQUIRED: siapkan database produksi dari salinan terverifikasi; data demo tidak dibuat.");
+}
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+export const db = new DatabaseSync(SQLITE_PATH);
+if (IS_PROD) {
+  try {
+    const row = db.prepare("SELECT payload FROM kv_store WHERE collection='enterprise_state'").get();
+    if (!row?.payload) throw new Error("State produksi tidak ditemukan.");
+    validateState(JSON.parse(row.payload), { production: true });
+    if (db.prepare("PRAGMA quick_check").all().some((row) => Object.values(row)[0] !== "ok")) throw new Error("SQLite tidak sehat.");
+    db.prepare("SELECT id,filename,mime_type,data,created_at FROM uploaded_files LIMIT 0").all();
+  } catch (error) {
+    db.close();
+    throw new Error("PRODUCTION_DATABASE_INVALID: data asli dipertahankan; periksa backup dan log operator.");
+  }
+  db.exec(`
+    PRAGMA journal_mode=WAL;
+    CREATE TABLE IF NOT EXISTS audit_events (id TEXT PRIMARY KEY,surface TEXT NOT NULL,user_id TEXT NOT NULL,user_name TEXT NOT NULL,role TEXT NOT NULL,action TEXT NOT NULL,entity TEXT NOT NULL,detail TEXT NOT NULL,ip TEXT NOT NULL,created_at TEXT NOT NULL);
+  `);
+} else {
+  db.exec(`
+    PRAGMA journal_mode=WAL;
+    CREATE TABLE IF NOT EXISTS kv_store (collection TEXT PRIMARY KEY,payload TEXT NOT NULL,updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS uploaded_files (id TEXT PRIMARY KEY,filename TEXT NOT NULL,mime_type TEXT NOT NULL,data BLOB NOT NULL,created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS audit_events (id TEXT PRIMARY KEY,surface TEXT NOT NULL,user_id TEXT NOT NULL,user_name TEXT NOT NULL,role TEXT NOT NULL,action TEXT NOT NULL,entity TEXT NOT NULL,detail TEXT NOT NULL,ip TEXT NOT NULL,created_at TEXT NOT NULL);
+  `);
+}
 
 export const APP_STAGES = [
   { key: "upload_dokumen", label: "Upload Dokumen" },
@@ -56,7 +79,7 @@ export const DOC_TEMPLATE = [
   { key: "kk_ahliwaris", label: "Kartu Keluarga (KK) Ahli Waris", group: "Ahli Waris" }
 ];
 
-export function hashPassword(plain) {
+function demoPasswordHash(plain) {
   return crypto.createHash("sha256").update(`lp_salt_2026_${plain}`).digest("hex");
 }
 
@@ -74,7 +97,7 @@ function buildChecklist(prefilled = false) {
 
 function createInitialState() {
   const now = new Date().toISOString();
-  const defaultPwdHash = hashPassword("Password123!");
+  const defaultPwdHash = demoPasswordHash("Password123!");
 
   const users = [
     {
@@ -112,14 +135,27 @@ function createInitialState() {
     },
     {
       id: "u-branch-1",
-      name: "DEDY KURNIAWAN",
+      name: "DEDY KURNIAWAN (Admin Cabang All Bank)",
       email: "admincabang@layananpensiunan.id",
       password_hash: defaultPwdHash,
       role: "admin_branch",
       branch: "BANDUNG",
+      bank_scope: "all_bank",
       phone: "081265001122",
       active: true,
       created_at: "2026-01-16T09:00:00.000Z"
+    },
+    {
+      id: "u-branch-bsi-1",
+      name: "FAUZI RACHMAN (Admin Cabang Khusus BSI)",
+      email: "admincabang.bsi@layananpensiunan.id",
+      password_hash: defaultPwdHash,
+      role: "admin_branch",
+      branch: "BANDUNG",
+      bank_scope: "bsi_only",
+      phone: "081277008899",
+      active: true,
+      created_at: "2026-01-17T09:00:00.000Z"
     },
     {
       id: "u-sm-1",
@@ -172,7 +208,7 @@ function createInitialState() {
     }
   ];
 
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = todayWibIso();
   const leads = [
     {
       id: "lead-1001",
@@ -324,6 +360,151 @@ function createInitialState() {
       documents: [],
       created_at: "2026-10-26T08:00:00.000Z",
       updated_at: "2026-10-26T08:00:00.000Z"
+    },
+    {
+      id: "lead-1006",
+      name: "DRS. ASEP SUNANDAR",
+      nopen: "196403151988031002",
+      nip: "196403151988031002",
+      nik: "3273011503640003",
+      birth_date: "1964-03-15",
+      age: 62,
+      phone: "081220112233",
+      address: "Jl. Dago Asri No. 15",
+      province: "Jawa Barat",
+      city: "Kota Bandung",
+      district: "Coblong",
+      branch: "BANDUNG",
+      sk_type: "Pensiun Sendiri",
+      institution: "Dinas Pendidikan Kota Bandung",
+      pay_office: "Bank BJB Cabang Utama",
+      pension_salary: 4750000,
+      status: "baru",
+      follow_up_date: null,
+      source: "Impor Master Taspen",
+      assigned_to: null,
+      assigned_name: null,
+      notes: "Stok pool data prospek unassigned Cabang Bandung.",
+      activities: [],
+      documents: [],
+      created_at: "2026-10-26T08:30:00.000Z",
+      updated_at: "2026-10-26T08:30:00.000Z"
+    },
+    {
+      id: "lead-1007",
+      name: "HJ. ENI ROHAENI",
+      nopen: "196805201990032001",
+      nip: "196805201990032001",
+      nik: "3273086005680005",
+      birth_date: "1968-05-20",
+      age: 58,
+      phone: "081321445566",
+      address: "Jl. Buah Batu No. 88",
+      province: "Jawa Barat",
+      city: "Kota Bandung",
+      district: "Lengkong",
+      branch: "BANDUNG",
+      sk_type: "Prapensiun BUP 60",
+      institution: "Dinas Kesehatan Prov Jabar",
+      pay_office: "Bank BJB Buah Batu",
+      pension_salary: 5200000,
+      status: "baru",
+      follow_up_date: null,
+      source: "Database PNS Aktif",
+      assigned_to: null,
+      assigned_name: null,
+      notes: "Calon debitur prapensiun ASN, siap take over/top up.",
+      activities: [],
+      documents: [],
+      created_at: "2026-10-26T09:00:00.000Z",
+      updated_at: "2026-10-26T09:00:00.000Z"
+    },
+    {
+      id: "lead-1008",
+      name: "IR. DADANG KURNIADI",
+      nopen: "195908121985031004",
+      nip: "195908121985031004",
+      nik: "3273051208590001",
+      birth_date: "1959-08-12",
+      age: 67,
+      phone: "081222998877",
+      address: "Jl. Riau No. 104",
+      province: "Jawa Barat",
+      city: "Kota Bandung",
+      district: "Bandung Wetan",
+      branch: "BANDUNG",
+      sk_type: "Pensiun Sendiri",
+      institution: "Kementerian PUPR",
+      pay_office: "Bank Mandiri Taspen Bandung",
+      pension_salary: 4900000,
+      status: "baru",
+      follow_up_date: null,
+      source: "Data Taspen",
+      assigned_to: null,
+      assigned_name: null,
+      notes: "Pensiun murni, butuh dana renovasi rumah.",
+      activities: [],
+      documents: [],
+      created_at: "2026-10-26T09:30:00.000Z",
+      updated_at: "2026-10-26T09:30:00.000Z"
+    },
+    {
+      id: "lead-1009",
+      name: "NENENG HASANAH, S.PD",
+      nopen: "196611041989022002",
+      nip: "196611041989022002",
+      nik: "3273104411660002",
+      birth_date: "1966-11-04",
+      age: 60,
+      phone: "081399887711",
+      address: "Jl. Cihampelas No. 55",
+      province: "Jawa Barat",
+      city: "Kota Bandung",
+      district: "Coblong",
+      branch: "BANDUNG",
+      sk_type: "Pensiun Sendiri",
+      institution: "SMKN 1 Bandung",
+      pay_office: "Bank BJB Tamansari",
+      pension_salary: 4300000,
+      status: "baru",
+      follow_up_date: null,
+      source: "Impor Master Taspen",
+      assigned_to: null,
+      assigned_name: null,
+      notes: "Baru masuk masa purna bhakti, berminat simulasi BSI / AMS2.",
+      activities: [],
+      documents: [],
+      created_at: "2026-10-26T10:00:00.000Z",
+      updated_at: "2026-10-26T10:00:00.000Z"
+    },
+    {
+      id: "lead-1010",
+      name: "MAYOR (PURN) H. ACHMAD HIDAYAT",
+      nopen: "195101011974011003",
+      nip: "195101011974011003",
+      nik: "3273020101510001",
+      birth_date: "1951-01-01",
+      age: 75,
+      phone: "081223456789",
+      address: "Jl. Gatot Subroto No. 120",
+      province: "Jawa Barat",
+      city: "Kota Bandung",
+      district: "Batununggal",
+      branch: "BANDUNG",
+      sk_type: "Pensiun ASABRI",
+      institution: "TNI AD Purnawirawan",
+      pay_office: "Bank BTPN Pensiun Bandung",
+      pension_salary: 5800000,
+      status: "baru",
+      follow_up_date: null,
+      source: "Database Asabri",
+      assigned_to: null,
+      assigned_name: null,
+      notes: "Pensiunan ASABRI, siap dihubungi untuk program Platinum.",
+      activities: [],
+      documents: [],
+      created_at: "2026-10-26T10:30:00.000Z",
+      updated_at: "2026-10-26T10:30:00.000Z"
     }
   ];
 
@@ -484,6 +665,49 @@ function createInitialState() {
         { id: "h-23", action: "booking_live", note: "Kredit telah cair & aktif dengan No. PK-AMS2-2026-08891", user_name: "RINA KARTIKA SARI", role: "admin_ops", at: "2026-10-23T11:00:00.000Z" }
       ],
       created_at: "2026-10-19T14:15:00.000Z"
+    },
+    {
+      id: "app-3003",
+      app_no: "APP-202610-0003",
+      sim_id: "sim-2003",
+      lead_id: "lead-1003",
+      lead_name: "DRS. BAMBANG HERMAWAN",
+      marketing_id: "u-mkt-1",
+      marketing_name: "ANDI PRATAMA",
+      branch: "BANDUNG",
+      bank_key: "bsi_prapen",
+      bank_name: "Bank Syariah Indonesia (BSI)",
+      debtor_type: "PRAPENSIUN BUP 60",
+      dapem: "TASPEN",
+      plafond: 320000000,
+      tenor: 120,
+      stage: "booking_live",
+      stage_index: 6,
+      stages: APP_STAGES,
+      stage_data: {
+        upload_dokumen: { by_name: "ANDI PRATAMA", date: "2026-10-21" },
+        pengajuan_bank: { by_name: "RINA KARTIKA SARI", date: "2026-10-22" },
+        verifikasi_bank: { by_name: "RINA KARTIKA SARI", date: "2026-10-23" },
+        approval_bank: { by_name: "RINA KARTIKA SARI", date: "2026-10-24" },
+        penjadwalan_akad: { by_name: "RINA KARTIKA SARI", date: "2026-10-24" },
+        akad_nasabah: { by_name: "RINA KARTIKA SARI", date: "2026-10-25" },
+        booking_live: { by_name: "RINA KARTIKA SARI", date: "2026-10-25" }
+      },
+      pending: null,
+      rejected: false,
+      reject_reason: null,
+      booking: {
+        date: "2026-10-25",
+        credit_no: "PK-BSI-2026-00412",
+        confirmed_by: "RINA KARTIKA SARI"
+      },
+      checklist: buildChecklist(true).map((d) => ({ ...d, status: "diterima" })),
+      history: [
+        { id: "h-31", action: "created", note: "Pengajuan dibuat dari SIM-202610-0003", user_name: "ANDI PRATAMA", role: "marketing", at: "2026-10-21T10:00:00.000Z" },
+        { id: "h-32", action: "forward_bank", note: "Dokumen lengkap, diteruskan ke BSI KC Bandung", user_name: "RINA KARTIKA SARI", role: "admin_ops", at: "2026-10-22T09:00:00.000Z" },
+        { id: "h-33", action: "booking_live", note: "Kredit telah cair & aktif dengan No. PK-BSI-2026-00412", user_name: "RINA KARTIKA SARI", role: "admin_ops", at: "2026-10-25T11:00:00.000Z" }
+      ],
+      created_at: "2026-10-21T10:00:00.000Z"
     }
   ];
 
@@ -494,6 +718,7 @@ function createInitialState() {
       application_id: "app-3002",
       app_no: "APP-202610-0002",
       lead_name: "HJ. ENDANG SULISTYOWATI",
+      bank_key: "ams2",
       bank_name: "Koperasi Asia Madani Sejahtera (AMS2)",
       marketing_id: "u-mkt-1",
       marketing_name: "ANDI PRATAMA",
@@ -501,20 +726,48 @@ function createInitialState() {
       booking_date: "2026-10-23",
       credit_no: "PK-AMS2-2026-08891",
       amount: 2200000,
-      status: "REVIEW",
+      status: "PAID",
       notes: "Pengajuan klaim insentif pencairan Platinum Rp110 Juta.",
       revision_note: null,
       reject_reason: null,
       booking_proof: "foto_akad_endang.pdf",
+      payment_proof: "bukti_transfer_endang.pdf",
+      paid_at: "2026-10-24T10:00:00.000Z",
+      paid_by: "RINA KARTIKA SARI",
+      payment_note: "Lunas ditransfer ke rekening Budi/Andi.",
+      history: [
+        { id: "ch-1", action: "SUBMITTED", note: "Klaim diajukan oleh Marketing beserta foto akad", user_name: "ANDI PRATAMA", at: "2026-10-23T14:00:00.000Z" },
+        { id: "ch-2", action: "PAID", note: "Klaim disetujui & dibayarkan (PAID)", user_name: "RINA KARTIKA SARI", at: "2026-10-24T10:00:00.000Z" }
+      ],
+      created_at: "2026-10-23T13:50:00.000Z"
+    },
+    {
+      id: "clm-4002",
+      claim_no: "CLM-202610-0002",
+      application_id: "app-3003",
+      app_no: "APP-202610-0003",
+      lead_name: "DRS. BAMBANG HERMAWAN",
+      bank_key: "bsi_prapen",
+      bank_name: "Bank Syariah Indonesia (BSI)",
+      marketing_id: "u-mkt-1",
+      marketing_name: "ANDI PRATAMA",
+      branch: "BANDUNG",
+      booking_date: "2026-10-25",
+      credit_no: "PK-BSI-2026-00412",
+      amount: 4500000,
+      status: "SUBMITTED",
+      notes: "Pengajuan klaim insentif pencairan BSI Dekade Berkah Rp320 Juta.",
+      revision_note: null,
+      reject_reason: null,
+      booking_proof: "foto_akad_bambang.pdf",
       payment_proof: null,
       paid_at: null,
       paid_by: null,
       payment_note: null,
       history: [
-        { id: "ch-1", action: "SUBMITTED", note: "Klaim diajukan oleh Marketing beserta foto akad", user_name: "ANDI PRATAMA", at: "2026-10-23T14:00:00.000Z" },
-        { id: "ch-2", action: "REVIEW", note: "Sedang diverifikasi oleh Admin Operasional", user_name: "RINA KARTIKA SARI", at: "2026-10-24T09:15:00.000Z" }
+        { id: "ch-10", action: "SUBMITTED", note: "Klaim diajukan oleh Marketing beserta foto akad", user_name: "ANDI PRATAMA", at: "2026-10-25T14:00:00.000Z" }
       ],
-      created_at: "2026-10-23T13:50:00.000Z"
+      created_at: "2026-10-25T13:50:00.000Z"
     }
   ];
 
@@ -555,6 +808,7 @@ function createInitialState() {
     applications,
     claims,
     imports,
+    lead_requests: [],
     audit_logs,
     meta: {
       provinces: INDONESIA_PROVINCES,
@@ -567,21 +821,183 @@ function createInitialState() {
 
 let stateCache = null;
 
-function ensureStoreUpgrades(state) {
-  let changed = false;
-  const defaultPwdHash = hashPassword("Password123!");
+function recordBniParameterSnapshot(state, legacy) {
+  if (!Array.isArray(state.parameter_migration_snapshots)) {
+    state.parameter_migration_snapshots = [];
+  }
+  if (
+    legacy &&
+    !state.parameter_migration_snapshots.some((s) => s.partner_key === "bank_bni" && s.migration_id === BNI_POLICY_VERSION)
+  ) {
+    state.parameter_migration_snapshots.push({
+      migration_id: BNI_POLICY_VERSION,
+      partner_key: "bank_bni",
+      migrated_at: new Date().toISOString(),
+      before_snapshot: structuredClone(legacy)
+    });
+  }
+}
 
-  if (!state.users.some((u) => u.role === "admin_branch")) {
+/** Upgrade fixture development. Production boot tetap hanya memvalidasi state. */
+function ensureBniParameterUpgrade(state) {
+  if (getBniFleksiConfig(state.partner_parameters?.bank_bni)) return false;
+  state.partner_parameters = state.partner_parameters || {};
+  recordBniParameterSnapshot(state, state.partner_parameters.bank_bni);
+  state.partner_parameters.bank_bni = structuredClone(DEFAULT_PARTNER_PARAMETERS.bank_bni);
+  return true;
+}
+
+/** Aktivasi oleh proses API penulis tunggal setelah tindakan Super Admin. */
+export function activateLegacyBniFleksi(user, ip) {
+  const legacy = getStore().partner_parameters.bank_bni;
+  const existing = getBniFleksiConfig(legacy);
+  if (existing?.active === true) return { mode: "already_active", partner: existing };
+  if (!canActivateLegacyBniFleksi(legacy)) return null;
+
+  const partner = createDefaultBniConfig();
+  partner.maxInstallmentRatio = legacy.maxInstallmentRatio;
+  partner.maxPlafondAbsolute = Math.min(partner.maxPlafondAbsolute, legacy.maxPlafondAbsolute);
+  partner.maxTenorMonths = Math.min(partner.maxTenorMonths, legacy.maxTenorMonths);
+  return withTransaction((state) => {
+    const targetLegacy = state.partner_parameters.bank_bni;
+    recordBniParameterSnapshot(state, targetLegacy);
+    // Release lama tetap membaca parameter asli, termasuk active=false.
+    targetLegacy.fleksi = partner;
+    addAuditLog(user, "activate_bni_fleksi", "bank_bni", `Aktivasi kalkulator BNI Fleksi ${partner.policyVersion}`, ip);
+    return { mode: "activated", partner };
+  });
+}
+
+export function ensureStoreUpgrades(state) {
+  // Demo fixture upgrades are never allowed to create accounts/transactions or mutate state on production boot.
+  if (IS_PROD) { validateState(state, { production: true }); return false; }
+  let changed = false;
+  const defaultPwdHash = demoPasswordHash("Password123!");
+  const legacySeedHashes = new Set([
+    demoPasswordHash("admin123"),
+    "50fab87845e64326b207768b12e5a58ffb989871b3ecb170e67532bb7d354f63"
+  ]);
+
+  for (const u of state.users || []) {
+    if (legacySeedHashes.has(u.password_hash)) {
+      u.password_hash = defaultPwdHash;
+      changed = true;
+    }
+  }
+
+  if (!state.users.some((u) => u.email === "admincabang@layananpensiunan.id")) {
     state.users.push({
       id: "u-branch-1",
-      name: "DEDY KURNIAWAN",
+      name: "DEDY KURNIAWAN (Admin Cabang All Bank)",
       email: "admincabang@layananpensiunan.id",
       password_hash: defaultPwdHash,
       role: "admin_branch",
       branch: "BANDUNG",
+      bank_scope: "all_bank",
       phone: "081265001122",
       active: true,
       created_at: "2026-01-16T09:00:00.000Z"
+    });
+    changed = true;
+  } else {
+    const uBranch1 = state.users.find((u) => u.email === "admincabang@layananpensiunan.id");
+    if (uBranch1 && !uBranch1.bank_scope) {
+      uBranch1.bank_scope = "all_bank";
+      changed = true;
+    }
+  }
+
+  if (!state.users.some((u) => u.email === "admincabang.bsi@layananpensiunan.id")) {
+    state.users.push({
+      id: "u-branch-bsi-1",
+      name: "FAUZI RACHMAN (Admin Cabang Khusus BSI)",
+      email: "admincabang.bsi@layananpensiunan.id",
+      password_hash: defaultPwdHash,
+      role: "admin_branch",
+      branch: "BANDUNG",
+      bank_scope: "bsi_only",
+      phone: "081277008899",
+      active: true,
+      created_at: "2026-01-17T09:00:00.000Z"
+    });
+    changed = true;
+  }
+
+  if (Array.isArray(state.applications) && !state.applications.some((a) => a.id === "app-3003")) {
+    state.applications.push({
+      id: "app-3003",
+      app_no: "APP-202610-0003",
+      sim_id: "sim-2003",
+      lead_id: "lead-1003",
+      lead_name: "DRS. BAMBANG HERMAWAN",
+      marketing_id: "u-mkt-1",
+      marketing_name: "ANDI PRATAMA",
+      branch: "BANDUNG",
+      bank_key: "bsi_prapen",
+      bank_name: "Bank Syariah Indonesia (BSI)",
+      debtor_type: "PRAPENSIUN BUP 60",
+      dapem: "TASPEN",
+      plafond: 320000000,
+      tenor: 120,
+      stage: "booking_live",
+      stage_index: 6,
+      stages: APP_STAGES,
+      stage_data: {
+        upload_dokumen: { by_name: "ANDI PRATAMA", date: "2026-10-21" },
+        pengajuan_bank: { by_name: "RINA KARTIKA SARI", date: "2026-10-22" },
+        verifikasi_bank: { by_name: "RINA KARTIKA SARI", date: "2026-10-23" },
+        approval_bank: { by_name: "RINA KARTIKA SARI", date: "2026-10-24" },
+        penjadwalan_akad: { by_name: "RINA KARTIKA SARI", date: "2026-10-24" },
+        akad_nasabah: { by_name: "RINA KARTIKA SARI", date: "2026-10-25" },
+        booking_live: { by_name: "RINA KARTIKA SARI", date: "2026-10-25" }
+      },
+      pending: null,
+      rejected: false,
+      reject_reason: null,
+      booking: {
+        date: "2026-10-25",
+        credit_no: "PK-BSI-2026-00412",
+        confirmed_by: "RINA KARTIKA SARI"
+      },
+      checklist: buildChecklist(true).map((d) => ({ ...d, status: "diterima" })),
+      history: [
+        { id: "h-31", action: "created", note: "Pengajuan dibuat dari SIM-202610-0003", user_name: "ANDI PRATAMA", role: "marketing", at: "2026-10-21T10:00:00.000Z" },
+        { id: "h-32", action: "forward_bank", note: "Dokumen lengkap, diteruskan ke BSI KC Bandung", user_name: "RINA KARTIKA SARI", role: "admin_ops", at: "2026-10-22T09:00:00.000Z" },
+        { id: "h-33", action: "booking_live", note: "Kredit telah cair & aktif dengan No. PK-BSI-2026-00412", user_name: "RINA KARTIKA SARI", role: "admin_ops", at: "2026-10-25T11:00:00.000Z" }
+      ],
+      created_at: "2026-10-21T10:00:00.000Z"
+    });
+    changed = true;
+  }
+
+  if (Array.isArray(state.claims) && !state.claims.some((c) => c.application_id === "app-3003")) {
+    state.claims.push({
+      id: "clm-4002",
+      claim_no: "CLM-202610-0002",
+      application_id: "app-3003",
+      app_no: "APP-202610-0003",
+      lead_name: "DRS. BAMBANG HERMAWAN",
+      bank_key: "bsi_prapen",
+      bank_name: "Bank Syariah Indonesia (BSI)",
+      marketing_id: "u-mkt-1",
+      marketing_name: "ANDI PRATAMA",
+      branch: "BANDUNG",
+      booking_date: "2026-10-25",
+      credit_no: "PK-BSI-2026-00412",
+      amount: 4500000,
+      status: "SUBMITTED",
+      notes: "Pengajuan klaim insentif pencairan BSI Dekade Berkah Rp320 Juta.",
+      revision_note: null,
+      reject_reason: null,
+      booking_proof: "foto_akad_bambang.pdf",
+      payment_proof: null,
+      paid_at: null,
+      paid_by: null,
+      payment_note: null,
+      history: [
+        { id: "ch-10", action: "SUBMITTED", note: "Klaim diajukan oleh Marketing beserta foto akad", user_name: "ANDI PRATAMA", at: "2026-10-25T14:00:00.000Z" }
+      ],
+      created_at: "2026-10-25T13:50:00.000Z"
     });
     changed = true;
   }
@@ -628,10 +1044,216 @@ function ensureStoreUpgrades(state) {
     changed = true;
   }
 
-  for (const inactiveKey of ["bank_mantap", "bank_mnc", "bank_bni"]) {
-    if (state.partner_parameters?.[inactiveKey]?.active !== false) {
+  if (!Array.isArray(state.parameter_migration_snapshots)) {
+    state.parameter_migration_snapshots = [];
+    changed = true;
+  }
+
+  if (ensureBniParameterUpgrade(state)) {
+    changed = true;
+  }
+
+  for (const inactiveKey of ["bank_mantap", "bank_mnc"]) {
+    if (state.partner_parameters?.[inactiveKey] && state.partner_parameters[inactiveKey].active !== false) {
       state.partner_parameters[inactiveKey].active = false;
       changed = true;
+    }
+  }
+
+  // Migrasi terarah & idempoten parameter BSI (PP3, PP10, PENSIUN) sesuai Bagian 5 command.md
+  state.partner_parameters = state.partner_parameters || {};
+  if (state.partner_parameters.schemaVersion !== BSI_SCHEMA_VERSION) {
+    state.partner_parameters.schemaVersion = BSI_SCHEMA_VERSION;
+    changed = true;
+  }
+  const currentBsi = state.partner_parameters.bsi_prapen;
+  const needsBsiMigration =
+    !currentBsi ||
+    currentBsi.migrationId !== BSI_MIGRATION_ID ||
+    currentBsi.schemaVersion !== BSI_SCHEMA_VERSION ||
+    !currentBsi.products?.PP3 ||
+    !currentBsi.products?.PP10 ||
+    !currentBsi.products?.PENSIUN;
+
+  if (needsBsiMigration) {
+    if (
+      currentBsi &&
+      !state.parameter_migration_snapshots.some((s) => s.migration_id === BSI_MIGRATION_ID)
+    ) {
+      state.parameter_migration_snapshots.push({
+        migration_id: BSI_MIGRATION_ID,
+        partner_key: "bsi_prapen",
+        migrated_at: new Date().toISOString(),
+        before_snapshot: structuredClone(currentBsi)
+      });
+    }
+    const { partner: migratedBsi } = buildMigratedBsiPartner(currentBsi || {});
+    state.partner_parameters.bsi_prapen = migratedBsi;
+    changed = true;
+  }
+
+  if (!Array.isArray(state.lead_requests)) {
+    state.lead_requests = [];
+    changed = true;
+  }
+
+  if (Array.isArray(state.leads) && !state.leads.some((l) => l.id === "lead-1006")) {
+    state.leads.push(
+      {
+        id: "lead-1006",
+        name: "DRS. ASEP SUNANDAR",
+        nopen: "196403151988031002",
+        nip: "196403151988031002",
+        nik: "3273011503640003",
+        birth_date: "1964-03-15",
+        age: 62,
+        phone: "081220112233",
+        address: "Jl. Dago Asri No. 15",
+        province: "Jawa Barat",
+        city: "Kota Bandung",
+        district: "Coblong",
+        branch: "BANDUNG",
+        sk_type: "Pensiun Sendiri",
+        institution: "Dinas Pendidikan Kota Bandung",
+        pay_office: "Bank BJB Cabang Utama",
+        pension_salary: 4750000,
+        status: "baru",
+        follow_up_date: null,
+        source: "Impor Master Taspen",
+        assigned_to: null,
+        assigned_name: null,
+        notes: "Stok pool data prospek unassigned Cabang Bandung.",
+        activities: [],
+        documents: [],
+        created_at: "2026-10-26T08:30:00.000Z",
+        updated_at: "2026-10-26T08:30:00.000Z"
+      },
+      {
+        id: "lead-1007",
+        name: "HJ. ENI ROHAENI",
+        nopen: "196805201990032001",
+        nip: "196805201990032001",
+        nik: "3273086005680005",
+        birth_date: "1968-05-20",
+        age: 58,
+        phone: "081321445566",
+        address: "Jl. Buah Batu No. 88",
+        province: "Jawa Barat",
+        city: "Kota Bandung",
+        district: "Lengkong",
+        branch: "BANDUNG",
+        sk_type: "Prapensiun BUP 60",
+        institution: "Dinas Kesehatan Prov Jabar",
+        pay_office: "Bank BJB Buah Batu",
+        pension_salary: 5200000,
+        status: "baru",
+        follow_up_date: null,
+        source: "Database PNS Aktif",
+        assigned_to: null,
+        assigned_name: null,
+        notes: "Calon debitur prapensiun ASN, siap take over/top up.",
+        activities: [],
+        documents: [],
+        created_at: "2026-10-26T09:00:00.000Z",
+        updated_at: "2026-10-26T09:00:00.000Z"
+      },
+      {
+        id: "lead-1008",
+        name: "IR. DADANG KURNIADI",
+        nopen: "195908121985031004",
+        nip: "195908121985031004",
+        nik: "3273051208590001",
+        birth_date: "1959-08-12",
+        age: 67,
+        phone: "081222998877",
+        address: "Jl. Riau No. 104",
+        province: "Jawa Barat",
+        city: "Kota Bandung",
+        district: "Bandung Wetan",
+        branch: "BANDUNG",
+        sk_type: "Pensiun Sendiri",
+        institution: "Kementerian PUPR",
+        pay_office: "Bank Mandiri Taspen Bandung",
+        pension_salary: 4900000,
+        status: "baru",
+        follow_up_date: null,
+        source: "Data Taspen",
+        assigned_to: null,
+        assigned_name: null,
+        notes: "Pensiun murni, butuh dana renovasi rumah.",
+        activities: [],
+        documents: [],
+        created_at: "2026-10-26T09:30:00.000Z",
+        updated_at: "2026-10-26T09:30:00.000Z"
+      },
+      {
+        id: "lead-1009",
+        name: "NENENG HASANAH, S.PD",
+        nopen: "196611041989022002",
+        nip: "196611041989022002",
+        nik: "3273104411660002",
+        birth_date: "1966-11-04",
+        age: 60,
+        phone: "081399887711",
+        address: "Jl. Cihampelas No. 55",
+        province: "Jawa Barat",
+        city: "Kota Bandung",
+        district: "Coblong",
+        branch: "BANDUNG",
+        sk_type: "Pensiun Sendiri",
+        institution: "SMKN 1 Bandung",
+        pay_office: "Bank BJB Tamansari",
+        pension_salary: 4300000,
+        status: "baru",
+        follow_up_date: null,
+        source: "Impor Master Taspen",
+        assigned_to: null,
+        assigned_name: null,
+        notes: "Baru masuk masa purna bhakti, berminat simulasi BSI / AMS2.",
+        activities: [],
+        documents: [],
+        created_at: "2026-10-26T10:00:00.000Z",
+        updated_at: "2026-10-26T10:00:00.000Z"
+      },
+      {
+        id: "lead-1010",
+        name: "MAYOR (PURN) H. ACHMAD HIDAYAT",
+        nopen: "195101011974011003",
+        nip: "195101011974011003",
+        nik: "3273020101510001",
+        birth_date: "1951-01-01",
+        age: 75,
+        phone: "081223456789",
+        address: "Jl. Gatot Subroto No. 120",
+        province: "Jawa Barat",
+        city: "Kota Bandung",
+        district: "Batununggal",
+        branch: "BANDUNG",
+        sk_type: "Pensiun ASABRI",
+        institution: "TNI AD Purnawirawan",
+        pay_office: "Bank BTPN Pensiun Bandung",
+        pension_salary: 5800000,
+        status: "baru",
+        follow_up_date: null,
+        source: "Database Asabri",
+        assigned_to: null,
+        assigned_name: null,
+        notes: "Pensiunan ASABRI, siap dihubungi untuk program Platinum.",
+        activities: [],
+        documents: [],
+        created_at: "2026-10-26T10:30:00.000Z",
+        updated_at: "2026-10-26T10:30:00.000Z"
+      }
+    );
+    changed = true;
+  }
+
+  for (const app of state.applications || []) {
+    for (const d of app.checklist || []) {
+      if (d.status === "lengkap") {
+        d.status = "diterima";
+        changed = true;
+      }
     }
   }
 
@@ -641,58 +1263,227 @@ function ensureStoreUpgrades(state) {
 export function getStore() {
   if (stateCache) return stateCache;
   const row = db.prepare("SELECT payload FROM kv_store WHERE collection = 'enterprise_state'").get();
-  if (row && row.payload) {
+  if (row?.payload) {
     try {
-      stateCache = JSON.parse(row.payload);
-      if (ensureStoreUpgrades(stateCache)) {
-        saveStore();
-      }
+      const loaded = JSON.parse(row.payload);
+      if (IS_PROD) validateState(loaded, { production: true });
+      const changed = ensureStoreUpgrades(loaded);
+      validateState(loaded, { production: IS_PROD });
+      stateCache = loaded;
+      if (changed) saveStore();
       return stateCache;
-    } catch {
-      // fallback to re-seed
+    } catch (error) {
+      stateCache = null;
+      throw new Error("APPLICATION_STATE_INVALID: data dipertahankan; pengisian ulang data demo diblokir.");
     }
   }
+  if (IS_PROD) throw new Error("PRODUCTION_DATABASE_REQUIRED: state produksi tidak ditemukan.");
   stateCache = createInitialState();
+  validateState(stateCache);
   saveStore();
   return stateCache;
 }
 
+let inTransaction = false;
+let transactionDepth = 0;
+
+function restoreStateInPlace(target, snapshot) {
+  if (!target || typeof target !== "object" || Array.isArray(target)) {
+    return snapshot;
+  }
+  for (const key of Object.keys(target)) {
+    delete target[key];
+  }
+  Object.assign(target, snapshot);
+  return target;
+}
+
 export function saveStore() {
   if (!stateCache) return;
+  validateState(stateCache, { production: IS_PROD });
   const now = new Date().toISOString();
   const payload = JSON.stringify(stateCache);
+  if (inTransaction) {
+    db.prepare(`
+      INSERT INTO kv_store (collection, payload, updated_at)
+      VALUES ('enterprise_state', ?, ?)
+      ON CONFLICT(collection) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
+    `).run(payload, now);
+    return;
+  }
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`
+      INSERT INTO kv_store (collection, payload, updated_at)
+      VALUES ('enterprise_state', ?, ?)
+      ON CONFLICT(collection) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
+    `).run(payload, now);
+    db.exec("COMMIT");
+  } catch (err) {
+    try { db.exec("ROLLBACK"); } catch { /* ignore */ }
+    throw err;
+  }
+}
+
+export function withTransaction(workFn) {
+  if (typeof workFn !== "function") {
+    throw new TypeError("INVALID_TRANSACTION_CALLBACK: withTransaction memerlukan fungsi callback.");
+  }
+  if (workFn.constructor?.name === "AsyncFunction") {
+    throw new TypeError("ASYNC_TRANSACTION_FORBIDDEN: withTransaction hanya menerima fungsi sinkron, bukan async/Promise.");
+  }
+
+  const store = getStore();
+  const snapshot = structuredClone(store);
+  const currentDepth = transactionDepth;
+  const startedOuter = currentDepth === 0;
+  const savepointName = `lp_sp_${currentDepth}`;
+
+  if (startedOuter) {
+    db.exec("BEGIN IMMEDIATE");
+  } else {
+    db.exec(`SAVEPOINT ${savepointName}`);
+  }
+  transactionDepth = currentDepth + 1;
+  inTransaction = true;
+
+  try {
+    const result = workFn(store);
+    if (result && (typeof result === "object" || typeof result === "function") && typeof result.then === "function") {
+      throw new TypeError("ASYNC_TRANSACTION_FORBIDDEN: Callback withTransaction tidak boleh mengembalikan Promise.");
+    }
+    if (startedOuter) {
+      validateState(stateCache, { production: IS_PROD });
+      saveStore();
+      db.exec("COMMIT");
+      transactionDepth = 0;
+      inTransaction = false;
+    } else {
+      db.exec(`RELEASE SAVEPOINT ${savepointName}`);
+      transactionDepth = currentDepth;
+      inTransaction = transactionDepth > 0;
+    }
+    return result;
+  } catch (err) {
+    if (startedOuter) {
+      try { db.exec("ROLLBACK"); } catch { /* ignore */ }
+      transactionDepth = 0;
+      inTransaction = false;
+    } else {
+      try {
+        db.exec(`ROLLBACK TO SAVEPOINT ${savepointName}`);
+        db.exec(`RELEASE SAVEPOINT ${savepointName}`);
+      } catch { /* ignore */ }
+      transactionDepth = currentDepth;
+      inTransaction = transactionDepth > 0;
+    }
+    stateCache = restoreStateInPlace(stateCache, snapshot);
+    throw err;
+  }
+}
+
+function insertAuditEventRow(entry, surface = "internal") {
   db.prepare(`
-    INSERT INTO kv_store (collection, payload, updated_at)
-    VALUES ('enterprise_state', ?, ?)
-    ON CONFLICT(collection) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
-  `).run(payload, now);
+    INSERT INTO audit_events (id, surface, user_id, user_name, role, action, entity, detail, ip, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    entry.id,
+    surface,
+    entry.user_id,
+    entry.user_name,
+    entry.role,
+    entry.action,
+    entry.entity,
+    entry.detail,
+    entry.ip,
+    entry.created_at
+  );
 }
 
 export function addAuditLog(user, action, entity, detail, ip = "127.0.0.1") {
   const store = getStore();
-  store.audit_logs.unshift({
-    id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+  const entry = {
+    id: `aud-${crypto.randomUUID()}`,
     user_id: user?.id || "system",
     user_name: user?.name || "System",
     role: user?.role || "system",
-    action,
-    entity,
-    detail,
-    ip,
+    action: String(action || ""),
+    entity: String(entity || ""),
+    detail: String(detail || ""),
+    ip: String(ip || "127.0.0.1"),
     created_at: new Date().toISOString()
-  });
+  };
+  store.audit_logs.unshift(entry);
   if (store.audit_logs.length > 1000) store.audit_logs.length = 1000;
-  saveStore();
+  insertAuditEventRow(entry, "internal");
+  if (!inTransaction) {
+    saveStore();
+  }
+}
+
+export function addPublicAuditLog(action, entity, detail, ip = "127.0.0.1") {
+  const entry = {
+    id: `paud-${crypto.randomUUID()}`,
+    user_id: "public-web",
+    user_name: "Website Landing Page",
+    role: "system",
+    action: String(action || ""),
+    entity: String(entity || ""),
+    detail: String(detail || ""),
+    ip: String(ip || "127.0.0.1"),
+    created_at: new Date().toISOString()
+  };
+  insertAuditEventRow(entry, "public");
+  return entry;
+}
+
+export function getAuditEvents({ surface = null, limit = 200 } = {}) {
+  const safeLimit = Math.min(1000, Math.max(1, Number.parseInt(String(limit || 200), 10) || 200));
+  if (surface) {
+    return db
+      .prepare("SELECT id, surface, user_id, user_name, role, action, entity, detail, ip, created_at FROM audit_events WHERE surface = ? ORDER BY created_at DESC, rowid DESC LIMIT ?")
+      .all(String(surface), safeLimit);
+  }
+  return db
+    .prepare("SELECT id, surface, user_id, user_name, role, action, entity, detail, ip, created_at FROM audit_events ORDER BY created_at DESC, rowid DESC LIMIT ?")
+    .all(safeLimit);
 }
 
 export function saveUploadedFile(id, filename, mimeType, buffer) {
+  if (typeof id !== "string" || !id.trim()) {
+    throw new Error("INVALID_FILE_ID: ID berkas unggahan wajib berupa teks non-kosong.");
+  }
   db.prepare(`
     INSERT INTO uploaded_files (id, filename, mime_type, data, created_at)
     VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET filename = excluded.filename, mime_type = excluded.mime_type, data = excluded.data, created_at = excluded.created_at
   `).run(id, filename, mimeType, buffer, new Date().toISOString());
 }
 
 export function getUploadedFile(id) {
   return db.prepare("SELECT id, filename, mime_type, data, created_at FROM uploaded_files WHERE id = ?").get(id);
 }
+
+export function deleteUploadedFile(id) {
+  return db.prepare("DELETE FROM uploaded_files WHERE id = ?").run(id);
+}
+
+export function getAllUploadedFiles() {
+  const rows = db.prepare("SELECT id, filename, mime_type, data, created_at FROM uploaded_files").all();
+  return rows.map((r) => ({
+    id: r.id,
+    filename: r.filename,
+    mime_type: r.mime_type,
+    created_at: r.created_at,
+    data_base64: Buffer.from(r.data).toString("base64")
+  }));
+}
+
+export function restoreUploadedFileFromBackup(id, filename, mimeType, dataBase64, createdAt) {
+  const buffer = Buffer.from(dataBase64, "base64");
+  db.prepare(`
+    INSERT INTO uploaded_files (id, filename, mime_type, data, created_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET filename = excluded.filename, mime_type = excluded.mime_type, data = excluded.data, created_at = excluded.created_at
+  `).run(id, filename, mimeType, buffer, createdAt || new Date().toISOString());
+}
+

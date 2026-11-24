@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { CheckCircle2, XCircle, AlertTriangle, ChevronDown } from "lucide-react";
 import { rp, pct, fmtDate } from "../../lib/format";
 import { PartnerLogo } from "../brand/Logo";
@@ -70,12 +71,18 @@ function ValidationList({ validations }) {
 // ============================================================================
 export function BsiResultView({ r }) {
   const bsi = r.bsi_details || {};
+  const isPensiunBerkah = bsi.sub_product === "PENSIUN";
   const sisaGajiPensiun = bsi.sisa_gaji_pensiun ?? (r.pension_salary - r.coop_installment);
+  const sisaGajiPensiunExact = bsi.sisa_gaji_pensiun_exact ?? sisaGajiPensiun;
   const simas = bsi.simas || {};
   const isTriBerkah = bsi.sub_product === "PP3";
-  const productHeaderTitle = isTriBerkah ? "PRA PENSIUN TRI BERKAH" : "PRA PENSIUN DEKADE BERKAH";
-  const blokirActiveCnt = bsi.blokir_active_count ?? (isTriBerkah ? (bsi.active_months || 1) : 1);
-  const blokirPensionCnt = bsi.blokir_pension_count ?? 2;
+  const productHeaderTitle = isPensiunBerkah
+    ? "PENSIUN BERKAH"
+    : isTriBerkah
+    ? "PRA PENSIUN TRI BERKAH"
+    : "PRA PENSIUN DEKADE BERKAH";
+  const blokirActiveCnt = bsi.blokir_active_count ?? (isPensiunBerkah ? 0 : isTriBerkah ? (bsi.active_months || 1) : 1);
+  const blokirPensionCnt = bsi.blokir_pension_count ?? (isPensiunBerkah && !bsi.is_atribusi ? 0 : 2);
   const schedulePreview = Array.isArray(bsi.schedule_preview) ? bsi.schedule_preview : [];
 
   const angsAktifExact = bsi.active_installment_exact ?? bsi.active_installment ?? r.bank_installment ?? 0;
@@ -83,9 +90,9 @@ export function BsiResultView({ r }) {
   const biayaAdmExact = bsi.biaya_adm_exact ?? r.proaq ?? 0;
   const biayaAsuransiExact = bsi.biaya_asuransi_exact ?? (bsi.is_atribusi ? 0 : (r.risk ?? 0));
   const biayaMateraiExact = bsi.biaya_materai_exact ?? r.admin_fee ?? 100000;
-  const blokirAktifExact = bsi.blokir_aktif_exact ?? (angsAktifExact * blokirActiveCnt);
+  const blokirAktifExact = isPensiunBerkah ? 0 : (bsi.blokir_aktif_exact ?? (angsAktifExact * blokirActiveCnt));
   const blokirPensiunExact = bsi.blokir_pensiun_exact ?? (angsPensiunExact * blokirPensionCnt);
-  const bukaBlokirLamaExact = bsi.buka_blokir_lama_exact ?? bsi.buka_blokir_lama ?? r.buka_blokir_lama ?? 0;
+  const bukaBlokirLamaExact = isPensiunBerkah ? 0 : (bsi.buka_blokir_lama_exact ?? bsi.buka_blokir_lama ?? r.buka_blokir_lama ?? 0);
   const pelunasanLamaExact = bsi.pelunasan_lama_exact ?? bsi.pelunasan_lama ?? r.take_over ?? 0;
   const terimaBersihExact =
     bsi.sisa_pencairan_bersih_exact ??
@@ -98,24 +105,47 @@ export function BsiResultView({ r }) {
       bukaBlokirLamaExact -
       pelunasanLamaExact);
 
-  const statementRows = [
-    { type: "text", label: "Nama Nasabah", val: String(r.name || "-").toUpperCase() },
-    { type: "num", label: "Plafond", val: fmtExcelInt(r.plafond), boldVal: true, highlight: true },
-    { type: "num", label: "Jangka Waktu", val: `${r.tenor || 0} Bulan` },
-    { type: "divider" },
-    { type: "num", label: "Angsuran saat Aktif PNS", val: fmtExcelDec2(angsAktifExact), boldVal: true },
-    { type: "num", label: "Angsuran saat Pensiun", val: fmtExcelDec2(angsPensiunExact), boldVal: true },
-    { type: "section", label: "Biaya" },
-    { type: "num", label: `Administrasi (${r.proaq_pct ?? 1}%)`, val: fmtExcelDec2(biayaAdmExact) },
-    { type: "num", label: "Asuransi", val: fmtExcelDec2(biayaAsuransiExact, true) },
-    { type: "num", label: "Materai", val: fmtExcelDec2(biayaMateraiExact) },
-    { type: "section", label: "Blokir Angsuran" },
-    { type: "num", label: `Blokir ${blokirActiveCnt}x Angs Masa Aktif`, val: fmtExcelDec2(blokirAktifExact) },
-    { type: "num", label: `Blokir ${blokirPensionCnt}x Angs Masa Pensiun`, val: fmtExcelDec2(blokirPensiunExact) },
-    { type: "divider" },
-    { type: "num", label: "Buka Blokir Yang Lama", val: fmtExcelDec2(bukaBlokirLamaExact, true) },
-    { type: "num", label: "Pelunasan Yang Lama", val: fmtExcelDec2(pelunasanLamaExact, true) }
-  ];
+  const statementRows = isPensiunBerkah
+    ? [
+        { type: "text", label: "Nama Nasabah", val: String(r.name || "-").toUpperCase() },
+        { type: "num", label: "Plafond", val: fmtExcelInt(r.plafond), boldVal: true, highlight: true },
+        { type: "num", label: "Jangka Waktu", val: `${r.tenor || 0} Bulan` },
+        { type: "divider" },
+        { type: "num", label: "Angsuran per Bulan", val: fmtExcelDec2(angsPensiunExact), boldVal: true },
+        { type: "section", label: "Biaya" },
+        { type: "num", label: `Administrasi (${r.proaq_pct ?? 1}%)`, val: fmtExcelDec2(biayaAdmExact) },
+        { type: "num", label: "Asuransi", val: fmtExcelDec2(biayaAsuransiExact, true) },
+        { type: "num", label: "Materai", val: fmtExcelDec2(biayaMateraiExact) },
+        { type: "section", label: "Blokir Angsuran" },
+        {
+          type: "num",
+          label: blokirPensionCnt > 0 ? `Blokir ${blokirPensionCnt}x Angsuran` : "Blokir Angsuran",
+          val: fmtExcelDec2(blokirPensiunExact, true)
+        },
+        { type: "divider" },
+        { type: "num", label: "Pelunasan Yang Lama", val: fmtExcelDec2(pelunasanLamaExact, true) }
+      ]
+    : [
+        { type: "text", label: "Nama Nasabah", val: String(r.name || "-").toUpperCase() },
+        { type: "num", label: "Plafond", val: fmtExcelInt(r.plafond), boldVal: true, highlight: true },
+        { type: "num", label: "Jangka Waktu", val: `${r.tenor || 0} Bulan` },
+        { type: "divider" },
+        { type: "num", label: "Angsuran saat Aktif PNS", val: fmtExcelDec2(angsAktifExact), boldVal: true },
+        { type: "num", label: "Angsuran saat Pensiun", val: fmtExcelDec2(angsPensiunExact), boldVal: true },
+        { type: "section", label: "Biaya" },
+        { type: "num", label: `Administrasi (${r.proaq_pct ?? 1}%)`, val: fmtExcelDec2(biayaAdmExact) },
+        { type: "num", label: "Asuransi", val: fmtExcelDec2(biayaAsuransiExact, true) },
+        { type: "num", label: "Materai", val: fmtExcelDec2(biayaMateraiExact) },
+        { type: "section", label: "Blokir Angsuran" },
+        { type: "num", label: `Blokir ${blokirActiveCnt}x Angs Masa Aktif`, val: fmtExcelDec2(blokirAktifExact) },
+        { type: "num", label: `Blokir ${blokirPensionCnt}x Angs Masa Pensiun`, val: fmtExcelDec2(blokirPensiunExact) },
+        { type: "divider" },
+        { type: "num", label: "Buka Blokir Yang Lama", val: fmtExcelDec2(bukaBlokirLamaExact, true) },
+        { type: "num", label: "Pelunasan Yang Lama", val: fmtExcelDec2(pelunasanLamaExact, true) }
+      ];
+
+  const compReg = bsi.pensiun_comparison?.reguler || null;
+  const compAtrib = bsi.pensiun_comparison?.atribusi_premi || null;
 
   return (
     <div className="space-y-6 min-w-0 max-w-full" data-testid="final-result">
@@ -129,11 +159,17 @@ export function BsiResultView({ r }) {
                 BANK SYARIAH INDONESIA (BSI)
               </h3>
               <span className="rounded-full bg-[#078D67]/10 px-2.5 py-0.5 text-[11px] font-bold text-[#078D67]">
-                {isTriBerkah ? "Tri Berkah (PP3)" : "Dekade Berkah (PP10)"}
+                {isPensiunBerkah
+                  ? `Pensiun Berkah • ${bsi.is_atribusi ? "Atribusi Premi" : "Reguler"}`
+                  : isTriBerkah
+                  ? "Tri Berkah (PP3)"
+                  : "Dekade Berkah (PP10)"}
               </span>
             </div>
             <p className="text-xs text-slate-500">
-              Ringkasan Eksekutif Pembiayaan Mitraguna Prapensiun &amp; Estimasi Pencairan Nasabah
+              {isPensiunBerkah
+                ? "Ringkasan Eksekutif Pembiayaan Pensiun Berkah (Pensiun Murni / Janda) & Rincian ke Nasabah"
+                : "Ringkasan Eksekutif Pembiayaan Mitraguna Prapensiun & Estimasi Pencairan Nasabah"}
             </p>
           </div>
         </div>
@@ -260,47 +296,199 @@ export function BsiResultView({ r }) {
       </div>
 
       {/* Ringkasan Cepat 4 Indikator Utama */}
-      <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
-        <div className="rounded-xl border border-emerald-200/80 bg-emerald-50/60 p-3 min-w-0">
-          <p className="text-[11px] font-semibold text-emerald-800">Angsuran Aktif ({bsi.active_months || 0} bln)</p>
-          <p className="mt-1 font-display text-sm sm:text-base font-extrabold text-[#078D67] lp-num break-words" data-testid="result-bank-installment">
-            {rp(bsi.active_installment || r.bank_installment)}
-          </p>
-          <p className="mt-0.5 text-[10px] text-slate-500">
-            DBR: <b>{pct(r.ratio_pct)}</b> (Maks {bsi.dbr_active_rate || 70}%)
-          </p>
-        </div>
+      {isPensiunBerkah ? (
+        <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
+          <div className="rounded-xl border border-emerald-200/80 bg-emerald-50/60 p-3 min-w-0">
+            <p className="text-[11px] font-semibold text-emerald-800">Angsuran per Bulan ({r.tenor} bln)</p>
+            <p className="mt-1 font-display text-sm sm:text-base font-extrabold text-[#078D67] lp-num break-words" data-testid="result-coop-installment">
+              Rp {fmtExcelDec2(angsPensiunExact)}
+            </p>
+            <p className="mt-0.5 text-[10px] text-slate-500">
+              {bsi.ratio_basis || "DBR"}: <b>{pct(r.ratio_pct)}</b> (Maks {bsi.ratio_pct || 90}%)
+            </p>
+          </div>
 
-        <div className="rounded-xl border border-amber-200/80 bg-amber-50/60 p-3 min-w-0">
-          <p className="text-[11px] font-semibold text-amber-900">Sisa Pokok Saat Pensiun</p>
-          <p className="mt-1 font-display text-sm sm:text-base font-extrabold text-amber-800 lp-num break-words" data-testid="result-sisa-os-pensiun">
-            {rp(bsi.sisa_os_saat_pensiun || 0)}
-          </p>
-          <p className="mt-0.5 text-[10px] text-slate-500">
-            Akhir bulan ke-{bsi.active_months || 0}
-          </p>
-        </div>
+          <div className="rounded-xl border border-purple-200/80 bg-purple-50/60 p-3 min-w-0">
+            <p className="text-[11px] font-semibold text-[#351080]">Price Pembiayaan (Dasar → Akhir)</p>
+            <p className="mt-1 font-display text-sm sm:text-base font-extrabold text-[#351080] lp-num break-words">
+              {pct(bsi.base_rate_pensiun ?? r.bank_rate)} → {pct(bsi.price_atrib_pensiun_pct ?? r.coop_rate)}
+            </p>
+            <p className="mt-0.5 text-[10px] text-slate-500">
+              {bsi.is_atribusi ? "Konversi RATE Atribusi Premi" : "Skema Reguler (Tanpa Atribusi)"}
+            </p>
+          </div>
 
-        <div className="rounded-xl border border-purple-200/80 bg-purple-50/60 p-3 min-w-0">
-          <p className="text-[11px] font-semibold text-[#351080]">Angsuran Pensiun ({bsi.pension_months || 0} bln)</p>
-          <p className="mt-1 font-display text-sm sm:text-base font-extrabold text-[#351080] lp-num break-words" data-testid="result-coop-installment">
-            {rp(bsi.pension_installment || r.coop_installment)}
-          </p>
-          <p className="mt-0.5 text-[10px] text-slate-500">
-            DSR: <b>{pct(r.ratio_pension_pct || 0)}</b> (Maks 90%)
-          </p>
-        </div>
+          <div className="rounded-xl border border-teal-200/80 bg-teal-50/60 p-3 min-w-0">
+            <p className="text-[11px] font-semibold text-teal-900">Premi Simas Pensiun ({simas.tarif_permil ?? 0} ‰)</p>
+            <p className="mt-1 font-display text-sm sm:text-base font-extrabold text-teal-800 lp-num break-words" data-testid="result-risk">
+              Rp {fmtExcelDec2(bsi.premi_asuransi_tertanggung_exact ?? bsi.premi_asuransi_tertanggung ?? 0)}
+            </p>
+            <p className="mt-0.5 text-[10px] text-slate-500">
+              {bsi.is_atribusi ? "Atribusi Margin • Blokir 2x" : "Potong Pencairan • Blokir 0x"}
+            </p>
+          </div>
 
-        <div className="rounded-xl border border-teal-200/80 bg-teal-50/60 p-3 min-w-0">
-          <p className="text-[11px] font-semibold text-teal-900">Proteksi Asuransi ({simas.tarif_permil ?? simas.rate_permil ?? 0} ‰)</p>
-          <p className="mt-1 font-display text-sm sm:text-base font-extrabold text-teal-800 lp-num break-words" data-testid="result-risk">
-            {rp(bsi.premi_asuransi_tertanggung || simas.total_kontribusi || simas.premium || 0)}
-          </p>
-          <p className="mt-0.5 text-[10px] text-slate-500">
-            {bsi.is_atribusi ? `Atribusi Margin` : "Potong Pencairan"}
-          </p>
+          <div className="rounded-xl border border-amber-200/80 bg-amber-50/60 p-3 min-w-0">
+            <p className="text-[11px] font-semibold text-amber-900">Plafond Maksimal Indikatif</p>
+            <p className="mt-1 font-display text-sm sm:text-base font-extrabold text-amber-800 lp-num break-words">
+              {rp(bsi.max_plafond_at_tenor || r.plafond)}
+            </p>
+            <p className="mt-0.5 text-[10px] text-slate-500">
+              {simas.medical_status || "Non-MCU"}
+            </p>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
+          <div className="rounded-xl border border-emerald-200/80 bg-emerald-50/60 p-3 min-w-0">
+            <p className="text-[11px] font-semibold text-emerald-800">Angsuran Aktif ({bsi.active_months || 0} bln)</p>
+            <p className="mt-1 font-display text-sm sm:text-base font-extrabold text-[#078D67] lp-num break-words" data-testid="result-bank-installment">
+              {rp(bsi.active_installment || r.bank_installment)}
+            </p>
+            <p className="mt-0.5 text-[10px] text-slate-500">
+              DBR: <b>{pct(r.ratio_pct)}</b> (Maks {bsi.dbr_active_rate || 70}%)
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-amber-200/80 bg-amber-50/60 p-3 min-w-0">
+            <p className="text-[11px] font-semibold text-amber-900">Sisa Pokok Saat Pensiun</p>
+            <p className="mt-1 font-display text-sm sm:text-base font-extrabold text-amber-800 lp-num break-words" data-testid="result-sisa-os-pensiun">
+              {rp(bsi.sisa_os_saat_pensiun || 0)}
+            </p>
+            <p className="mt-0.5 text-[10px] text-slate-500">
+              Akhir bulan ke-{bsi.active_months || 0}
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-purple-200/80 bg-purple-50/60 p-3 min-w-0">
+            <p className="text-[11px] font-semibold text-[#351080]">Angsuran Pensiun ({bsi.pension_months || 0} bln)</p>
+            <p className="mt-1 font-display text-sm sm:text-base font-extrabold text-[#351080] lp-num break-words" data-testid="result-coop-installment">
+              {rp(bsi.pension_installment || r.coop_installment)}
+            </p>
+            <p className="mt-0.5 text-[10px] text-slate-500">
+              DSR: <b>{pct(r.ratio_pension_pct || 0)}</b> (Maks {bsi.dsr_pension_rate ?? 90}%)
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-teal-200/80 bg-teal-50/60 p-3 min-w-0">
+            <p className="text-[11px] font-semibold text-teal-900">Proteksi Asuransi ({simas.tarif_permil ?? simas.rate_permil ?? 0} ‰)</p>
+            <p className="mt-1 font-display text-sm sm:text-base font-extrabold text-teal-800 lp-num break-words" data-testid="result-risk">
+              {rp(bsi.premi_asuransi_tertanggung || simas.total_kontribusi || simas.premium || 0)}
+            </p>
+            <p className="mt-0.5 text-[10px] text-slate-500">
+              {bsi.is_atribusi ? `Atribusi Margin` : "Potong Pencairan"}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Tabel Perbandingan Skenario Reguler vs Atribusi Premi (Khusus Pensiun Berkah) */}
+      {isPensiunBerkah && compReg && compAtrib && (
+        <div
+          className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs"
+          data-testid="bsi-pensiun-comparison-table"
+        >
+          <div className="border-b border-slate-100 bg-slate-50/80 px-4 py-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h4 className="font-display text-xs sm:text-sm font-bold text-[#17223B]">
+                Perbandingan Skenario Resmi: Reguler vs Atribusi Premi
+              </h4>
+              <p className="text-[11px] text-slate-500">
+                Sesuai Sheet Biru Pensiun (C16=1 Reguler vs C16=3 Atribusi Premi) untuk Plafond {rp(r.plafond)} • {r.tenor} Bulan
+              </p>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50/50 text-[11px] font-bold uppercase text-slate-600 border-b border-slate-100">
+                <tr>
+                  <th className="px-4 py-2.5">Komponen</th>
+                  <th className={`px-4 py-2.5 text-right ${!bsi.is_atribusi ? "bg-[#351080]/8 text-[#351080]" : ""}`}>
+                    1. Reguler {!bsi.is_atribusi && "(Dipilih)"}
+                  </th>
+                  <th className={`px-4 py-2.5 text-right ${bsi.is_atribusi ? "bg-[#078D67]/10 text-[#078D67]" : ""}`}>
+                    3. Atribusi Premi {bsi.is_atribusi && "(Dipilih)"}
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 lp-num">
+                <tr>
+                  <td className="px-4 py-2 font-sans text-slate-600">Price Akhir Efektif (% p.a.)</td>
+                  <td className={`px-4 py-2 text-right font-semibold ${!bsi.is_atribusi ? "bg-[#351080]/[0.03]" : ""}`}>
+                    {pct(compReg.annual_price_pct)}
+                  </td>
+                  <td className={`px-4 py-2 text-right font-semibold ${bsi.is_atribusi ? "bg-[#078D67]/[0.04]" : ""}`}>
+                    {pct(compAtrib.annual_price_pct)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-2 font-sans text-slate-600">Santunan UP Pertanggungan</td>
+                  <td className={`px-4 py-2 text-right ${!bsi.is_atribusi ? "bg-[#351080]/[0.03]" : ""}`}>
+                    Rp {fmtExcelDec2(compReg.sum_assured)}
+                  </td>
+                  <td className={`px-4 py-2 text-right ${bsi.is_atribusi ? "bg-[#078D67]/[0.04]" : ""}`}>
+                    Rp {fmtExcelDec2(compAtrib.sum_assured)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-2 font-sans text-slate-600">Premi Asuransi Simas Pensiun</td>
+                  <td className={`px-4 py-2 text-right ${!bsi.is_atribusi ? "bg-[#351080]/[0.03]" : ""}`}>
+                    Rp {fmtExcelDec2(compReg.premium)} (Tunai)
+                  </td>
+                  <td className={`px-4 py-2 text-right ${bsi.is_atribusi ? "bg-[#078D67]/[0.04]" : ""}`}>
+                    Rp {fmtExcelDec2(compAtrib.premium)} (Margin)
+                  </td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-2 font-sans font-semibold text-[#17223B]">Angsuran per Bulan</td>
+                  <td className={`px-4 py-2 text-right font-bold text-[#17223B] ${!bsi.is_atribusi ? "bg-[#351080]/[0.03]" : ""}`}>
+                    Rp {fmtExcelDec2(compReg.installment)}
+                  </td>
+                  <td className={`px-4 py-2 text-right font-bold text-[#17223B] ${bsi.is_atribusi ? "bg-[#078D67]/[0.04]" : ""}`}>
+                    Rp {fmtExcelDec2(compAtrib.installment)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-2 font-sans text-slate-600">Blokir Angsuran</td>
+                  <td className={`px-4 py-2 text-right ${!bsi.is_atribusi ? "bg-[#351080]/[0.03]" : ""}`}>
+                    Rp {fmtExcelDec2(compReg.blocked_installments, true)}
+                  </td>
+                  <td className={`px-4 py-2 text-right ${bsi.is_atribusi ? "bg-[#078D67]/[0.04]" : ""}`}>
+                    Rp {fmtExcelDec2(compAtrib.blocked_installments)} (2x)
+                  </td>
+                </tr>
+                <tr className="bg-emerald-50/40">
+                  <td className="px-4 py-2.5 font-sans font-bold text-[#065F46]">Terima Bersih Nasabah</td>
+                  <td className={`px-4 py-2.5 text-right font-extrabold text-[#065F46] ${!bsi.is_atribusi ? "bg-[#351080]/[0.05]" : ""}`}>
+                    Rp {fmtExcelDec2(compReg.net_disbursement)}
+                  </td>
+                  <td className={`px-4 py-2.5 text-right font-extrabold text-[#078D67] ${bsi.is_atribusi ? "bg-[#078D67]/[0.08]" : ""}`}>
+                    Rp {fmtExcelDec2(compAtrib.net_disbursement)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-2 font-sans text-slate-600">Sisa Gaji Pensiun</td>
+                  <td className={`px-4 py-2 text-right font-semibold ${!bsi.is_atribusi ? "bg-[#351080]/[0.03]" : ""}`}>
+                    Rp {fmtExcelDec2(compReg.remaining_pension_salary)}
+                  </td>
+                  <td className={`px-4 py-2 text-right font-semibold ${bsi.is_atribusi ? "bg-[#078D67]/[0.04]" : ""}`}>
+                    Rp {fmtExcelDec2(compAtrib.remaining_pension_salary)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-2 font-sans text-slate-600">Plafond Maksimal Indikatif</td>
+                  <td className={`px-4 py-2 text-right font-bold text-[#351080] ${!bsi.is_atribusi ? "bg-[#351080]/[0.03]" : ""}`}>
+                    {rp(compReg.indicative_max_principal)}
+                  </td>
+                  <td className={`px-4 py-2 text-right font-bold text-[#078D67] ${bsi.is_atribusi ? "bg-[#078D67]/[0.04]" : ""}`}>
+                    {rp(compAtrib.indicative_max_principal)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Bottom Summary Banner */}
       <div className="grid gap-px overflow-hidden rounded-xl bg-gradient-to-r from-[#065F46] to-[#078D67] sm:grid-cols-3 shadow-xs">
@@ -311,15 +499,17 @@ export function BsiResultView({ r }) {
           </p>
         </div>
         <div className="p-3.5 sm:p-5 text-white sm:border-l sm:border-white/15 min-w-0">
-          <p className="text-xs text-white/75 font-medium">Sisa Gaji Masa Pensiun</p>
+          <p className="text-xs text-white/75 font-medium">Sisa Gaji Pensiun</p>
           <p className="mt-1 font-display text-xl sm:text-2xl font-bold lp-num break-words" data-testid="result-sisa-pensiun">
-            {rp(sisaGajiPensiun)}
+            {isPensiunBerkah ? `Rp ${fmtExcelDec2(sisaGajiPensiunExact)}` : rp(sisaGajiPensiun)}
           </p>
         </div>
         <div className="p-3.5 sm:p-5 text-white sm:border-l sm:border-white/15 min-w-0">
-          <p className="text-xs text-white/75 font-medium">Sisa Gaji Masa Aktif</p>
+          <p className="text-xs text-white/75 font-medium">
+            {isPensiunBerkah ? "Angsuran Pensiun / Bulan" : "Sisa Gaji Masa Aktif"}
+          </p>
           <p className="mt-1 font-display text-xl sm:text-2xl font-bold lp-num break-words" data-testid="result-remaining-salary">
-            {rp(r.remaining_salary)}
+            {isPensiunBerkah ? `Rp ${fmtExcelDec2(angsPensiunExact)}` : rp(r.remaining_salary)}
           </p>
         </div>
       </div>
@@ -334,68 +524,118 @@ export function BsiResultView({ r }) {
           <div className="grid gap-6 md:grid-cols-2">
             {/* Kolom Kiri */}
             <div className="space-y-6 min-w-0">
-              <Block title="1. Identitas & Akseptasi Debitur" accent="#078D67">
-                <Row k="Nama Calon Debitur" v={r.name || "-"} />
-                <Row k="Tanggal Lahir" v={fmtDate(r.birth_date)} />
-                <Row k="Usia Saat Ini" v={bsi.age_exact_text || `${r.age} Tahun`} strong />
-                <Row k="Usia Pertanggungan Asuransi" v={`${bsi.nearest_age ?? r.age} Tahun`} />
-                {bsi.nip && <Row k="NIP Calon Debitur" v={bsi.nip} testid="bsi-result-nip" />}
-                <Row k="Tipe Produk" v={bsi.sub_product_label || "Dekade Berkah (Prapen 10 Tahun)"} strong testid="bsi-result-sub-product" />
-                <Row k="Status Payroll" v={`${bsi.status_gaji_label || "Payroll"} (DBR Maks ${bsi.dbr_active_rate || 70}%)`} strong testid="bsi-result-status-gaji" />
-                {bsi.tmt_bekerja && <Row k="TMT Bekerja" v={fmtDate(bsi.tmt_bekerja)} />}
-                <Row k="TMT Pensiun / BUP" v={`Tahun ${bsi.bup_year || "-"} (BUP ${bsi.bup_age || 58} Thn • Sisa ${bsi.actual_months_to_bup ?? bsi.active_months ?? 0} bln)`} />
-                <Row k="Total Penghasilan Aktif Diakui" v={rp(r.salary)} strong />
-                {bsi.tht > 0 && <Row k="THT (Diakui 75%)" v={`${rp(bsi.tht)} (Diakui ${rp(bsi.tht_recognized || Math.round(bsi.tht * 0.75))})`} />}
-                <Row k="Manfaat Pensiun (DSR Maks 90%)" v={`${rp(r.pension_salary)} (Maks Angs ${rp(bsi.max_installment_pension || Math.floor((r.pension_salary || 0) * 0.9))})`} />
-                <Row k="Kategori & Akad" v={r.category} testid="result-category" />
-              </Block>
+              {isPensiunBerkah ? (
+                <>
+                  <Block title="1. Identitas & Akseptasi Pensiun Berkah" accent="#078D67">
+                    <Row k="Nama Calon Debitur" v={r.name || "-"} />
+                    <Row k="Tanggal Lahir" v={fmtDate(r.birth_date)} />
+                    <Row k="Usia Saat Ini (Eksak)" v={bsi.age_exact_text || `${r.age} Tahun`} strong />
+                    <Row k="Usia Bank (DAYS360) / Simas Nearest" v={`${bsi.bank_age_days360 ?? r.age} Thn / ${bsi.nearest_age ?? r.age} Thn`} />
+                    {bsi.nip && <Row k="Nopen / NIP Pensiun" v={bsi.nip} testid="bsi-result-nip" />}
+                    <Row k="Tipe Produk" v={bsi.sub_product_label || "Pensiun Berkah"} strong testid="bsi-result-sub-product" />
+                    <Row k="Tipe Pensiun & Pasangan" v={bsi.status_gaji_label || "-"} strong testid="bsi-result-status-gaji" />
+                    <Row k="Flagging Juru Bayar" v={bsi.flagging_label || bsi.flagging || "TASPEN"} />
+                    <Row k="Manfaat Pensiun Bulanan" v={rp(r.pension_salary || r.salary)} strong />
+                    <Row k={`Kapasitas Angsuran (${bsi.ratio_basis || "DBR"} ${bsi.ratio_pct || 90}%)`} v={`Rp ${fmtExcelDec2(bsi.installment_capacity_exact || 0)}`} strong />
+                    <Row k="Angsuran Pinjaman Lain Berjalan" v={rp(bsi.ongoing_installments || 0)} />
+                    <Row k="Kategori & Akad" v={r.category} testid="result-category" />
+                  </Block>
 
-              <Block title="2. Parameter Pembiayaan, Pricing & Jadwal" accent="#F28A19">
-                <Row k="Plafond Pra Pensiun" v={rp(r.plafond)} strong testid="result-plafond" />
-                {bsi.max_plafond_at_tenor > 0 && (
-                  <Row k="Kapasitas Plafond Maksimal" v={rp(bsi.max_plafond_at_tenor)} />
-                )}
-                <Row k="Tenor Total" v={`${r.tenor} bulan (${bsi.active_months || 0} bln Aktif + ${bsi.pension_months || 0} bln Pensiun)`} strong />
-                <Row k="Margin Saat Aktif (Base -> +Atrib)" v={`${pct(bsi.base_rate_aktif ?? r.bank_rate)} -> ${pct(bsi.price_atrib_aktif_pct ?? r.bank_rate)} p.a.`} strong />
-                <Row k="Margin Saat Pensiun (Base -> +Atrib)" v={`${pct(bsi.base_rate_pensiun ?? r.coop_rate)} -> ${pct(bsi.price_atrib_pensiun_pct ?? r.coop_rate)} p.a.`} strong />
-                {bsi.proyeksi_cair && <Row k="Proyeksi Pencairan" v={fmtDate(bsi.proyeksi_cair)} />}
-                {bsi.start_angsuran && <Row k="Mulai Angsuran" v={fmtDate(bsi.start_angsuran)} />}
-                {bsi.selesai_angsuran && (
-                  <Row
-                    k="Jatuh Tempo Pembiayaan"
-                    v={`${fmtDate(bsi.selesai_angsuran)}${bsi.end_loan_age_text ? ` (${bsi.end_loan_age_text})` : ""}`}
-                  />
-                )}
-                {bsi.taksasi_mmq > 0 && <Row k="Nilai Taksasi Aset MMQ" v={rp(bsi.taksasi_mmq)} />}
-              </Block>
+                  <Block title="2. Parameter Pembiayaan, Pricing & Jadwal" accent="#F28A19">
+                    <Row k="Plafond Pensiun Berkah" v={rp(r.plafond)} strong testid="result-plafond" />
+                    <Row k="Plafond Maksimal (Skema Ini)" v={rp(bsi.max_plafond_at_tenor || 0)} />
+                    <Row k="Jangka Waktu / Tenor" v={`${r.tenor} bulan`} strong />
+                    <Row k="Price Dasar -> Price Akhir" v={`${pct(bsi.base_rate_pensiun ?? r.bank_rate)} -> ${pct(bsi.price_atrib_pensiun_pct ?? r.coop_rate)} p.a.`} strong />
+                    {bsi.proyeksi_cair && <Row k="Mulai Polis / Proyeksi Cair" v={fmtDate(bsi.proyeksi_cair)} />}
+                    {bsi.start_angsuran && <Row k="Angsuran Pertama" v={fmtDate(bsi.start_angsuran)} />}
+                    {bsi.selesai_angsuran && (
+                      <Row
+                        k="Angsuran Terakhir"
+                        v={`${fmtDate(bsi.selesai_angsuran)}${bsi.end_loan_age_text ? ` (${bsi.end_loan_age_text})` : ""}`}
+                      />
+                    )}
+                    {bsi.insurance_end_date && <Row k="Akhir Pertanggungan Polis" v={fmtDate(bsi.insurance_end_date)} />}
+                  </Block>
 
-              <Block title="3. Rincian Angsuran & Saldo Transisi" accent="#5720B8">
-                <Row k="Angsuran Masa Aktif" v={`Rp ${fmtExcelDec2(angsAktifExact)}`} strong />
-                <Row k={`DBR Masa Aktif (Maks ${bsi.dbr_active_rate || 70}%)`} v={pct(r.ratio_pct)} testid="result-ratio" />
-                <Row k="Sisa Pokok Saat Pensiun (Transisi)" v={rp(bsi.sisa_os_saat_pensiun || 0)} strong />
-                <Row k="Angsuran Masa Pensiun" v={`Rp ${fmtExcelDec2(angsPensiunExact)}`} strong />
-                <Row k={`DSR Masa Pensiun (Maks ${bsi.dsr_pension_rate || 90}%)`} v={pct(r.ratio_pension_pct || 0)} testid="result-ratio-pension" />
-                <Row k="Sisa Gaji Masa Aktif" v={rp(r.remaining_salary)} />
-                <Row k="Sisa Gaji Masa Pensiun" v={rp(sisaGajiPensiun)} strong testid="result-sisa-gaji-pensiun" />
-              </Block>
+                  <Block title="3. Rincian Angsuran & Sisa Gaji Pensiun" accent="#5720B8">
+                    <Row k="Angsuran Pensiun per Bulan" v={`Rp ${fmtExcelDec2(angsPensiunExact)}`} strong />
+                    <Row k={`Rasio Aktual (${bsi.ratio_basis || "DBR"})`} v={pct(r.ratio_pct)} testid="result-ratio" />
+                    <Row k="Sisa Gaji Pensiun Bersih" v={`Rp ${fmtExcelDec2(sisaGajiPensiunExact)}`} strong testid="result-sisa-gaji-pensiun" />
+                  </Block>
+                </>
+              ) : (
+                <>
+                  <Block title="1. Identitas & Akseptasi Debitur" accent="#078D67">
+                    <Row k="Nama Calon Debitur" v={r.name || "-"} />
+                    <Row k="Tanggal Lahir" v={fmtDate(r.birth_date)} />
+                    <Row k="Usia Saat Ini" v={bsi.age_exact_text || `${r.age} Tahun`} strong />
+                    <Row k="Usia Pertanggungan Asuransi" v={`${bsi.nearest_age ?? r.age} Tahun`} />
+                    {bsi.nip && <Row k="NIP Calon Debitur" v={bsi.nip} testid="bsi-result-nip" />}
+                    <Row k="Tipe Produk" v={bsi.sub_product_label || "Dekade Berkah (Prapen 10 Tahun)"} strong testid="bsi-result-sub-product" />
+                    <Row k="Status Payroll" v={`${bsi.status_gaji_label || "Payroll"} (DBR Maks ${bsi.dbr_active_rate || 70}%)`} strong testid="bsi-result-status-gaji" />
+                    {bsi.tmt_bekerja && <Row k="TMT Bekerja" v={fmtDate(bsi.tmt_bekerja)} />}
+                    <Row
+                      k="TMT Pensiun Efektif / BUP"
+                      v={
+                        bsi.bup_date
+                          ? `${fmtDate(bsi.bup_date)} (Thn BUP ${bsi.bup_year || "-"} • BUP ${bsi.bup_age || 58} Thn • Sisa ${bsi.actual_months_to_bup ?? bsi.active_months ?? 0} bln)`
+                          : `Tahun ${bsi.bup_year || "-"} (BUP ${bsi.bup_age || 58} Thn • Sisa ${bsi.actual_months_to_bup ?? bsi.active_months ?? 0} bln)`
+                      }
+                    />
+                    <Row k="Total Penghasilan Aktif Diakui" v={rp(r.salary)} strong />
+                    {bsi.tht > 0 && <Row k="THT (Diakui 75%)" v={`${rp(bsi.tht)} (Diakui ${rp(bsi.tht_recognized || Math.round(bsi.tht * 0.75))})`} />}
+                    <Row k="Manfaat Pensiun (DSR Maks 90%)" v={`${rp(r.pension_salary)} (Maks Angs ${rp(bsi.max_installment_pension || Math.floor((r.pension_salary || 0) * 0.9))})`} />
+                    <Row k="Kategori & Akad" v={r.category} testid="result-category" />
+                  </Block>
+
+                  <Block title="2. Parameter Pembiayaan, Pricing & Jadwal" accent="#F28A19">
+                    <Row k="Plafond Pra Pensiun" v={rp(r.plafond)} strong testid="result-plafond" />
+                    {bsi.max_plafond_at_tenor > 0 && (
+                      <Row k="Kapasitas Plafond Maksimal" v={rp(bsi.max_plafond_at_tenor)} />
+                    )}
+                    <Row k="Tenor Total" v={`${r.tenor} bulan (${bsi.active_months || 0} bln Aktif + ${bsi.pension_months || 0} bln Pensiun)`} strong />
+                    <Row k="Margin Saat Aktif (Base -> +Atrib)" v={`${pct(bsi.base_rate_aktif ?? r.bank_rate)} -> ${pct(bsi.price_atrib_aktif_pct ?? r.bank_rate)} p.a.`} strong />
+                    <Row k="Margin Saat Pensiun (Base -> +Atrib)" v={`${pct(bsi.base_rate_pensiun ?? r.coop_rate)} -> ${pct(bsi.price_atrib_pensiun_pct ?? r.coop_rate)} p.a.`} strong />
+                    {bsi.proyeksi_cair && <Row k="Proyeksi Pencairan" v={fmtDate(bsi.proyeksi_cair)} />}
+                    {bsi.start_angsuran && <Row k="Mulai Angsuran" v={fmtDate(bsi.start_angsuran)} />}
+                    {bsi.selesai_angsuran && (
+                      <Row
+                        k="Jatuh Tempo Pembiayaan"
+                        v={`${fmtDate(bsi.selesai_angsuran)}${bsi.end_loan_age_text ? ` (${bsi.end_loan_age_text})` : ""}`}
+                      />
+                    )}
+                    {bsi.taksasi_mmq > 0 && <Row k="Nilai Taksasi Aset MMQ" v={rp(bsi.taksasi_mmq)} />}
+                  </Block>
+
+                  <Block title="3. Rincian Angsuran & Saldo Transisi" accent="#5720B8">
+                    <Row k="Angsuran Masa Aktif" v={`Rp ${fmtExcelDec2(angsAktifExact)}`} strong />
+                    <Row k={`DBR Masa Aktif (Maks ${bsi.dbr_active_rate || 70}%)`} v={pct(r.ratio_pct)} testid="result-ratio" />
+                    <Row k="Sisa Pokok Saat Pensiun (Transisi)" v={rp(bsi.sisa_os_saat_pensiun || 0)} strong />
+                    <Row k="Angsuran Masa Pensiun" v={`Rp ${fmtExcelDec2(angsPensiunExact)}`} strong />
+                    <Row k={`DSR Masa Pensiun (Maks ${bsi.dsr_pension_rate || 90}%)`} v={pct(r.ratio_pension_pct || 0)} testid="result-ratio-pension" />
+                    <Row k="Sisa Gaji Masa Aktif" v={rp(r.remaining_salary)} />
+                    <Row k="Sisa Gaji Masa Pensiun" v={rp(sisaGajiPensiun)} strong testid="result-sisa-gaji-pensiun" />
+                  </Block>
+                </>
+              )}
             </div>
 
             {/* Kolom Kanan */}
             <div className="space-y-6 min-w-0">
               <Block title="4. Rincian Proteksi Asuransi Jiwa Syariah" accent="#078D67">
-                <Row k="Perusahaan Asuransi" v={simas.company || "PT Asuransi Simas Jiwa (Syariah)"} />
-                <Row k="Usia Masuk Pertanggungan" v={`${simas.nearest_age ?? simas.entry_age ?? r.age} tahun`} />
+                <Row k="Lembaga Penjaminan" v={isPensiunBerkah ? "PT Asuransi Simas Jiwa — Pensiun Menurun" : "Asuransi Jiwa Pembiayaan Syariah"} />
+                <Row k="Usia Masuk Pertanggungan (Nearest)" v={`${simas.nearest_age ?? simas.entry_age ?? r.age} tahun`} />
                 <Row
-                  k="Masa Pertanggungan (+6 Bln Buffer)"
-                  v={`${simas.insurance_months || (r.tenor + 6)} bln (${simas.ins_years ?? Math.floor((r.tenor + 6) / 12)} thn ${simas.ins_rem_months ?? ((r.tenor + 6) % 12)} bln)`}
+                  k={isPensiunBerkah ? "Masa Pertanggungan Polis" : "Masa Pertanggungan (+6 Bln Buffer)"}
+                  v={`${simas.insurance_months || r.tenor} bln (${simas.ins_years ?? Math.floor(r.tenor / 12)} thn ${simas.ins_rem_months ?? (r.tenor % 12)} bln)`}
                 />
                 <Row k="Usia Akhir Pertanggungan" v={`${simas.end_coverage_age ?? "-"} tahun (Maks 75 thn)`} />
                 <Row k="Tarif Kontribusi Asuransi" v={`${simas.tarif_permil ?? simas.rate_permil ?? 0} ‰ (per mil)`} strong />
-                <Row k="Nilai Santunan Pertanggungan" v={rp(simas.santunan_setelah_atribusi || r.plafond)} strong />
-                <Row k="Batas Maksimal UP Usia Ini" v={rp(simas.max_up_allowed || 1000000000)} />
-                <Row k="Total Kontribusi / Premi" v={rp(bsi.premi_asuransi_tertanggung || simas.total_kontribusi || simas.premium || 0)} strong />
+                <Row k="Nilai Santunan Pertanggungan (UP)" v={`Rp ${fmtExcelDec2(simas.santunan_setelah_atribusi_exact ?? simas.santunan_setelah_atribusi ?? r.plafond)}`} strong />
+                <Row k="Batas Maksimal UP Pensiun" v={rp(simas.max_up_allowed || 350000000)} />
+                <Row k="Total Kontribusi / Premi" v={`Rp ${fmtExcelDec2(bsi.premi_asuransi_tertanggung_exact ?? bsi.premi_asuransi_tertanggung ?? 0)}`} strong />
                 <Row k="Status Underwriting Medis" v={simas.medical_status || "Non Medical Check Up"} strong />
-                <Row k="Skema Pembayaran Premi" v={bsi.is_atribusi ? "Atribusi Asuransi (Masuk Margin)" : "Non-Atribusi (Potong Pencairan)"} />
+                <Row k="Skema Pembayaran Premi" v={bsi.is_atribusi ? "Atribusi Premi (Masuk Margin)" : "Reguler (Potong Pencairan)"} />
               </Block>
 
               <Block title="5. Rincian ke Nasabah (Biaya, Blokir & Pencairan)" accent="#F28A19">
@@ -403,17 +643,21 @@ export function BsiResultView({ r }) {
                 <Row k="Biaya Asuransi Dipotong Tunai" v={bsi.is_atribusi ? "Rp0 (Skema Atribusi)" : `Rp ${fmtExcelDec2(biayaAsuransiExact)}`} />
                 <Row k="Biaya Materai" v={`Rp ${fmtExcelDec2(biayaMateraiExact)}`} testid="result-admin" />
                 <Row k="Total Biaya Pembiayaan" v={rp(r.total_fees)} strong testid="result-total-fees" />
-                <Row
-                  k={`Blokir Angsuran Aktif (${blokirActiveCnt}×)`}
-                  v={`Rp ${fmtExcelDec2(blokirAktifExact)}`}
-                />
+                {!isPensiunBerkah && (
+                  <Row
+                    k={`Blokir Angsuran Aktif (${blokirActiveCnt}×)`}
+                    v={`Rp ${fmtExcelDec2(blokirAktifExact)}`}
+                  />
+                )}
                 <Row
                   k={`Blokir Angsuran Pensiun (${blokirPensionCnt}×)`}
                   v={`Rp ${fmtExcelDec2(blokirPensiunExact)}`}
                 />
                 <Row k="Total Blokir Angsuran" v={rp(r.retention)} strong testid="result-retention" />
                 <Row k="Pelunasan Yang Lama / Take Over (-)" v={rp(bsi.pelunasan_lama ?? r.take_over ?? 0)} />
-                <Row k="Buka Blokir Yang Lama (+)" v={rp(bsi.buka_blokir_lama ?? r.buka_blokir_lama ?? 0)} strong />
+                {!isPensiunBerkah && (
+                  <Row k="Buka Blokir Yang Lama (+)" v={rp(bsi.buka_blokir_lama ?? r.buka_blokir_lama ?? 0)} strong />
+                )}
                 <Row k="Terima Bersih ke Nasabah" v={`Rp ${fmtExcelDec2(terimaBersihExact)}`} strong />
               </Block>
 
@@ -421,9 +665,16 @@ export function BsiResultView({ r }) {
             </div>
           </div>
 
-          {/* Ringkasan Jadwal Amortisasi Transisi Aktif ke Pensiun */}
+          {/* Ringkasan Jadwal Amortisasi */}
           {schedulePreview.length > 0 && (
-            <Block title="6. Preview Jadwal Amortisasi Pokok & Margin (Masa Aktif -> Masa Pensiun)" accent="#351080">
+            <Block
+              title={
+                isPensiunBerkah
+                  ? "6. Preview Jadwal Amortisasi Pokok & Margin (Pensiun Berkah)"
+                  : "6. Preview Jadwal Amortisasi Pokok & Margin (Masa Aktif -> Masa Pensiun)"
+              }
+              accent="#351080"
+            >
               <div className="overflow-x-auto max-w-full">
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-50 text-[11px] font-bold uppercase text-slate-600 border-b border-slate-100">
@@ -1028,7 +1279,187 @@ export function MestikaResultView({ r }) {
 }
 
 // ============================================================================
-// 4. MITRA BANK KONVENSIONAL (Mandiri Taspen, MNC, BNI)
+// 3c. BANK BNI — BNI FLEKSI PENSIUN & PRA PURNA (MKSA v4 Jul26)
+// ============================================================================
+export function BniResultView({ r }) {
+  const bni = r.bni_details || {};
+  const needsUnderwritingReview = bni.underwriting_requires_verification;
+  if (r.status === "UNAVAILABLE" || bni.status === "UNAVAILABLE") {
+    return (
+      <div className="space-y-4" data-testid="final-result">
+        <div
+          className="rounded-2xl border border-amber-300 bg-amber-50 p-5 text-amber-900 space-y-2"
+          data-testid="bni-unavailable-banner"
+        >
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="h-5 w-5 shrink-0 text-amber-700 mt-0.5" />
+            <div className="space-y-1.5">
+              <h3 className="font-display text-base font-bold text-amber-950">
+                Aturan / Kombinasi Belum Tersedia (Menunggu Konfirmasi Klien)
+              </h3>
+              <p className="text-xs sm:text-sm leading-relaxed text-amber-900">
+                {r.unavailable_reason || bni.unavailable_reason}
+              </p>
+              {(r.source_cells || bni.source_cells) && (
+                <p className="text-[11px] font-mono text-amber-800">
+                  Sumber Referensi Excel: {r.source_cells || bni.source_cells}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const ajkCoverageStatus =
+    bni.ajk_covered === false
+      ? "Tidak Dicover AJK CAR"
+      : needsUnderwritingReview
+      ? "Dicover • Perlu verifikasi aturan asuransi"
+      : `Dicover (${bni.insurance_tenor_years || Math.ceil((r.tenor || 0) / 12)} tahun)`;
+  const blokirPrapenVal = bni.blokir_prapensiun_exact ?? bni.blokir_prapensiun;
+  const blokirPrapenDisplay =
+    Number(blokirPrapenVal || 0) === 0 && Number(bni.blokir_prapensiun_count || 0) === 0
+      ? "-"
+      : `Rp ${fmtExcelDec2(blokirPrapenVal)}`;
+
+  return (
+    <div className="space-y-6" data-testid="final-result">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200/80 pb-4">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2.5 sm:gap-4 min-w-0">
+          <PartnerLogo bankKey="bank_bni" variant="lockup" size="md" className="sm:h-11 shrink-0 self-start sm:self-center" />
+          <div className="min-w-0 flex-1 sm:border-l sm:border-slate-200 sm:pl-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-display text-base sm:text-lg font-bold text-[#0D6E6D]">
+                BANK BNI • BNI FLEKSI PENSIUN
+              </h3>
+              <span
+                className="rounded-full bg-[#0D6E6D]/10 px-2.5 py-0.5 text-[11px] font-bold text-[#0D6E6D]"
+                data-testid="bni-result-product-badge"
+              >
+                Kode {bni.product_code || "-"} • {bni.product_name || "BNI Fleksi"}
+              </span>
+            </div>
+            <p
+              className="mt-1 text-xs leading-snug text-slate-500 break-words"
+              data-testid="bni-result-header-scheme"
+            >
+              {bni.insurance_scheme_label || "Kredit BFP Skema Menurun"} • Asuransi Jiwa {bni.insurance_underwriter || "CAR"}
+            </p>
+          </div>
+        </div>
+        <div className="sm:self-center shrink-0">
+          <span
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold ${
+              needsUnderwritingReview ? "bg-amber-50 text-amber-800" :
+                r.overall_ok ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
+            }`}
+            data-testid="bni-result-status"
+          >
+            {r.overall_ok && !needsUnderwritingReview ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
+            {needsUnderwritingReview ? "Perlu verifikasi aturan asuransi" :
+              r.overall_ok ? "PASSED — Layak Diproses" : "NOT PASSED — Periksa Validasi"}
+          </span>
+        </div>
+      </div>
+
+      <div className="grid gap-6 md:grid-cols-2">
+        <div className="space-y-6 min-w-0">
+          <Block title="Identitas, Jadwal & Produk (BNI Fleksi)" accent="#0D6E6D">
+            <Row k="Nama Calon Debitur" v={r.name || "-"} />
+            <Row k="Produk Kredit BNI" v={`Kode ${bni.product_code || "-"} — ${bni.product_name || "BNI Fleksi"}`} strong testid="bni-result-product" />
+            <Row k="Tanggal Lahir" v={fmtDate(r.birth_date)} />
+            <Row k="Tanggal Aplikasi" v={fmtDate(r.process_date)} testid="bni-result-process-date" />
+            {bni.product_code === "4" && (
+              <>
+                <Row
+                  k="Rencana Tanggal Pencairan"
+                  v={bni.bni_disbursement_date ? fmtDate(bni.bni_disbursement_date) : "Belum diisi (rencana)"}
+                  testid="bni-result-disbursement-date"
+                />
+                <Row
+                  k="TMT Pensiun"
+                  v={bni.bni_tmt_pensiun_date ? fmtDate(bni.bni_tmt_pensiun_date) : "-"}
+                  testid="bni-result-tmt-pensiun-date"
+                />
+              </>
+            )}
+            <Row k="Usia Saat Aplikasi (Eksak)" v={bni.age_exact_text || `${r.age} Tahun`} strong />
+            <Row k="Usia Tahun (Pembulatan BNI)" v={`${bni.age_rounded_years ?? (r.age + 1)} tahun`} />
+            <Row k="Tanggal Jatuh Tempo (EOMONTH)" v={fmtDate(bni.maturity_date)} />
+            <Row k="Usia Saat Jatuh Tempo" v={bni.maturity_age_text || "-"} />
+            <Row k="Sisa Masa Usia 75 Tahun" v={`${bni.remaining_service_months ?? "-"} bulan (s.d. ${fmtDate(bni.age_75_date)})`} />
+          </Block>
+
+          <Block title="Parameter Kredit & Angsuran" accent="#F28A19">
+            <Row k="Gaji Bulanan" v={rp(r.salary)} />
+            <Row k={`Batas Angsuran (DBR ${bni.dbr_pct ?? 90}%)`} v={`Rp ${fmtExcelDec2(bni.max_installment_exact ?? bni.max_installment)}`} />
+            <Row k="Plafon Maksimum" v={`Rp ${fmtExcelDec2(bni.max_plafond_exact ?? bni.max_plafond)}`} strong />
+            <Row k="Plafond Pinjaman Diajukan" v={rp(r.plafond)} strong testid="result-plafond" />
+            <Row k="Tenor Pinjaman / Masa AJK" v={`${r.tenor} bulan (${bni.insurance_tenor_years || Math.ceil((r.tenor || 0) / 12)} tahun AJK)`} />
+            <Row k="Bunga Efektif (% p.a.)" v={`${pct(r.bank_rate)} per tahun`} strong />
+            <Row k="Angsuran per Bulan" v={`Rp ${fmtExcelDec2(bni.monthly_installment_exact ?? r.coop_installment)}`} strong testid="result-coop-installment" />
+            <Row k="DSR Aktual / Sisa Gaji" v={`${pct(r.ratio_pct)} • Rp ${fmtExcelDec2(bni.remaining_salary_exact ?? r.remaining_salary)}`} testid="result-ratio" />
+          </Block>
+        </div>
+
+        <div className="space-y-6 min-w-0">
+          <Block title="Biaya Bank & Asuransi AJK CAR" accent="#0D6E6D">
+            <Row k="Biaya Admin Bank" v={rp(bni.admin_fee)} />
+            <Row k={`Provisi (${bni.provisi_pct ?? 0}%)`} v={`Rp ${fmtExcelDec2(bni.provisi_exact ?? bni.provisi)}`} testid="result-proaq" />
+            <Row k={`BTL (${bni.btl_pct ?? 3.5}%)`} v={`Rp ${fmtExcelDec2(bni.btl_exact ?? bni.btl)}`} />
+            <Row k="Subtotal Biaya Bank" v={rp(bni.bank_fees)} strong />
+            <Row k="Skema Asuransi AJK" v={bni.insurance_scheme_label || "Kredit BFP Skema Menurun"} strong testid="bni-result-ajk-scheme" />
+            <Row k="Status Pertanggungan AJK" v={ajkCoverageStatus} strong testid="bni-result-ajk-coverage" />
+            <Row k={`Premi AJK Gross (${bni.ajk_rate_permil ?? 0} ‰)`} v={`Rp ${fmtExcelDec2(bni.gross_ajk_premium_exact ?? bni.gross_ajk_premium)}`} testid="bni-result-ajk-gross" />
+            <Row k={`Subsidi BNI (s.d. ${bni.subsidy_cap_permil ?? 150} ‰)`} v={`-Rp ${fmtExcelDec2(bni.bni_subsidy_premium_exact ?? bni.bni_subsidy_premium)}`} testid="bni-result-ajk-subsidy" />
+            <Row k={`Premi AJK Nasabah (${fmtExcelDec2(bni.customer_ajk_permil ?? 0)} ‰)`} v={`Rp ${fmtExcelDec2(bni.customer_ajk_premium_exact ?? bni.customer_ajk_premium)}`} strong testid="result-risk" />
+            <Row k="Total Biaya Kredit + AJK" v={`Rp ${fmtExcelDec2(bni.total_fees_exact ?? r.total_fees)}`} strong testid="result-total-fees" />
+            <Row k="Underwriting Medis" v={`${bni.underwriting_code || "-"} — ${bni.underwriting_desc || "-"}`} strong testid="bni-result-underwriting" />
+            {needsUnderwritingReview && bni.underwriting_review_reason && (
+              <div
+                className="border-t border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 sm:px-4"
+                data-testid="bni-underwriting-review-note"
+              >
+                {bni.underwriting_review_reason}
+              </div>
+            )}
+          </Block>
+
+          <Block title="Blokir, Take Over & Pencairan" accent="#F28A19">
+            <Row k="Pencairan Bersih Sebelum Blokir" v={`Rp ${fmtExcelDec2(bni.net_before_blokir_exact ?? bni.net_before_blokir)}`} strong />
+            <Row k={`Blokir Angsuran (${bni.blokir_angsuran_count ?? 3}×)`} v={`Rp ${fmtExcelDec2(bni.blokir_angsuran_exact ?? bni.blokir_angsuran)}`} testid="bni-result-blokir-angsuran" />
+            <Row k={`Blokir Tabungan Wajib (${bni.blokir_tabungan_count ?? 1}×)`} v={`Rp ${fmtExcelDec2(bni.blokir_tabungan_exact ?? bni.blokir_tabungan)}`} testid="bni-result-blokir-tabungan" />
+            <Row k={`Blokir Prapensiun (${bni.blokir_prapensiun_count ?? 0}×)`} v={blokirPrapenDisplay} testid="bni-result-blokir-prapensiun" />
+            <Row k={`Total Blokir (${bni.total_blokir_count ?? 0}×)`} v={`Rp ${fmtExcelDec2(bni.total_blokir_exact ?? r.retention)}`} strong testid="result-retention" />
+            <Row k="Take Over (TO)" v={rp(r.take_over || 0)} />
+          </Block>
+
+          <ValidationList validations={r.validations} />
+        </div>
+      </div>
+
+      <div className="grid gap-px overflow-hidden rounded-xl bg-[#0D6E6D] sm:grid-cols-2">
+        <div className="p-4 sm:p-5 text-white min-w-0">
+          <p className="text-xs text-teal-100/85 font-medium">Terima Bersih Setelah Take Over</p>
+          <p className="mt-1 font-display text-xl sm:text-3xl font-bold lp-num break-words" data-testid="result-net">
+            Rp {fmtExcelDec2(bni.terima_bersih_after_to_exact ?? r.net_disbursement)}
+          </p>
+        </div>
+        <div className="p-4 sm:p-5 text-white sm:border-l sm:border-white/15 min-w-0">
+          <p className="text-xs text-teal-100/85 font-medium">Sisa Gaji per Bulan</p>
+          <p className="mt-1 font-display text-xl sm:text-3xl font-bold lp-num break-words" data-testid="result-remaining-salary">
+            Rp {fmtExcelDec2(bni.remaining_salary_exact ?? r.remaining_salary)}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// 4. MITRA BANK KONVENSIONAL (Mandiri Taspen, MNC)
 // ============================================================================
 export function ConventionalBankResultView({ r }) {
   return (
@@ -1124,8 +1555,11 @@ export function ConventionalBankResultView({ r }) {
 // ============================================================================
 // MAIN DISPATCHER: Menampilkan UI & Terminologi sesuai Bank masing-masing
 // ============================================================================
-export default function ResultView(props) {
+const ResultView = memo(function ResultView(props) {
   const bankKey = props.r?.bank_key;
+  if (bankKey === "bank_bni" || !!props.r?.bni_details) {
+    return <BniResultView {...props} />;
+  }
   if (bankKey === "bank_mestika" || !!props.r?.mestika_details) {
     return <MestikaResultView {...props} />;
   }
@@ -1139,4 +1573,6 @@ export default function ResultView(props) {
     return <Ams2ResultView {...props} />;
   }
   return <ConventionalBankResultView {...props} />;
-}
+});
+
+export default ResultView;
