@@ -66,66 +66,152 @@ export function AiSummary({ sim }) {
       if (format === "whatsapp") {
         const r = sim.result || {};
         const isBsi = r.bank_key === "bsi_prapen" || !!r.bsi_details;
+        const isBniFleksi = r.bank_key === "bank_bni" || !!r.bni_details;
         const isCapital = r.bank_key === "bank_capital" || !!r.capital_details;
         const isAms2 = r.bank_key === "ams2";
         const bsi = r.bsi_details;
+        const bni = r.bni_details;
         const cap = r.capital_details;
         let waText = "";
 
-        if (isCapital) {
+        if (isBniFleksi) {
+          const isPraPurna = bni?.product_code === "4";
+          const praScheduleLines = isPraPurna && (bni?.bni_disbursement_date || bni?.bni_tmt_pensiun_date)
+            ? [
+                ...(bni?.bni_disbursement_date ? [`• Rencana Pencairan: ${bni.bni_disbursement_date}`] : []),
+                ...(bni?.bni_tmt_pensiun_date ? [`• TMT Pensiun: ${bni.bni_tmt_pensiun_date}`] : [])
+              ]
+            : [];
           waText = [
-            `*APLIKASI CALC CAPITAL — DASA CIPTA BERKARYA (PS3 CAPITAL)*`,
+            `*LAYANAN PENSIUNAN — SIMULASI BANK BNI FLEKSI PENSIUN*`,
             `No. Referensi: ${sim.sim_no}`,
-            `Produk / Tipe Angsuran: ${cap?.product_and_type_label || r.category}`,
+            `Produk: Kode ${bni?.product_code || "-"} — ${bni?.product_name || "BNI Fleksi"}`,
+            ``,
+            `Yth. Bapak/Ibu *${r.name || "-"}*,`,
+            `Berikut rincian estimasi fasilitas BNI Fleksi Anda:`,
+            `• Gaji Bulanan: Rp${Math.round(r.salary || 0).toLocaleString("id-ID")} (DBR ${bni?.dbr_pct ?? 90}%)`,
+            ...praScheduleLines,
+            `• Plafond Pengajuan: Rp${Math.round(r.plafond || 0).toLocaleString("id-ID")} (Maks Rp${Math.round(bni?.max_plafond ?? r.plafond ?? 0).toLocaleString("id-ID")})`,
+            `• Jangka Waktu: ${r.tenor} Bulan (${bni?.insurance_tenor_years || Math.ceil((r.tenor || 0) / 12)} Thn AJK) • Bunga ${r.bank_rate}% p.a.`,
+            `• Angsuran Bulanan: Rp${Math.round(r.coop_installment || 0).toLocaleString("id-ID")}/bulan (DSR ${r.ratio_pct}%)`,
+            ``,
+            `*Rincian Biaya, AJK CAR & Blokir:*`,
+            `• Biaya Bank (Admin + Provisi ${bni?.provisi_pct ?? 0}% + BTL ${bni?.btl_pct ?? 3.5}%): Rp${Math.round(bni?.bank_fees ?? r.total_fees ?? 0).toLocaleString("id-ID")}`,
+            `• Premi AJK CAR (${bni?.ajk_rate_permil ?? 0} permil): Kotor Rp${Math.round(bni?.gross_ajk_premium ?? 0).toLocaleString("id-ID")} | Subsidi BNI -Rp${Math.round(bni?.bni_subsidy_premium ?? 0).toLocaleString("id-ID")} | Nasabah Rp${Math.round(bni?.customer_ajk_premium ?? 0).toLocaleString("id-ID")}`,
+            `• Blokir Angsuran (${bni?.blokir_angsuran_count ?? 3}x) + Tabungan (${bni?.blokir_tabungan_count ?? 1}x)${(bni?.blokir_prapensiun_count ?? 0) > 0 ? ` + Prapensiun (${bni.blokir_prapensiun_count}x)` : ""}: Rp${Math.round(r.retention || 0).toLocaleString("id-ID")}`,
+            ...(Number(r.take_over || 0) > 0
+              ? [`• Take Over (TO): Rp${Math.round(r.take_over || 0).toLocaleString("id-ID")}`]
+              : []),
+            ``,
+            `• *Terima Bersih: Rp${Math.round(r.net_disbursement || 0).toLocaleString("id-ID")}*`,
+            `• Sisa Gaji per Bulan: Rp${Math.round(r.remaining_salary || 0).toLocaleString("id-ID")}/bulan`,
+            `• Status Validasi: ${r.overall_ok ? "MEMENUHI KETENTUAN" : "PERLU PENYESUAIAN"}`,
+            ``,
+            `Petugas Pendamping: ${sim.created_by_name || "Petugas Layanan Pensiunan"}`,
+            `_Estimasi simulasi fasilitas kredit pensiun Bank BNI (BNI Fleksi Pensiun)_`
+          ].join("\n");
+        } else if (isCapital) {
+          const isCapPensiun = cap?.product === "pensiun";
+          const maxTenorVal = cap?.max_credit_months || cap?.credit_months || r.tenor || 0;
+          const reqTenorVal = cap?.credit_months ?? r.tenor ?? 0;
+          const retLabel = isCapPensiun ? "Total Retensi (2x Angsuran)" : "Total Retensi";
+          waText = [
+            `*LAYANAN PENSIUNAN — SIMULASI KREDIT DASA CIPTA BERKARYA (PS3 CAPITAL)*`,
+            `No. Referensi: ${sim.sim_no}`,
+            `Produk: ${cap?.product_label || r.category}`,
             ``,
             `Yth. Bapak/Ibu *${r.name}*,`,
-            `Berikut hasil simulasi fasilitas kredit pensiun PS3 CAPITAL Anda:`,
+            `Berikut hasil simulasi fasilitas kredit pensiun Anda:`,
             `• Gaji Bulanan: Rp${Math.round(r.salary || 0).toLocaleString("id-ID")}`,
-            `• Tenor Kredit / Tenor PP: ${cap?.credit_months ?? r.tenor} / ${cap?.pp_months ?? 0} bulan`,
-            `• Tenor GP / Tenor PV: ${cap?.gp_months ?? 0} / ${cap?.pv_months ?? r.tenor} bulan`,
+            `• Tenor Kredit Maksimal: ${maxTenorVal} bulan`,
+            ...(!isCapPensiun ? [`• Tenor PP: ${cap?.pp_months ?? 0} bulan`] : []),
+            `• Tenor Diajukan: ${reqTenorVal} bulan`,
             `• Batas Angsuran Maksimal (90%): Rp${Math.round(cap?.payment_cap ?? ((r.salary || 0) * 0.9)).toLocaleString("id-ID")}`,
-            `• Plafond Maksimal (PV): Rp${Math.round(cap?.recommendation_max_loan ?? r.plafond ?? 0).toLocaleString("id-ID")}`,
-            `• Plafond Kredit yang Diajukan: Rp${Math.round(cap?.loan ?? r.plafond ?? 0).toLocaleString("id-ID")}`,
-            `• Angsuran Aktual (PMT): Rp${Math.round(cap?.actual_payment ?? r.coop_installment ?? 0).toLocaleString("id-ID")}/bulan`,
+            `• Angsuran Aktual: Rp${Math.round(cap?.actual_payment ?? r.coop_installment ?? 0).toLocaleString("id-ID")}/bulan`,
+            `• Plafon Maksimal: Rp${Math.round(cap?.recommendation_max_loan ?? r.plafond ?? 0).toLocaleString("id-ID")}`,
+            `• Plafon Diajukan: Rp${Math.round(cap?.loan ?? r.plafond ?? 0).toLocaleString("id-ID")}`,
             `• Biaya Kredit: Rp${Math.round(cap?.cost ?? r.total_fees ?? 0).toLocaleString("id-ID")}`,
-            `• Total Retensi: Rp${Math.round(cap?.total_retention ?? r.retention ?? 0).toLocaleString("id-ID")}`,
-            `• *Pencairan Bersih: Rp${Math.round(cap?.net_cash ?? r.net_disbursement ?? 0).toLocaleString("id-ID")}*`,
+            `• ${retLabel}: Rp${Math.round(cap?.total_retention ?? r.retention ?? 0).toLocaleString("id-ID")}`,
+            `• Pencairan Bersih: Rp${Math.round(cap?.net_cash ?? r.net_disbursement ?? 0).toLocaleString("id-ID")}`,
             `• Sisa Gaji Setelah Angsuran: Rp${Math.round(cap?.salary_left ?? r.remaining_salary ?? 0).toLocaleString("id-ID")}`,
             ``,
+            `*HIGHLIGHT POINT HASIL SIMULASI:*`,
+            `• *PLAFON:* Rp${Math.round(cap?.loan ?? r.plafond ?? 0).toLocaleString("id-ID")}`,
+            `• *TENOR:* ${reqTenorVal} Bulan`,
+            `• *SISA BERSIH:* Rp${Math.round(cap?.net_cash ?? r.net_disbursement ?? 0).toLocaleString("id-ID")}`,
+            `• *SISA GAJI:* Rp${Math.round(cap?.salary_left ?? r.remaining_salary ?? 0).toLocaleString("id-ID")}`,
+            ``,
             `Petugas Pendamping: ${sim.created_by_name || "Petugas Layanan Pensiunan"}`,
-            `_Estimasi simulasi berdasarkan parameter PS3 CAPITAL · DASA CIPTA BERKARYA_`
+            `_Estimasi simulasi fasilitas pembiayaan pensiun DASA CIPTA BERKARYA_`
+          ].join("\n");
+        } else if (isBsi && bsi?.sub_product === "PENSIUN") {
+          const blokirPensionCnt = bsi?.blokir_pension_count ?? 0;
+          const sisaGajiPensiun = bsi?.sisa_gaji_pensiun ?? ((r.pension_salary || r.salary || 0) - (r.coop_installment || 0));
+          const angsPensiun = Math.round(bsi?.pension_installment || r.coop_installment || 0);
+          waText = [
+            `*LAYANAN PENSIUNAN — PENSIUN BERKAH (BANK BSI)*`,
+            `No. Referensi: ${sim.sim_no}`,
+            ``,
+            `Yth. Bapak/Ibu *${r.name}*${bsi?.nip ? ` (Nopen/NIP: ${bsi.nip})` : ""},`,
+            `Berikut rincian estimasi fasilitas pembiayaan pensiun Anda:`,
+            `• Plafond: Rp${Math.round(r.plafond || 0).toLocaleString("id-ID")}`,
+            `• Jangka Waktu: ${r.tenor} Bulan`,
+            `• Akad / Skema: ${bsi?.akad || "MMQ"} (${bsi?.is_atribusi ? "Atribusi Premi" : "Reguler"})`,
+            `• Angsuran Bulanan: Rp${angsPensiun.toLocaleString("id-ID")}/bulan`,
+            ``,
+            `*Rincian Biaya & Blokir Angsuran:*`,
+            `• Administrasi (${r.proaq_pct ?? 1}%): Rp${Math.round(r.proaq || 0).toLocaleString("id-ID")}`,
+            `• Asuransi Simas Pensiun: ${bsi?.is_atribusi ? "Dicicil di Margin (Atribusi)" : `Rp${Math.round(bsi?.premi_asuransi_tertanggung || r.risk || 0).toLocaleString("id-ID")}`}`,
+            `• Materai: Rp${Math.round(r.admin_fee || 100000).toLocaleString("id-ID")}`,
+            `• Blokir ${blokirPensionCnt}x Angsuran: Rp${Math.round(bsi?.blokir_pensiun ?? r.retention ?? (angsPensiun * blokirPensionCnt)).toLocaleString("id-ID")}`,
+            ...(Number(r.buka_blokir_lama || bsi?.buka_blokir_lama || 0) > 0
+              ? [`• Buka Blokir Yang Lama: Rp${Math.round(r.buka_blokir_lama || bsi?.buka_blokir_lama || 0).toLocaleString("id-ID")}`]
+              : []),
+            ...(Number(r.take_over || bsi?.pelunasan_lama || 0) > 0
+              ? [`• Pelunasan Yang Lama: Rp${Math.round(r.take_over || bsi?.pelunasan_lama || 0).toLocaleString("id-ID")}`]
+              : []),
+            ``,
+            `• *Terima Bersih: Rp${Math.round(r.net_disbursement || 0).toLocaleString("id-ID")}*`,
+            `• Sisa Gaji Pensiun: Rp${Math.round(sisaGajiPensiun || 0).toLocaleString("id-ID")}/bulan`,
+            ``,
+            `Petugas Pendamping: ${sim.created_by_name || "Petugas Layanan Pensiunan"}`,
+            `_Estimasi simulasi fasilitas pembiayaan Bank Syariah Indonesia (BSI)_`
           ].join("\n");
         } else if (isBsi) {
+          const isTriBerkah = bsi?.sub_product === "PP3";
+          const headerTitle = isTriBerkah ? "PRA PENSIUN TRI BERKAH" : "PRA PENSIUN DEKADE BERKAH";
+          const blokirActiveCnt = bsi?.blokir_active_count ?? (isTriBerkah ? (bsi?.active_months || 1) : 1);
+          const blokirPensionCnt = bsi?.blokir_pension_count ?? 2;
           const sisaGajiPensiun = bsi?.sisa_gaji_pensiun ?? (r.pension_salary - r.coop_installment);
           waText = [
-            `*LAYANAN PENSIUNAN — ESTIMASI BSI PRAPENSIUN (NOS v1.4.6)*`,
+            `*LAYANAN PENSIUNAN — ${headerTitle} (BANK BSI)*`,
             `No. Referensi: ${sim.sim_no}`,
-            `Mitra: ${r.bank_name || "BSI — Mitraguna Prima+ Prapensiun"}`,
-            `Status Gaji: ${bsi?.status_gaji_label || "Payroll (BSI)"}`,
-            `Sub-Produk: ${bsi?.sub_product_label || "Prapen 10 Tahun (Payroll)"}`,
             ``,
             `Yth. Bapak/Ibu *${r.name}*${bsi?.nip ? ` (NIP: ${bsi.nip})` : ""},`,
-            `Berikut rincian estimasi fasilitas pembiayaan BSI Prapensiun Anda:`,
-            `• Plafond Pengajuan: Rp${Math.round(r.plafond || 0).toLocaleString("id-ID")}`,
-            `• Total Tenor: ${r.tenor} Bulan (${bsi?.active_months || 0} bln Aktif + ${bsi?.pension_months || 0} bln Pensiun)`,
-            `• Angsuran Masa Aktif: Rp${Math.round(bsi?.active_installment || r.bank_installment || 0).toLocaleString("id-ID")}/bulan`,
-            `• Angsuran Masa Pensiun: Rp${Math.round(bsi?.pension_installment || r.coop_installment || 0).toLocaleString("id-ID")}/bulan`,
-            `• Sisa Gaji Pensiun: Rp${Math.round(sisaGajiPensiun || 0).toLocaleString("id-ID")}/bulan`,
-            `• Margin Aktif / Pensiun: ${r.bank_rate}% / ${r.coop_rate}% p.a.`,
-            `• Biaya ADM (1%): Rp${Math.round(r.proaq || 0).toLocaleString("id-ID")}`,
-            `• Asuransi Simas Jiwa: Rp${Math.round(bsi?.simas?.premium || r.risk || 0).toLocaleString("id-ID")}`,
-            `• Biaya Materai: Rp${Math.round(r.admin_fee || 0).toLocaleString("id-ID")}`,
-            `• Blokir Angsuran: Rp${Math.round(r.retention || 0).toLocaleString("id-ID")}`,
-            `• Estimasi Terima Bersih: Rp${Math.round(r.net_disbursement || 0).toLocaleString("id-ID")}`,
+            `Berikut rincian estimasi fasilitas pembiayaan prapensiun Anda:`,
+            `• Plafond: Rp${Math.round(r.plafond || 0).toLocaleString("id-ID")}`,
+            `• Jangka Waktu: ${r.tenor} Bulan`,
+            `• Angsuran saat Aktif PNS: Rp${Math.round(bsi?.active_installment || r.bank_installment || 0).toLocaleString("id-ID")}/bulan`,
+            `• Angsuran saat Pensiun: Rp${Math.round(bsi?.pension_installment || r.coop_installment || 0).toLocaleString("id-ID")}/bulan`,
             ``,
-            `Jadwal Proyeksi:`,
-            `• Proyeksi Cair: ${bsi?.proyeksi_cair || "-"}`,
-            `• Mulai Angsuran: ${bsi?.start_angsuran || "-"}`,
+            `*Rincian Biaya & Blokir Angsuran:*`,
+            `• Administrasi (${r.proaq_pct ?? 1}%): Rp${Math.round(r.proaq || 0).toLocaleString("id-ID")}`,
+            `• Asuransi: ${bsi?.is_atribusi ? "-" : `Rp${Math.round(r.risk || 0).toLocaleString("id-ID")}`}`,
+            `• Materai: Rp${Math.round(r.admin_fee || 100000).toLocaleString("id-ID")}`,
+            `• Blokir ${blokirActiveCnt}x Angs Masa Aktif: Rp${Math.round(bsi?.blokir_aktif || (bsi?.active_installment || r.bank_installment || 0) * blokirActiveCnt).toLocaleString("id-ID")}`,
+            `• Blokir ${blokirPensionCnt}x Angs Masa Pensiun: Rp${Math.round(bsi?.blokir_pensiun || (bsi?.pension_installment || r.coop_installment || 0) * blokirPensionCnt).toLocaleString("id-ID")}`,
+            ...(Number(r.buka_blokir_lama || bsi?.buka_blokir_lama || 0) > 0
+              ? [`• Buka Blokir Yang Lama: Rp${Math.round(r.buka_blokir_lama || bsi?.buka_blokir_lama || 0).toLocaleString("id-ID")}`]
+              : []),
+            ...(Number(r.take_over || bsi?.pelunasan_lama || 0) > 0
+              ? [`• Pelunasan Yang Lama: Rp${Math.round(r.take_over || bsi?.pelunasan_lama || 0).toLocaleString("id-ID")}`]
+              : []),
             ``,
-            `Status Analisis: ${r.overall_ok ? "MEMENUHI PERSYARATAN" : "PERLU PENYESUAIAN"}`,
+            `• *Terima Bersih: Rp${Math.round(r.net_disbursement || 0).toLocaleString("id-ID")}*`,
+            `• Sisa Gaji Masa Pensiun: Rp${Math.round(sisaGajiPensiun || 0).toLocaleString("id-ID")}/bulan`,
             ``,
             `Petugas Pendamping: ${sim.created_by_name || "Petugas Layanan Pensiunan"}`,
-            `_Catatan: Angka di atas merupakan simulasi resmi BSI NOS v1.4.6 & Asuransi Simas Jiwa._`
+            `_Estimasi simulasi fasilitas pembiayaan Bank Syariah Indonesia (BSI)_`
           ].join("\n");
         } else if (isAms2) {
           waText = [
@@ -234,7 +320,7 @@ export function AiSummary({ sim }) {
           ) : (
             <>
               <pre className="font-sans whitespace-pre-wrap">{text}</pre>
-              <div className="mt-3 border-t border-slate-200 pt-2.5">
+              <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-200 pt-2.5">
                 <Button
                   size="sm"
                   variant="outline"
@@ -244,6 +330,17 @@ export function AiSummary({ sim }) {
                 >
                   {copied ? <Check className="mr-1.5 h-3.5 w-3.5 text-emerald-600" /> : <Copy className="mr-1.5 h-3.5 w-3.5" />}
                   {copied ? "Tersalin ke Clipboard" : "Salin Draf Pesan"}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener,noreferrer");
+                  }}
+                  className="h-8 bg-[#078D67] text-xs font-semibold text-white hover:bg-[#067455]"
+                  data-testid="wa-share-button"
+                >
+                  <Send className="mr-1.5 h-3.5 w-3.5" />
+                  Kirim via WhatsApp
                 </Button>
               </div>
             </>

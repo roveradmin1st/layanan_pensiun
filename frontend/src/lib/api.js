@@ -2,21 +2,24 @@ import axios from "axios";
 
 const BASE = (import.meta.env?.VITE_BACKEND_URL || "").replace(/\/$/, "");
 export const API = `${BASE}/api`;
+
+// Wave 3 (P1): sesi hanya dibawa oleh cookie HttpOnly `lp_token` (Secure; SameSite=Lax).
+// Token akses tidak lagi disimpan di sessionStorage agar tidak dapat dibaca skrip (XSS).
+// Header X-Requested-With wajib dikirim untuk lolos proteksi CSRF pada mutasi internal.
+const LEGACY_TOKEN_KEY = "lp_access_token";
+try {
+  if (typeof window !== "undefined") window.sessionStorage?.removeItem(LEGACY_TOKEN_KEY);
+} catch {
+  /* storage tidak tersedia */
+}
+
 export const api = axios.create({
   baseURL: API,
   withCredentials: true,
   headers: {
+    "X-Requested-With": "XMLHttpRequest",
     "ngrok-skip-browser-warning": "true"
   }
-});
-
-api.interceptors.request.use((config) => {
-  const token = sessionStorage.getItem("lp_access_token");
-  if (token) {
-    config.headers = config.headers || {};
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
 });
 
 let refreshing = null;
@@ -24,17 +27,16 @@ api.interceptors.response.use(
   (r) => r,
   async (err) => {
     const cfg = err.config || {};
+    if (err.response?.data?.error_code === "PASSWORD_CHANGE_REQUIRED") window.dispatchEvent(new Event("auth:password-required"));
     if (err.response?.status === 401 && !cfg._retry && !String(cfg.url).includes("/auth/")) {
       cfg._retry = true;
       try {
         refreshing = refreshing || api.post("/auth/refresh");
-        const { data } = await refreshing;
-        if (data?.access_token) sessionStorage.setItem("lp_access_token", data.access_token);
+        await refreshing;
         refreshing = null;
         return api(cfg);
       } catch {
         refreshing = null;
-        sessionStorage.removeItem("lp_access_token");
         window.dispatchEvent(new Event("auth:logout"));
       }
     }
@@ -73,24 +75,55 @@ export async function downloadFile(path, fallbackName) {
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
-export async function openFile(path) {
+export const SAFE_PREVIEW_MIME_TYPES = Object.freeze(["application/pdf", "image/png", "image/jpeg"]);
+
+export function resolveSafePreviewMime(rawMime, filename = "") {
+  const mime = String(rawMime || "").split(";")[0].trim().toLowerCase();
+  if (SAFE_PREVIEW_MIME_TYPES.includes(mime)) return mime;
+  if (mime === "image/jpg" || mime === "image/pjpeg") return "image/jpeg";
+  const lower = String(filename || "").toLowerCase();
+  if (lower.endsWith(".pdf")) return "application/pdf";
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  return "application/octet-stream";
+}
+
+export async function openFile(path, options = {}) {
   const res = await api.get(path, { responseType: "blob" });
   const cd = res.headers["content-disposition"] || "";
   const m = cd.match(/filename="([^"]+)"/);
   const filename = m ? m[1] : (path.split("/").pop() || "dokumen");
-  const mimeType = res.data?.type || res.headers["content-type"] || "application/octet-stream";
-  const url = URL.createObjectURL(res.data);
+  const rawMime = res.data?.type || res.headers["content-type"] || "application/octet-stream";
+  const mimeType = resolveSafePreviewMime(rawMime, filename);
 
-  // Di mode PWA Standalone / layar HP, tampilkan modal preview in-app agar user tidak terjebak di layar penuh tanpa tombol kembali
-  if (typeof window !== "undefined" && (isStandalonePwa() || window.innerWidth < 1024)) {
+  // Paksa Blob ke MIME allowlist (PDF/PNG/JPEG); tipe lain jadi octet-stream sehingga
+  // tidak pernah dirender sebagai HTML/SVG aktif di origin aplikasi.
+  const blob = res.data?.type === mimeType ? res.data : new Blob([res.data], { type: mimeType });
+
+  const blobSize = blob.size;
+  const url = URL.createObjectURL(blob);
+  const document = { version: Number(res.headers["x-document-version"]), sha256: res.headers["x-document-sha256"] };
+
+  // Selalu prioritaskan preview in-app modal (popup animasi ringan) agar admin/petugas tidak perlu buka tab baru
+  if (typeof window !== "undefined" && !options?.forceNewTab) {
     const ev = new CustomEvent("lp:preview-file", {
       cancelable: true,
-      detail: { url, filename, mimeType }
+      detail: { url, filename, mimeType, blobSize, document, ...options }
     });
-    const unhandled = window.dispatchEvent(ev);
-    if (!unhandled) return;
+    const cancelled = !window.dispatchEvent(ev);
+    if (cancelled) return document;
   }
 
-  window.open(url, "_blank", "noopener");
+  if (mimeType === "application/octet-stream") {
+    const a = window.document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    window.document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } else {
+    window.open(url, "_blank", "noopener");
+  }
   setTimeout(() => URL.revokeObjectURL(url), 60000);
+  return document;
 }

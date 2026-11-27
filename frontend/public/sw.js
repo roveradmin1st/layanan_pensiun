@@ -3,12 +3,13 @@
 // Aturan keamanan data finansial:
 // 1. Seluruh endpoint /api/* 100% NetworkOnly (tidak pernah masuk cache).
 // 2. Dokumen HTML menggunakan Network-First agar update rumus/UI langsung aktif.
-// 3. Aset statis ber-hash Vite (/assets/*) & ikon brand di-cache dengan versi.
+// 3. Aset statis ber-hash Vite (/assets/*) & ikon brand di-cache dengan validasi
+//    Content-Type ketat (anti cache-poisoning SPA fallback text/html).
 // 4. Menyertakan header bypass interupsi tunnel (ngrok-skip-browser-warning)
 //    agar manifest.webmanifest & icon PWA selalu valid untuk prompt instalasi.
 // ============================================================================
 
-const CACHE_NAME = "lp-pwa-shell-v2.5.7";
+const CACHE_NAME = "lp-pwa-shell-v2.6.6";
 const PRECACHE_ASSETS = [
   "/",
   "/index.html",
@@ -33,7 +34,43 @@ function fetchWithTunnelBypass(urlOrReq) {
 
 function isValidResponse(response) {
   if (!response || !response.ok) return false;
+  if (response.type && response.type !== "basic" && response.type !== "cors") return false;
   if (response.headers && response.headers.get("ngrok-error-code")) return false;
+  return true;
+}
+
+function isHtmlContentType(contentType) {
+  const ct = String(contentType || "").toLowerCase();
+  return ct.includes("text/html") || ct.includes("application/xhtml");
+}
+
+function isValidHtmlResponse(response) {
+  if (!isValidResponse(response)) return false;
+  const ct = response.headers ? response.headers.get("content-type") || "" : "";
+  return isHtmlContentType(ct);
+}
+
+function isValidAssetResponse(response, pathname) {
+  if (!isValidResponse(response)) return false;
+  const ct = String(response.headers?.get("content-type") || "").toLowerCase();
+  // Jangan pernah menyimpan fallback SPA HTML (text/html) atau respons tanpa Content-Type di bawah /assets/*
+  if (!ct || isHtmlContentType(ct)) return false;
+  const lowerPath = String(pathname || "").toLowerCase();
+  if (lowerPath.endsWith(".js") || lowerPath.endsWith(".mjs")) {
+    return ct.includes("javascript") || ct.includes("ecmascript");
+  }
+  if (lowerPath.endsWith(".css")) {
+    return ct.includes("text/css");
+  }
+  if (lowerPath.endsWith(".json") || lowerPath.endsWith(".webmanifest")) {
+    return ct.includes("json") || ct.includes("manifest");
+  }
+  if (/\.(png|jpe?g|webp|gif|ico|svg)$/.test(lowerPath)) {
+    return ct.startsWith("image/");
+  }
+  if (/\.(woff2?|ttf|otf|eot)$/.test(lowerPath)) {
+    return ct.startsWith("font/") || ct.includes("octet-stream") || ct.includes("fontobject");
+  }
   return true;
 }
 
@@ -44,7 +81,8 @@ self.addEventListener("install", (event) => {
       Promise.allSettled(
         PRECACHE_ASSETS.map((url) =>
           fetchWithTunnelBypass(url).then((res) => {
-            if (isValidResponse(res)) {
+            const isDoc = url === "/" || url === "/index.html";
+            if (isDoc ? isValidHtmlResponse(res) : isValidAssetResponse(res, url)) {
               return cache.put(url, res);
             }
           })
@@ -92,7 +130,7 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetchWithTunnelBypass(request)
         .then((response) => {
-          if (isValidResponse(response)) {
+          if (isValidHtmlResponse(response)) {
             const copy = response.clone();
             caches.open(CACHE_NAME).then((cache) => cache.put("/index.html", copy));
           }
@@ -106,13 +144,13 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // 3. Bundle Vite ber-hash (/assets/*): Cache-First (aman karena nama file berubah tiap build)
+  // 3. Bundle Vite ber-hash (/assets/*): Cache-First dengan validasi Content-Type ketat
   if (url.pathname.startsWith("/assets/")) {
     event.respondWith(
       caches.match(request).then((cached) => {
-        if (cached) return cached;
+        if (cached && isValidAssetResponse(cached, url.pathname)) return cached;
         return fetchWithTunnelBypass(request).then((response) => {
-          if (isValidResponse(response)) {
+          if (isValidAssetResponse(response, url.pathname)) {
             const copy = response.clone();
             caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
           }
@@ -123,13 +161,13 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // 4. Ikon & manifest: Stale-While-Revalidate dengan header bypass ngrok
+  // 4. Ikon & manifest: Stale-While-Revalidate dengan validasi Content-Type & bypass ngrok
   if (url.pathname.startsWith("/brand/") || url.pathname === "/manifest.webmanifest") {
     event.respondWith(
       caches.match(url.pathname).then((cached) => {
         const networkFetch = fetchWithTunnelBypass(request)
           .then((response) => {
-            if (isValidResponse(response)) {
+            if (isValidAssetResponse(response, url.pathname)) {
               const copy = response.clone();
               caches.open(CACHE_NAME).then((cache) => cache.put(url.pathname, copy));
             }

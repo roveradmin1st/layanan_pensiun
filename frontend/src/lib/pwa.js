@@ -134,6 +134,12 @@ export function usePwaInstall() {
   };
 }
 
+export function applyPendingAppUpdate() {
+  if (typeof window !== "undefined") {
+    window.location.reload();
+  }
+}
+
 export function initPwaServiceWorker() {
   if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
 
@@ -150,7 +156,15 @@ export function initPwaServiceWorker() {
   // Mode production: daftarkan Service Worker segera agar manifest & icon ter-cache untuk prompt instalasi
   const registerSw = () => {
     const hadController = Boolean(navigator.serviceWorker.controller);
-    let refreshing = false;
+    let updateNotified = false;
+
+    const notifyUpdateReady = () => {
+      if (updateNotified) return;
+      updateNotified = true;
+      // Jangan pernah memaksa window.location.reload() secara mendadak saat petugas sedang mengisi kalkulator/form.
+      // Kirim event agar UI menampilkan banner non-destruktif untuk muat ulang saat siap.
+      window.dispatchEvent(new CustomEvent("lp:sw-update-ready"));
+    };
 
     navigator.serviceWorker.addEventListener("controllerchange", () => {
       // Saat SW pertama kali mengambil alih halaman (kunjungan pertama via Ngrok),
@@ -161,9 +175,7 @@ export function initPwaServiceWorker() {
         }
         return;
       }
-      if (refreshing) return;
-      refreshing = true;
-      window.location.reload();
+      notifyUpdateReady();
     });
 
     navigator.serviceWorker
@@ -172,6 +184,18 @@ export function initPwaServiceWorker() {
         if (reg.active && !deferredPrompt && !window.__lpDeferredPrompt) {
           refreshManifestLink();
         }
+        if (reg.waiting && hadController) {
+          notifyUpdateReady();
+        }
+        reg.addEventListener("updatefound", () => {
+          const installing = reg.installing;
+          if (!installing) return;
+          installing.addEventListener("statechange", () => {
+            if (installing.state === "installed" && navigator.serviceWorker.controller) {
+              notifyUpdateReady();
+            }
+          });
+        });
         document.addEventListener("visibilitychange", () => {
           if (document.visibilityState === "visible") {
             reg.update().catch(() => {});
