@@ -8,7 +8,12 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_PARTNER_PARAMETERS, INDONESIA_PROVINCES } from "../config/default-parameters.js";
+import {
+  DEFAULT_PARTNER_PARAMETERS,
+  INDONESIA_PROVINCES,
+  MESTIKA_POLICY_VERSION,
+  resolveMestikaConfig
+} from "../config/default-parameters.js";
 import {
   BNI_POLICY_VERSION,
   canActivateLegacyBniFleksi,
@@ -1035,6 +1040,11 @@ export function ensureStoreUpgrades(state) {
     changed = true;
   }
 
+  if (!Array.isArray(state.parameter_migration_snapshots)) {
+    state.parameter_migration_snapshots = [];
+    changed = true;
+  }
+
   if (
     !state.partner_parameters?.bank_mestika ||
     state.partner_parameters.bank_mestika.engine !== "mestika_tba"
@@ -1042,10 +1052,20 @@ export function ensureStoreUpgrades(state) {
     state.partner_parameters = state.partner_parameters || {};
     state.partner_parameters.bank_mestika = structuredClone(DEFAULT_PARTNER_PARAMETERS.bank_mestika);
     changed = true;
-  }
-
-  if (!Array.isArray(state.parameter_migration_snapshots)) {
-    state.parameter_migration_snapshots = [];
+  } else if (state.partner_parameters.bank_mestika.policyVersion !== MESTIKA_POLICY_VERSION) {
+    if (
+      !state.parameter_migration_snapshots.some(
+        (s) => s.partner_key === "bank_mestika" && s.migration_id === MESTIKA_POLICY_VERSION
+      )
+    ) {
+      state.parameter_migration_snapshots.push({
+        migration_id: MESTIKA_POLICY_VERSION,
+        partner_key: "bank_mestika",
+        migrated_at: new Date().toISOString(),
+        before_snapshot: structuredClone(state.partner_parameters.bank_mestika)
+      });
+    }
+    state.partner_parameters.bank_mestika = resolveMestikaConfig(state.partner_parameters.bank_mestika);
     changed = true;
   }
 

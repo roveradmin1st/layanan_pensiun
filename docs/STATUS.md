@@ -376,3 +376,28 @@ Dibangun di worktree terisolasi murni di atas baseline produksi aktif `c1af10047
 ### Catatan Memori Pekerjaan Selanjutnya (Lokal)
 
 - **Audit Rumus Excel Bank Mandiri Taspen (`Si Pin-Pen v8.3.1 Dragonite` & `Si EMan v5.1`):** Analisis mendalam seluruh rumus, tabel tarif asuransi, bunga efektif, grace period, serta temuan anomali spreadsheet telah selesai didokumentasikan secara lokal. Implementasi & uji lokal kalkulator Bank Mandiri Taspen ditunda terpisah setelah rilis Gelombang 3 (P1) ini rampung dan terverifikasi.
+
+---
+
+## 12. Penyelarasan Akurasi Kalkulator Bank Mestika & Paritas Multi-Role (27 November 2026 — Lokal, Belum Di-deploy ke VPS)
+
+**Branch Tugas Terisolasi:** `fix/calc-mestika-20261127` (worktree `.ops-private/worktree-mestika-20261127`, berpijak langsung di atas baseline produksi aktif `abfccbdfac61998e6fc06f0fdd242c19efa3400e` — Wave 3 P1 aktif penuh beserta `ops/server_release.py` v1.2.0 & `ops/server_doctor.py`).
+
+### A. Akar Masalah & Keputusan Kebijakan CEO (27 November 2026)
+1. **Batas Usia Produk `Reguler` (10% p.a.) vs `Reguler Plus` (12% p.a.):**
+   - Sebelumnya `regulerMaxAgeYears` bernilai `65`, sehingga debitur kelahiran 1961 (usia `65 thn 0 bln` s.d. `65 thn 11 bln`, contoh: Ibu Damennaria Purba `02-06-1961` pada transaksi `27-11-2026` → `65 thn 5 bln`) masuk ke `Reguler Plus` (`12%` p.a., Maks Plafond `Rp365.838.213`).
+   - Sesuai rumus workbook sumber `TBA-MSTK 1.0` (`Sheet1!C9`: `=IF(Sheet2!C7<66,"Reguler",IF(Sheet2!C7<69,"Reguler Plus","melebihi usia"))`), PDF Kalkulator Official Bank Mestika `versi 1.5`, dan persetujuan CEO (**Point 1: Yes**), batas usia `Reguler` (`10%` p.a.) dikoreksi menjadi **`< 66 tahun`** (`0` s.d. `65 thn 11 bln`), dan `Reguler Plus` (`12%` p.a.) berlaku mulai **`>= 66 tahun`**.
+   - Hasil rekonsiliasi kasus Ibu Damennaria Purba (`Gaji IDPB Rp4.500.000`, `Plafond Rp407.300.000`, `Tenor 173 bln`) kini **100% identik (`Rp0` selisih)** dengan PDF Calc Official Mestika `v1.5`: Maks Plafond `Rp407.391.698`, Angsuran `Rp4.453.997`, Biaya Pencairan `Rp89.606.000`, Retensi `Rp13.361.992`, Total Potongan `Rp102.967.992`, Sisa Bersih `Rp304.332.008`, Sisa Gaji `Rp46.003`.
+2. **Perlakuan Usia `>= 69 Tahun` (Point 2 CEO: Tidak Ditolak, Hanya Notice / Warning):**
+   - Debitur berusia `>= 69 tahun` (selama sisa masa kredit menuju batas usia lunas `79 thn 11 bln` masih positif) **tidak lagi ditolak (`errors` kosong, `overall_ok: true`)**, tetap dihitung pada skema `Reguler Plus` (`12%` p.a.), dapat disimpan, dicetak PDF/SVG, dan diajukan ke proses berkas (`POST /api/simulations/:id/approve`), disertai banner **Notice Ketentuan Usia** pada form kalkulator, ringkasan hasil, daftar validasi, PDF, SVG, dan AI Summary.
+3. **Paritas 100% Lintas Seluruh 5 Role & Kompatibilitas Read-Only Production Boot:**
+   - Ditambahkan `resolveMestikaConfig()` (`policyVersion: "tba-mstk-20261127-v2"`) sehingga database produksi lama yang masih menyimpan `regulerMaxAgeYears: 65` tanpa `policyVersion` otomatis ternormalisasi ke `66` secara *in-memory* tanpa menulis ke SQLite saat *cold boot* produksi, sembari tetap menghormati kustomisasi eksplisit Super Admin berikutnya.
+   - `GET /api/calc/limits` (`server.js`) kini mengekspor parameter operasional lengkap `bank_mestika` sehingga hasil rekomendasi *live* di UI (`Calculator.jsx`) dan API server (`/api/calc/max`, `/api/calc/preview`) terbukti **100% identik pada seluruh 5 role** (`super_admin`, `admin_ops`, `admin_branch`, `sales_manager`, `marketing`), dengan isolasi ketat akun `bsi_only` tetap terjaga.
+   - Perhitungan sisa bulan menuju batas usia lunas diselaraskan ke semantik `DATEDIF(..., "m")` Excel (`datedifMonthsCalendar`) agar bebas selisih `+1` bulan pada tanggal proses akhir bulan (`29/30/31`).
+
+### B. Bukti Pengujian Lokal & Status Rilis (27 November 2026)
+- **Pengujian Lokal (Telah Dieksekusi & Lulus 100%):**
+  - Suite backend lengkap (`109/109` tes termasuk `tests/mestika-calculator-multi-role.test.mjs`): **LULUS 100%** (mencakup Golden Vector Damennaria Purba & AMIR, transisi `65 thn 11 bln` vs `66 thn 0 bln`, alur Notice Usia `>= 69 thn` hingga `approve`, serta uji paritas E2E 5 role pada mode `NODE_ENV=production` di atas simulasi DB produksi lama dan pasca-perubahan parameter Super Admin).
+  - Suite keamanan & RBAC terintegrasi (`backend/tests/security-and-api.test.mjs` pada sandbox sementara): **LULUS 100%** (5/5 tahap).
+  - Build produksi `frontend/` (`vite build`, 2601 modul) dan `landing/` (`vite build`, 1584 modul): **LULUS 100%**.
+- **GitHub Actions CI & VPS Produksi:** Belum dilakukan `git commit`, `git push`, maupun deployment ke VPS (menunggu uji simulasi CEO terlebih dahulu dan instruksi eksplisit pemilik sesuai SOP).

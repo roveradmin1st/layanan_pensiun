@@ -292,21 +292,42 @@ function computeAgeLocal(dob, process) {
   return { years, months };
 }
 
+function datedifMonthsLocal(from, to) {
+  if (!from || !to) return 0;
+  let months = (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth());
+  if (to.getDate() < from.getDate()) months -= 1;
+  return months;
+}
+
+function resolveMestikaClientConfig(cfg = {}) {
+  const safeCfg = cfg && typeof cfg === "object" ? cfg : {};
+  const isUpgraded = safeCfg.policyVersion === "tba-mstk-20261127-v2";
+  const regulerMaxAgeYears =
+    !isUpgraded && (safeCfg.regulerMaxAgeYears === undefined || safeCfg.regulerMaxAgeYears === 65)
+      ? 66
+      : (safeCfg.regulerMaxAgeYears ?? 66);
+  return {
+    ...safeCfg,
+    regulerMaxAgeYears
+  };
+}
+
 function computeMestikaRecommendation(d, cfg = {}) {
+  const mstCfg = resolveMestikaClientConfig(cfg);
   const process = parseIsoDateLocal(d.mestika_process_iso);
   const dob = parseIsoDateLocal(d.mestika_birth_iso);
   const salaryInput = Number(d.salary || 0);
   const salaryType = d.mestika_salary_type === "idpb" ? "idpb" : "pensiun";
 
-  const regulerMaxAge = cfg.regulerMaxAgeYears ?? 65;
-  const maxEntryAge = cfg.maxEntryAgeYears ?? 69;
-  const endAgeYears = cfg.maxEndAgeYears ?? 79;
-  const endAgeMonths = cfg.maxEndAgeMonths ?? 11;
-  const maxTenorCap = cfg.maxTenorMonths ?? 240;
-  const batasPlafond = cfg.maxPlafondAbsolute ?? 500000000;
-  const dsrPct = cfg.maxInstallmentRatio ?? 99.0;
-  const deductionPct = cfg.pensionDeductionPercent ?? 13.0;
-  const costPct = cfg.disbursementCostPercent ?? 22.0;
+  const regulerMaxAge = mstCfg.regulerMaxAgeYears ?? 66;
+  const maxEntryAge = mstCfg.maxEntryAgeYears ?? 69;
+  const endAgeYears = mstCfg.maxEndAgeYears ?? 79;
+  const endAgeMonths = mstCfg.maxEndAgeMonths ?? 11;
+  const maxTenorCap = mstCfg.maxTenorMonths ?? 240;
+  const batasPlafond = mstCfg.maxPlafondAbsolute ?? 500000000;
+  const dsrPct = mstCfg.maxInstallmentRatio ?? 99.0;
+  const deductionPct = mstCfg.pensionDeductionPercent ?? 13.0;
+  const costPct = mstCfg.disbursementCostPercent ?? mstCfg.provisionRatePercent ?? 22.0;
 
   const basicSalary = salaryType === "pensiun"
     ? salaryInput * (1 - deductionPct / 100)
@@ -316,38 +337,44 @@ function computeMestikaRecommendation(d, cfg = {}) {
   const errors = [];
   if (!process) {
     errors.push("Tanggal proses tidak valid.");
-    return { errors, ready: false, basicSalary, paymentCap, deductionPct, dsrPct, batasPlafond, canEstimate: false };
+    return { errors, ready: false, regulerMaxAge, maxEntryAge, basicSalary, paymentCap, deductionPct, dsrPct, batasPlafond, canEstimate: false };
   }
   if (!dob) {
-    return { errors, ready: false, basicSalary, paymentCap, deductionPct, dsrPct, batasPlafond, canEstimate: false };
+    return { errors, ready: false, regulerMaxAge, maxEntryAge, basicSalary, paymentCap, deductionPct, dsrPct, batasPlafond, canEstimate: false };
   }
   if (dob > process) errors.push("Tanggal lahir tidak boleh setelah tanggal proses.");
 
-  const ageObj = computeAgeLocal(dob, process);
+  const totalAgeMonths = dob <= process ? Math.max(0, datedifMonthsLocal(dob, process)) : 0;
+  const exactAgeYearsFloat = totalAgeMonths / 12;
+  const ageObj = dob <= process
+    ? { years: Math.floor(totalAgeMonths / 12), months: totalAgeMonths % 12 }
+    : computeAgeLocal(dob, process);
   const ageLabel = `${ageObj.years} thn ${ageObj.months} bln`;
-  const ageRejected = ageObj.years >= maxEntryAge;
-  if (ageRejected) {
-    errors.push(`Usia calon debitur (${ageLabel}) telah mencapai ${maxEntryAge} tahun atau lebih (batas usia masuk di bawah ${maxEntryAge} tahun).`);
-  }
 
-  const isReguler = ageObj.years < regulerMaxAge;
+  const isReguler = exactAgeYearsFloat < regulerMaxAge;
   const productLabel = isReguler ? "Reguler" : "Reguler Plus";
-  const rateAnnual = isReguler ? (cfg.interestRateAnnual ?? 10.0) : (cfg.interestRatePlusAnnual ?? 12.0);
+  const rateAnnual = isReguler ? (mstCfg.interestRateAnnual ?? 10.0) : (mstCfg.interestRatePlusAnnual ?? 12.0);
   const rateMonthly = rateAnnual / 100 / 12;
 
   const endAgeDate = addMonthsClampedLocal(dob, endAgeYears * 12 + endAgeMonths);
-  const remainingAgeMonths = fullMonthsLocal(process, endAgeDate);
+  const remainingAgeMonths = datedifMonthsLocal(process, endAgeDate);
   const maxTenor = Math.max(0, Math.min(maxTenorCap, remainingAgeMonths));
-  if (maxTenor <= 0) errors.push("Batas usia kredit telah tercapai; sisa tenor tidak positif.");
+  if (dob <= process && maxTenor <= 0) errors.push("Batas usia kredit telah tercapai; sisa tenor tidak positif.");
   if (salaryInput <= 0) {
     errors.push(salaryType === "idpb" ? "Isi Gaji Pokok IDPB untuk menghitung plafond." : "Isi Gaji Pensiun untuk menghitung plafond.");
   }
+
+  // Keputusan CEO: usia >= maxEntryAge (69 thn) tidak ditolak, hanya diterbitkan Notice/Warning
+  const ageRejected = false;
+  const ageNotice = Boolean(dob <= process && exactAgeYearsFloat >= maxEntryAge && maxTenor > 0);
+  const ageNoticeMessage = ageNotice
+    ? `Notice Ketentuan Usia: Usia calon debitur (${ageLabel}) telah mencapai ${maxEntryAge} tahun atau lebih (ketentuan standar < ${maxEntryAge} tahun). Simulasi tetap dapat diproses pada skema ${productLabel} (${rateAnnual}% p.a.) hingga usia lunas ${endAgeYears} thn ${endAgeMonths} bln.`
+    : "";
 
   const canEstimate = Boolean(
     dob &&
     process &&
     dob <= process &&
-    !ageRejected &&
     maxTenor > 0 &&
     basicSalary > 0
   );
@@ -365,6 +392,10 @@ function computeMestikaRecommendation(d, cfg = {}) {
     ageObj,
     ageLabel,
     ageRejected,
+    ageNotice,
+    ageNoticeMessage,
+    regulerMaxAge,
+    maxEntryAge,
     productLabel,
     rateAnnual,
     costPct,
@@ -3306,17 +3337,23 @@ export default function CalculatorPage() {
                     <div
                       className={cn(
                         "flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2.5 text-xs font-semibold",
-                        mstRec?.ready && mstRec.ageRejected
+                        mstRec?.ready && mstRec.maxTenor <= 0
                           ? "border-red-200 bg-red-50 text-red-700"
+                          : mstRec?.ready && mstRec.ageNotice
+                          ? "border-amber-300 bg-amber-50 text-amber-900"
                           : "border-emerald-200/80 bg-emerald-50/70 text-[#165B26]"
                       )}
                       data-testid="mestika-auto-product"
                     >
                       <span>Kredit Pensiun</span>
                       {mstRec?.ready ? (
-                        mstRec.ageRejected ? (
+                        mstRec.maxTenor <= 0 ? (
                           <span className="rounded-full bg-red-100 px-2.5 py-0.5 text-[11px] font-bold text-red-700">
-                            Usia {mstRec.ageLabel} (&ge; 69 Thn — Tidak Memenuhi)
+                            Usia {mstRec.ageLabel} (Melewati Batas Usia Lunas)
+                          </span>
+                        ) : mstRec.ageNotice ? (
+                          <span className="rounded-full bg-amber-600 px-2.5 py-0.5 text-[11px] font-bold text-white">
+                            {mstRec.productLabel} • Rate {mstRec.rateAnnual}% • Biaya {mstRec.costPct}% ({mstRec.ageLabel} • Notice &ge; {mstRec.maxEntryAge} Thn)
                           </span>
                         ) : (
                           <span className="rounded-full bg-[#1E7E34] px-2.5 py-0.5 text-[11px] font-bold text-white">
@@ -3325,10 +3362,19 @@ export default function CalculatorPage() {
                         )
                       ) : (
                         <span className="text-[11px] font-medium text-slate-500">
-                          Otomatis (&lt;65 Thn: Reguler 10% • 65–&lt;69 Thn: Reguler Plus 12%)
+                          Otomatis (&lt;{mstRec?.regulerMaxAge ?? 66} Thn: Reguler {partnerParams?.bank_mestika?.interestRateAnnual ?? 10}% • &ge;{mstRec?.regulerMaxAge ?? 66} Thn: Reguler Plus {partnerParams?.bank_mestika?.interestRatePlusAnnual ?? 12}%)
                         </span>
                       )}
                     </div>
+                    {mstRec?.ready && mstRec.ageNotice && (
+                      <div
+                        className="flex items-start gap-2 rounded-md border border-amber-300/80 bg-amber-50 px-3 py-2 text-[11px] font-medium text-amber-900"
+                        data-testid="mestika-age-notice-box"
+                      >
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+                        <span>{mstRec.ageNoticeMessage}</span>
+                      </div>
+                    )}
                   </div>
 
                   <div className="space-y-1.5 sm:col-span-2">

@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_PARTNER_PARAMETERS } from "../config/default-parameters.js";
+import { DEFAULT_PARTNER_PARAMETERS, resolveMestikaConfig } from "../config/default-parameters.js";
 import { SIMAS_PENSIUN_PROFILE } from "../config/bsi-pensiun-simas-20260629.js";
 import {
   createDefaultBsiProducts,
@@ -82,6 +82,13 @@ export function addMonthsClamped(date, months) {
 export function fullMonths(from, to) {
   let months = (to.getFullYear() - from.getFullYear()) * 12 + to.getMonth() - from.getMonth();
   if (addMonthsClamped(from, months) > to) months--;
+  return months;
+}
+
+export function datedifMonthsCalendar(from, to) {
+  if (!from || !to || isNaN(from.getTime()) || isNaN(to.getTime())) return 0;
+  let months = (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth());
+  if (to.getDate() < from.getDate()) months -= 1;
   return months;
 }
 
@@ -2692,22 +2699,30 @@ export function calculateMax(body, allParams) {
 
   // 3b. Tiga Bermuda Amanah • Bank Mestika (TBA-MSTK 1.0 — DASA Group)
   if (bankKey === "bank_mestika" || cfg.engine === "mestika_tba") {
+    const mstCfg = resolveMestikaConfig(cfg);
     const procDateStr = body.process_date || processDate;
     const procDate = parseIsoLocalDate(procDateStr);
     const dobDate = parseIsoLocalDate(body.birth_date);
     const ageLocal = computeAgeDetail(body.birth_date, procDateStr);
-    const ageLabel = `${ageLocal.years} thn ${ageLocal.months} bln`;
-    const ageDecimal = Number((ageLocal.years + ageLocal.months / 12).toFixed(2));
+    const totalAgeMonths =
+      dobDate && procDate && dobDate <= procDate
+        ? Math.max(0, datedifMonthsCalendar(dobDate, procDate))
+        : Math.max(0, ageLocal.totalMonths || 0);
+    const exactAgeYearsFloat = totalAgeMonths / 12;
+    const ageYears = Math.floor(totalAgeMonths / 12);
+    const ageMonths = totalAgeMonths % 12;
+    const ageLabel = `${ageYears} thn ${ageMonths} bln`;
+    const ageDecimal = Number(exactAgeYearsFloat.toFixed(2));
 
-    const regulerMaxAge = cfg.regulerMaxAgeYears ?? 65;
-    const maxEntryAge = cfg.maxEntryAgeYears ?? 69;
-    const endAgeYears = cfg.maxEndAgeYears ?? 79;
-    const endAgeMonths = cfg.maxEndAgeMonths ?? 11;
+    const regulerMaxAge = mstCfg.regulerMaxAgeYears ?? 66;
+    const maxEntryAge = mstCfg.maxEntryAgeYears ?? 69;
+    const endAgeYears = mstCfg.maxEndAgeYears ?? 79;
+    const endAgeMonths = mstCfg.maxEndAgeMonths ?? 11;
     const maxEndTotalMonths = endAgeYears * 12 + endAgeMonths;
-    const maxTenorCap = cfg.maxTenorMonths ?? 240;
-    const batasPlafond = cfg.maxPlafondAbsolute ?? 500000000;
-    const dsrPct = cfg.maxInstallmentRatio ?? 99.0;
-    const deductionPct = cfg.pensionDeductionPercent ?? 13.0;
+    const maxTenorCap = mstCfg.maxTenorMonths ?? 240;
+    const batasPlafond = mstCfg.maxPlafondAbsolute ?? 500000000;
+    const dsrPct = mstCfg.maxInstallmentRatio ?? 99.0;
+    const deductionPct = mstCfg.pensionDeductionPercent ?? 13.0;
 
     const salaryType = body.mestika_salary_type === "idpb" ? "idpb" : "pensiun";
     const salaryTypeLabel = salaryType === "idpb" ? "Sesuai Gaji IDPB" : "Sesuai Gaji Pensiun";
@@ -2729,27 +2744,38 @@ export function calculateMax(body, allParams) {
     if (dobDate && procDate && dobDate > procDate) {
       errors.push("Tanggal lahir tidak boleh setelah tanggal proses.");
     }
-    if (dobDate && procDate && ageLocal.years >= maxEntryAge) {
-      errors.push(`Usia calon debitur (${ageLabel}) telah mencapai ${maxEntryAge} tahun atau lebih (batas usia masuk Bank Mestika adalah di bawah ${maxEntryAge} tahun).`);
-    }
 
     const endAgeDate = dobDate ? addMonthsClamped(dobDate, maxEndTotalMonths) : null;
     const endAgeDateStr = endAgeDate ? toIsoDateStr(endAgeDate) : "";
-    const remainingAgeMonths = procDate && endAgeDate ? fullMonths(procDate, endAgeDate) : 0;
+    const remainingAgeMonths = procDate && endAgeDate ? datedifMonthsCalendar(procDate, endAgeDate) : 0;
     const maxTenor = Math.max(0, Math.min(maxTenorCap, remainingAgeMonths));
 
-    if (dobDate && procDate && maxTenor <= 0) {
+    if (dobDate && procDate && dobDate <= procDate && maxTenor <= 0) {
       errors.push("Batas usia kredit telah tercapai; sisa tenor tidak positif.");
     }
     if (salary <= 0) {
       errors.push(salaryType === "idpb" ? "Gaji Pokok IDPB wajib diisi dan lebih dari Rp0." : "Gaji Pensiun wajib diisi dan lebih dari Rp0.");
     }
 
-    const isReguler = ageLocal.years < regulerMaxAge;
+    // Sesuai rumus Excel TBA-MSTK 1.0 (Sheet1!C9: IF(Sheet2!C7<66, "Reguler", ...)) & Calc Official v1.5
+    const isReguler = exactAgeYearsFloat < regulerMaxAge;
     const productCode = isReguler ? "reguler" : "reguler_plus";
     const productLabel = isReguler ? "Reguler" : "Reguler Plus";
-    const rateAnnual = isReguler ? (cfg.interestRateAnnual ?? 10.0) : (cfg.interestRatePlusAnnual ?? 12.0);
+    const rateAnnual = isReguler ? (mstCfg.interestRateAnnual ?? 10.0) : (mstCfg.interestRatePlusAnnual ?? 12.0);
     const rateMonthly = rateAnnual / 100 / 12;
+
+    // Keputusan CEO: usia >= maxEntryAge (69 thn) tidak ditolak, hanya diterbitkan Notice/Warning
+    const ageNotice = Boolean(
+      dobDate &&
+      procDate &&
+      dobDate <= procDate &&
+      exactAgeYearsFloat >= maxEntryAge &&
+      maxTenor > 0
+    );
+    const ageNoticeMessage = ageNotice
+      ? `Perhatian (Notice Usia): Usia calon debitur (${ageLabel}) telah mencapai ${maxEntryAge} tahun atau lebih (ketentuan standar di bawah ${maxEntryAge} tahun). Simulasi tetap dapat diproses pada skema ${productLabel} (${rateAnnual}% p.a.) hingga batas usia lunas ${endAgeYears} thn ${endAgeMonths} bln.`
+      : null;
+    const notices = ageNoticeMessage ? [ageNoticeMessage] : [];
 
     const basicSalary = salaryType === "pensiun" ? salary * (1 - deductionPct / 100) : salary;
     const paymentCap = basicSalary * (dsrPct / 100);
@@ -2760,12 +2786,18 @@ export function calculateMax(body, allParams) {
       processable: errors.length === 0 && maxTenor > 0 && basicSalary > 0,
       stop_reason: errors.length > 0 ? errors.join(" ") : null,
       errors,
+      notices,
+      age_notice: ageNotice,
+      age_notice_message: ageNoticeMessage,
+      policy_version: mstCfg.policyVersion,
+      reguler_max_age: regulerMaxAge,
+      max_entry_age: maxEntryAge,
       bank_key: bankKey,
-      bank_name: cfg.name,
+      bank_name: mstCfg.name,
       name: body.name,
       process_date: procDateStr,
-      age: ageLocal.years,
-      age_months: ageLocal.months,
+      age: ageYears,
+      age_months: ageMonths,
       age_decimal: ageDecimal,
       age_label: ageLabel,
       end_age_date: endAgeDateStr,
@@ -3181,6 +3213,7 @@ export function calculatePreview(body, allParams) {
 
   // 3b. Tiga Bermuda Amanah • Bank Mestika (TBA-MSTK 1.0 — DASA Group)
   if (bankKey === "bank_mestika" || cfg.engine === "mestika_tba") {
+    const mstCfg = resolveMestikaConfig(cfg);
     const procDateStr = body.process_date || mx.process_date;
     const procDate = parseIsoLocalDate(procDateStr);
     const dobDate = parseIsoLocalDate(body.birth_date);
@@ -3202,28 +3235,34 @@ export function calculatePreview(body, allParams) {
     }
     const errors = Array.from(new Set(rawErrors));
 
+    const regulerMaxAge = mstCfg.regulerMaxAgeYears ?? 66;
+    const maxEntryAge = mstCfg.maxEntryAgeYears ?? 69;
+    const endAgeYears = mstCfg.maxEndAgeYears ?? 79;
+    const endAgeMonths = mstCfg.maxEndAgeMonths ?? 11;
     const maxTenor = mx.max_tenor || 0;
     const creditMonths = tenorProvided ? requestedTenor : maxTenor;
-    const rateAnnual = mx.bank_rate || (cfg.interestRateAnnual ?? 10.0);
+    const rateAnnual = mx.bank_rate || (mstCfg.interestRateAnnual ?? 10.0);
     const rateMonthly = rateAnnual / 100 / 12;
-    const batasPlafond = cfg.maxPlafondAbsolute ?? 500000000;
+    const batasPlafond = mstCfg.maxPlafondAbsolute ?? 500000000;
     const basicSalary = mx.basic_salary_exact ?? mx.salary ?? salary;
-    const paymentCap = mx.payment_cap_exact ?? (basicSalary * ((cfg.maxInstallmentRatio ?? 99.0) / 100));
+    const paymentCap = mx.payment_cap_exact ?? (basicSalary * ((mstCfg.maxInstallmentRatio ?? 99.0) / 100));
 
     const altPlafondAtTenor = creditMonths > 0 && paymentCap > 0 ? pv(rateMonthly, creditMonths, paymentCap) : 0;
     const maxPlafondAtTenor = Math.min(batasPlafond, altPlafondAtTenor);
     const loan = amountProvided ? requestedAmount : maxPlafondAtTenor;
     const actualPayment = creditMonths > 0 && loan > 0 ? pmt(rateMonthly, creditMonths, loan) : 0;
 
-    const costRatePct = cfg.disbursementCostPercent ?? cfg.provisionRatePercent ?? 22.0;
+    const costRatePct = mstCfg.disbursementCostPercent ?? mstCfg.provisionRatePercent ?? 22.0;
     const cost = loan * (costRatePct / 100);
-    const retMult = cfg.retentionMultiplier ?? 3;
+    const retMult = mstCfg.retentionMultiplier ?? 3;
     const retentionAmt = retMult * actualPayment;
-    const netCash = loan - cost - retentionAmt - takeOver;
+    const totalDeductionsExact = cost + retentionAmt + takeOver;
+    const netCash = loan - totalDeductionsExact;
     const salaryLeftBasic = basicSalary - actualPayment;
     const salaryLeftPension = salary - actualPayment;
     const ratioPct = basicSalary > 0 ? Number(((actualPayment / basicSalary) * 100).toFixed(2)) : 0;
 
+    const notices = Array.isArray(mx.notices) ? [...mx.notices] : [];
     const warnings = [];
     if (creditMonths > maxTenor && maxTenor > 0) {
       warnings.push(`Tenor pengajuan (${creditMonths} bulan) melebihi Maksimal Tenor (${maxTenor} bulan).`);
@@ -3238,15 +3277,15 @@ export function calculatePreview(body, allParams) {
       warnings.push("Sisa Bersih pencairan nol atau negatif setelah dipotong Biaya Pencairan, Retensi, dan Take Over.");
     }
 
-    // Tabel referensi produk Reguler (10%) vs Reguler Plus (12%) sesuai lembar TBA-MSTK 1.0
-    const regRate = cfg.interestRateAnnual ?? 10.0;
-    const plusRate = cfg.interestRatePlusAnnual ?? 12.0;
+    // Tabel referensi produk Reguler (10%) vs Reguler Plus (12%) sesuai lembar TBA-MSTK 1.0 & Calc Official v1.5
+    const regRate = mstCfg.interestRateAnnual ?? 10.0;
+    const plusRate = mstCfg.interestRatePlusAnnual ?? 12.0;
     const regAlt = creditMonths > 0 && paymentCap > 0 ? pv(regRate / 100 / 12, creditMonths, paymentCap) : 0;
     const plusAlt = creditMonths > 0 && paymentCap > 0 ? pv(plusRate / 100 / 12, creditMonths, paymentCap) : 0;
     const comparison = [
       {
         code: "reguler",
-        label: "Reguler (< 65 Thn)",
+        label: `Reguler (< ${regulerMaxAge} Thn)`,
         rate_pct: regRate,
         cost_pct: costRatePct,
         max_plafond: Math.round(Math.min(batasPlafond, regAlt)),
@@ -3257,7 +3296,7 @@ export function calculatePreview(body, allParams) {
       },
       {
         code: "reguler_plus",
-        label: "Reguler Plus (65 – < 69 Thn)",
+        label: `Reguler Plus (≥ ${regulerMaxAge} Thn)`,
         rate_pct: plusRate,
         cost_pct: costRatePct,
         max_plafond: Math.round(Math.min(batasPlafond, plusAlt)),
@@ -3270,8 +3309,15 @@ export function calculatePreview(body, allParams) {
 
     const validations = [
       { key: "input_valid", label: "Data debitur, tanggal, & gaji valid", ok: errors.length === 0 },
-      { key: "age_entry", label: `Usia saat proses < ${cfg.maxEntryAgeYears ?? 69} tahun (${mx.age_label || `${mx.age} thn`})`, ok: mx.age < (cfg.maxEntryAgeYears ?? 69) },
-      { key: "tenor_max", label: `Tenor kredit ≤ ${maxTenor} bulan (s.d. usia ${cfg.maxEndAgeYears ?? 79} thn ${cfg.maxEndAgeMonths ?? 11} bln)`, ok: creditMonths > 0 && creditMonths <= maxTenor },
+      {
+        key: "age_entry",
+        label: mx.age_notice
+          ? `Notice Usia: ${mx.age_label} (≥ ${maxEntryAge} tahun — perlu perhatian/konfirmasi mitra, tidak ditolak)`
+          : `Usia saat proses < ${maxEntryAge} tahun (${mx.age_label || `${mx.age} thn`})`,
+        ok: true,
+        notice: Boolean(mx.age_notice)
+      },
+      { key: "tenor_max", label: `Tenor kredit ≤ ${maxTenor} bulan (s.d. usia ${endAgeYears} thn ${endAgeMonths} bln)`, ok: creditMonths > 0 && creditMonths <= maxTenor },
       { key: "plafond_max", label: `Plafond ≤ ${fmtRp(Math.round(maxPlafondAtTenor))}`, ok: loan <= maxPlafondAtTenor + 1e-6 },
       { key: "dsr_cap", label: `Angsuran ≤ DSR ${mx.dsr_pct ?? 99}% Gaji Pokok`, ok: actualPayment <= paymentCap + 1e-6 },
       { key: "net_cash", label: "Sisa Bersih Pencairan positif (> Rp0)", ok: netCash > 0 }
@@ -3282,7 +3328,8 @@ export function calculatePreview(body, allParams) {
 
     return {
       bank_key: bankKey,
-      bank_name: cfg.name,
+      bank_name: mstCfg.name,
+      policy_version: mstCfg.policyVersion,
       name: body.name,
       birth_date: body.birth_date,
       process_date: procDateStr,
@@ -3312,16 +3359,21 @@ export function calculatePreview(body, allParams) {
       remaining_salary: Math.round(salaryLeftBasic),
       mestika_details: {
         version: "TBA-MSTK 1.0",
+        policy_version: mstCfg.policyVersion,
         credit_type: "Kredit Pensiun",
         product_code: mx.product_code || "reguler",
         product_label: mx.product_label || "Reguler",
+        reguler_max_age: regulerMaxAge,
+        max_entry_age: maxEntryAge,
         age_years: mx.age,
         age_months: mx.age_months,
         age_decimal: mx.age_decimal,
         age_label: mx.age_label,
+        age_notice: Boolean(mx.age_notice),
+        age_notice_message: mx.age_notice_message || null,
         process_date: procDateStr,
-        end_age_years: cfg.maxEndAgeYears ?? 79,
-        end_age_months: cfg.maxEndAgeMonths ?? 11,
+        end_age_years: endAgeYears,
+        end_age_months: endAgeMonths,
         end_age_date: mx.end_age_date || "",
         remaining_age_months: mx.remaining_age_months || 0,
         salary_type: mx.salary_type,
@@ -3351,10 +3403,12 @@ export function calculatePreview(body, allParams) {
         retention_multiplier: retMult,
         retention: Math.round(retentionAmt),
         take_over: Math.round(takeOver),
+        total_deductions: Math.round(totalDeductionsExact),
         net_cash: Math.round(netCash),
         salary_left_basic: Math.round(salaryLeftBasic),
         salary_left_pension: Math.round(salaryLeftPension),
         comparison,
+        notices,
         warnings,
         errors
       },
@@ -3957,10 +4011,11 @@ export function generateSimulationPdfBuffer(sim) {
       ["SISA GAJI PER BULAN", fmtPdfSmartRp(bni.remaining_salary_exact, r.remaining_salary)]
     ];
   } else if (isMestika) {
+    const mstTotalDed = mst.total_deductions ?? (r.total_fees + r.retention + (r.take_over || 0));
     rows = [
       ["INPUT DATA DEBITUR (TBA-MSTK 1.0)", ""],
       ["Nama Debitur", r.name || "-"],
-      ["Tanggal Lahir / Usia", `${fmtDateId(r.birth_date)} (${mst.age_label || `${r.age} Tahun`})`],
+      ["Tanggal Lahir / Usia", `${fmtDateId(r.birth_date)} (${mst.age_label || `${r.age} Tahun`}${mst.age_notice ? ` - Notice >= ${mst.max_entry_age ?? 69} Thn` : ""})`],
       ["Produk Kredit (Otomatis)", `Kredit Pensiun - ${mst.product_label || "Reguler"} (Bunga ${r.bank_rate}% p.a.)`],
       ["Jenis Gaji", mst.salary_type_label || "Sesuai Gaji IDPB"],
       ...(mst.salary_type === "pensiun"
@@ -3971,11 +4026,11 @@ export function generateSimulationPdfBuffer(sim) {
         : [["Gaji Pokok IDPB (Tanpa Tanggungan)", fmtRp(mst.basic_salary ?? r.salary)]]),
       ["Status Tanggungan", `${mst.dependent_label || "Tidak Ada Tanggungan"} (DSR ${mst.dsr_pct ?? 99}%)`],
       ["PARAMETER & ALTERNATIF PLAFOND", ""],
-      ["Batas Usia Lunas (79 Thn 11 Bln)", `${fmtDateId(mst.end_age_date)} (Sisa ${mst.remaining_age_months || 0} bln)`],
+      [`Batas Usia Lunas (${mst.end_age_years ?? 79} Thn ${mst.end_age_months ?? 11} Bln)`, `${fmtDateId(mst.end_age_date)} (Sisa ${mst.remaining_age_months || 0} bln)`],
       ["Maksimal Tenor", `${mst.max_tenor ?? r.tenor} bulan`],
-      ["Batas Angsuran (DSR 99% Gaji Pokok)", fmtRp(mst.payment_cap)],
+      [`Batas Angsuran (DSR ${mst.dsr_pct ?? 99}% Gaji Pokok)`, fmtRp(mst.payment_cap)],
       ["Plafond Maksimal (Batas Plafond)", fmtRp(mst.max_plafond ?? r.plafond)],
-      ["Alternatif Plafond (PV Murni 99%)", fmtRp(mst.alt_plafond ?? r.plafond)],
+      [`Alternatif Plafond (PV Murni ${mst.dsr_pct ?? 99}%)`, fmtRp(mst.alt_plafond ?? r.plafond)],
       ["PENGAJUAN & POTONGAN PENCAIRAN", ""],
       ["Plafond Diajukan", fmtRp(r.plafond)],
       ["Tenor Diajukan", `${r.tenor} bulan`],
@@ -3983,6 +4038,7 @@ export function generateSimulationPdfBuffer(sim) {
       [`Biaya Pencairan (${mst.cost_rate_pct ?? 22}%)`, fmtRp(r.total_fees)],
       [`Retensi Angsuran (${mst.retention_multiplier ?? 3}x Angsuran)`, fmtRp(r.retention)],
       ["Pelunasan Take Over (TO)", fmtRp(r.take_over || 0)],
+      ["Total Potongan Pencairan", fmtRp(mstTotalDed)],
       ["HASIL AKHIR PENCAIRAN", ""],
       ["TERIMA BERSIH / SISA BERSIH", fmtRp(r.net_disbursement)],
       ["SISA GAJI (DARI GAJI POKOK)", fmtRp(r.remaining_salary)]
@@ -4245,6 +4301,20 @@ export function generateSimulationPdfBuffer(sim) {
 
     lines.push("BT /F1 8 Tf 0.39 0.46 0.45 rg 40 48 Td (Estimasi simulasi berdasarkan parameter PS3 CAPITAL - DASA CIPTA BERKARYA) Tj ET");
     lines.push("BT /F2 7.5 Tf 0.071 0.239 0.224 rg 40 36 Td (Layanan Pensiunan) Tj ET");
+  } else if (isMestika) {
+    const mstNotes = [...(Array.isArray(mst.notices) ? mst.notices : []), ...(Array.isArray(mst.warnings) ? mst.warnings : [])];
+    if (mstNotes.length > 0 && y > 85) {
+      y -= 8;
+      lines.push(`q 0.992 0.965 0.898 rg 40 ${y - 4} 515 18 re f Q`);
+      lines.push(`BT /F2 9.5 Tf 0.573 0.251 0.055 rg 46 ${y} Td (CATATAN / NOTICE KETENTUAN) Tj ET`);
+      y -= 17;
+      mstNotes.slice(0, 3).forEach((noteText, idx) => {
+        const clipped = String(noteText).length > 105 ? `${String(noteText).slice(0, 102)}...` : String(noteText);
+        lines.push(`BT /F1 8 Tf 0.45 0.20 0.05 rg 46 ${y} Td (${pdfEscape(`${idx + 1}. ${clipped}`)}) Tj ET`);
+        y -= 13;
+      });
+    }
+    lines.push("BT /F1 8 Tf 0.45 0.48 0.55 rg 40 40 Td (Dokumen ini diterbitkan secara elektronik oleh Layanan Pensiunan Enterprise Navigator.) Tj ET");
   } else {
     lines.push("BT /F1 8 Tf 0.45 0.48 0.55 rg 40 40 Td (Dokumen ini diterbitkan secara elektronik oleh Layanan Pensiunan Enterprise Navigator.) Tj ET");
   }
@@ -4354,6 +4424,10 @@ export function generateSimulationSvgBuffer(sim) {
   }
 
   if (isMestika) {
+    const mstTotalDed = mst.total_deductions ?? (r.total_fees + r.retention + (r.take_over || 0));
+    const mstNoticeSvg = mst.age_notice
+      ? `\n  <text x="60" y="405" fill="#92400E" font-family="Arial, sans-serif" font-size="12" font-weight="bold">Notice Usia: ${escapeXml(mst.age_label || `${r.age} thn`)} (&gt;= ${escapeXml(mst.max_entry_age ?? 69)} thn - tidak ditolak)</text>`
+      : "";
     const svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="620" viewBox="0 0 900 620">
   <rect width="900" height="620" fill="#F4F9F4" rx="18"/>
@@ -4362,7 +4436,7 @@ export function generateSimulationSvgBuffer(sim) {
   <text x="40" y="75" fill="#DCFCE7" font-family="Arial, sans-serif" font-size="13">${escapeXml(sim.sim_no)} • ${escapeXml(r.name || "-")} (${escapeXml(mst.age_label || `${r.age} thn`)}) • Kredit Pensiun ${escapeXml(mst.product_label || "Reguler")} (${escapeXml(r.bank_rate)}% p.a.)</text>
 
   <rect x="40" y="125" width="400" height="340" fill="#FFFFFF" stroke="#D1E7D5" rx="12"/>
-  <text x="60" y="158" fill="#1E7E34" font-family="Arial, sans-serif" font-size="14" font-weight="bold">PARAMETER &amp; GAJI POKOK (DSR 99%)</text>
+  <text x="60" y="158" fill="#1E7E34" font-family="Arial, sans-serif" font-size="14" font-weight="bold">PARAMETER &amp; GAJI POKOK (DSR ${escapeXml(mst.dsr_pct ?? 99)}%)</text>
   <text x="60" y="192" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Jenis Gaji:</text>
   <text x="415" y="192" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(mst.salary_type_label || "Sesuai Gaji IDPB")}</text>
   <text x="60" y="222" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Gaji Pokok Diakui:</text>
@@ -4370,11 +4444,11 @@ export function generateSimulationSvgBuffer(sim) {
   <text x="60" y="252" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Status Tanggungan:</text>
   <text x="415" y="252" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="12" font-weight="bold">${escapeXml(mst.dependent_label || "Tidak Ada Tanggungan")}</text>
   <text x="60" y="282" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Maksimal Tenor:</text>
-  <text x="415" y="282" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(mst.max_tenor ?? r.tenor)} bulan (s.d. 79 thn 11 bln)</text>
+  <text x="415" y="282" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(mst.max_tenor ?? r.tenor)} bulan (s.d. ${escapeXml(mst.end_age_years ?? 79)} thn ${escapeXml(mst.end_age_months ?? 11)} bln)</text>
   <text x="60" y="312" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Plafond Maksimal (Cap):</text>
   <text x="415" y="312" text-anchor="end" fill="#1E7E34" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(mst.max_plafond ?? r.plafond))}</text>
   <text x="60" y="342" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Alternatif Plafond (PV):</text>
-  <text x="415" y="342" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(mst.alt_plafond ?? r.plafond))}</text>
+  <text x="415" y="342" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(mst.alt_plafond ?? r.plafond))}</text>${mstNoticeSvg}
 
   <rect x="460" y="125" width="400" height="340" fill="#FFFFFF" stroke="#D1E7D5" rx="12"/>
   <text x="480" y="158" fill="#1E7E34" font-family="Arial, sans-serif" font-size="14" font-weight="bold">PENGAJUAN &amp; POTONGAN PENCAIRAN</text>
@@ -4386,8 +4460,8 @@ export function generateSimulationSvgBuffer(sim) {
   <text x="835" y="252" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(r.total_fees))}</text>
   <text x="480" y="282" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Retensi (${escapeXml(mst.retention_multiplier ?? 3)}x Angsuran):</text>
   <text x="835" y="282" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(r.retention))}</text>
-  <text x="480" y="312" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Pelunasan Take Over (TO):</text>
-  <text x="835" y="312" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(r.take_over || 0))}</text>
+  <text x="480" y="312" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">Pelunasan TO / Total Potongan:</text>
+  <text x="835" y="312" text-anchor="end" fill="#172C1B" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(fmtRp(r.take_over || 0))} / ${escapeXml(fmtRp(mstTotalDed))}</text>
   <text x="480" y="342" fill="#5F7062" font-family="Arial, sans-serif" font-size="13">DSR Angsuran Aktual:</text>
   <text x="835" y="342" text-anchor="end" fill="#1E7E34" font-family="Arial, sans-serif" font-size="13" font-weight="bold">${escapeXml(r.ratio_pct)}% (Maks ${escapeXml(mst.dsr_pct ?? 99)}%)</text>
 

@@ -11,7 +11,11 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { DEFAULT_PARTNER_PARAMETERS } from "./config/default-parameters.js";
+import {
+  DEFAULT_PARTNER_PARAMETERS,
+  MESTIKA_POLICY_VERSION,
+  resolveMestikaConfig
+} from "./config/default-parameters.js";
 import {
   BNI_UNDERWRITING_REVIEW_MESSAGE,
   canActivateLegacyBniFleksi,
@@ -1301,6 +1305,28 @@ app.get("/api/calc/limits", requireAuth, (req, res) => {
           products: partner.products,
           insuranceSchemes: partner.insuranceSchemes
         };
+      } else if (key === "bank_mestika") {
+        const mstCfg = resolveMestikaConfig(partner);
+        limits[key] = {
+          name: mstCfg.name || key,
+          shortName: mstCfg.shortName,
+          engine: mstCfg.engine,
+          policyVersion: mstCfg.policyVersion,
+          interestRateAnnual: mstCfg.interestRateAnnual,
+          interestRatePlusAnnual: mstCfg.interestRatePlusAnnual,
+          interestMethod: mstCfg.interestMethod,
+          regulerMaxAgeYears: mstCfg.regulerMaxAgeYears,
+          maxEntryAgeYears: mstCfg.maxEntryAgeYears,
+          maxEndAgeYears: mstCfg.maxEndAgeYears,
+          maxEndAgeMonths: mstCfg.maxEndAgeMonths,
+          maxTenorMonths: mstCfg.maxTenorMonths,
+          maxPlafondAbsolute: mstCfg.maxPlafondAbsolute,
+          maxInstallmentRatio: mstCfg.maxInstallmentRatio,
+          pensionDeductionPercent: mstCfg.pensionDeductionPercent,
+          disbursementCostPercent: mstCfg.disbursementCostPercent,
+          provisionRatePercent: mstCfg.provisionRatePercent,
+          retentionMultiplier: mstCfg.retentionMultiplier
+        };
       } else {
         limits[key] = {
           name: partner.name || key,
@@ -1577,6 +1603,14 @@ function validateAndApplyPartnerUpdate(partnerKey, target, rawUpdates, { apply =
     return fail({ ok: false, status: 400, detail: "Tidak ada perubahan parameter yang valid untuk disimpan." });
   }
 
+  if (partnerKey === "bank_mestika") {
+    const normalizedBase = resolveMestikaConfig(target);
+    if (apply) {
+      Object.assign(target, normalizedBase);
+    }
+    sanitized.policyVersion = MESTIKA_POLICY_VERSION;
+  }
+
   if (apply) {
     Object.assign(target, sanitized);
   }
@@ -1584,7 +1618,10 @@ function validateAndApplyPartnerUpdate(partnerKey, target, rawUpdates, { apply =
 }
 
 function calcPartnersForUser(store, user) {
-  const { bank_bni: storedBni, ...partners } = store.partner_parameters;
+  const { bank_bni: storedBni, bank_mestika: storedMestika, ...partners } = store.partner_parameters;
+  if (canAccessBank(user, "bank_mestika") && storedMestika) {
+    partners.bank_mestika = resolveMestikaConfig(storedMestika);
+  }
   if (canAccessBank(user, "bank_bni") && storedBni) partners.bank_bni = getBniFleksiConfig(storedBni) || storedBni;
   return partners;
 }
@@ -2424,15 +2461,20 @@ app.post("/api/simulations/:id/ai-summary", requireAuth, (req, res) => {
     const gajiDesc = mst.salary_type === "pensiun"
       ? `Sesuai Gaji Pensiun Rp${(mst.salary_input ?? r.salary).toLocaleString("id-ID")} (Estimasi Gaji Pokok -${mst.pension_deduction_pct ?? 13}% = Rp${(mst.basic_salary ?? r.salary).toLocaleString("id-ID")})`
       : `Sesuai Gaji IDPB Rp${(mst.basic_salary ?? r.salary).toLocaleString("id-ID")}`;
+    const totalPotongan = mst.total_deductions ?? (r.total_fees + r.retention + (r.take_over || 0));
+    const noticeLines = Array.isArray(mst.notices) && mst.notices.length > 0
+      ? mst.notices.map((n) => `• Notice Ketentuan: ${n}`)
+      : [];
     summary = [
       `RINGKASAN EKSEKUTIF SIMULASI TIGA BERMUDA AMANAH • BANK MESTIKA (${sim.sim_no})`,
       `• Debitur: ${r.name || "-"} (Usia ${mst.age_label || `${r.age} tahun`}) — Produk Otomatis: Kredit Pensiun ${mst.product_label || r.category} (Bunga ${r.bank_rate}% p.a.).`,
       `• Dasar Gaji & Tanggungan: ${gajiDesc} • ${mst.dependent_label || "Tidak Ada Tanggungan"} (DSR ${mst.dsr_pct ?? 99}%).`,
-      `• Parameter Maksimal: Tenor Maks ${mst.max_tenor ?? r.tenor} bln (s.d. usia 79 thn 11 bln / ${mst.end_age_date || "-"}), Plafond Maks Rp${(mst.max_plafond ?? r.plafond).toLocaleString("id-ID")} (Alternatif Plafond PV: Rp${(mst.alt_plafond ?? r.plafond).toLocaleString("id-ID")}).`,
+      `• Parameter Maksimal: Tenor Maks ${mst.max_tenor ?? r.tenor} bln (s.d. usia ${mst.end_age_years ?? 79} thn ${mst.end_age_months ?? 11} bln / ${mst.end_age_date || "-"}), Plafond Maks Rp${(mst.max_plafond ?? r.plafond).toLocaleString("id-ID")} (Alternatif Plafond PV: Rp${(mst.alt_plafond ?? r.plafond).toLocaleString("id-ID")}).`,
       `• Pengajuan & Angsuran: Plafond Rp${r.plafond.toLocaleString("id-ID")}, Tenor ${r.tenor} bulan, Angsuran Rp${r.coop_installment.toLocaleString("id-ID")}/bln (DSR Aktual ${r.ratio_pct}%).`,
-      `• Potongan Pencairan: Biaya Pencairan (${mst.cost_rate_pct ?? 22}%) Rp${r.total_fees.toLocaleString("id-ID")}, Retensi Angsuran (${mst.retention_multiplier ?? 3}x) Rp${r.retention.toLocaleString("id-ID")}${r.take_over > 0 ? `, Pelunasan Take Over Rp${r.take_over.toLocaleString("id-ID")}` : ""}.`,
+      `• Potongan Pencairan: Biaya Pencairan (${mst.cost_rate_pct ?? 22}%) Rp${r.total_fees.toLocaleString("id-ID")}, Retensi Angsuran (${mst.retention_multiplier ?? 3}x) Rp${r.retention.toLocaleString("id-ID")}${r.take_over > 0 ? `, Pelunasan Take Over Rp${r.take_over.toLocaleString("id-ID")}` : ""} (Total Potongan Rp${totalPotongan.toLocaleString("id-ID")}).`,
       `• Hasil Akhir: Sisa Bersih Rp${r.net_disbursement.toLocaleString("id-ID")} dengan Sisa Gaji Rp${r.remaining_salary.toLocaleString("id-ID")}.`,
-      `• Status Validasi: ${r.overall_ok ? "LAYAK DIPROSES — Seluruh parameter TBA-MSTK 1.0 Bank Mestika terpenuhi." : (r.issues || []).join(" ") || "Periksa catatan validasi."}`
+      ...noticeLines,
+      `• Status Validasi: ${r.overall_ok ? (noticeLines.length > 0 ? "LAYAK DIPROSES (DENGAN NOTICE USIA) — Seluruh parameter finansial TBA-MSTK Bank Mestika terpenuhi." : "LAYAK DIPROSES — Seluruh parameter TBA-MSTK 1.0 Bank Mestika terpenuhi.") : (r.issues || []).join(" ") || "Periksa catatan validasi."}`
     ].join("\n");
   } else if (isCapital) {
     const isCapPensiun = cap.product === "pensiun";

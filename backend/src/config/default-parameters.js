@@ -151,13 +151,14 @@ export const DEFAULT_PARTNER_PARAMETERS = {
     shortName: "Bank Mestika · TBA",
     type: "bank_konvensional",
     engine: "mestika_tba",
+    policyVersion: "tba-mstk-20261127-v2",
     active: true,
     badgeColor: "green",
-    description: "Kredit Pensiun & Take Over Bank Mestika (TBA-MSTK 1.0 — DASA Group) hingga usia lunas 80 tahun (79 thn 11 bln), tenor maks 20 tahun, DSR 99% Gaji Pokok/IDPB.",
+    description: "Kredit Pensiun & Take Over Bank Mestika (TBA-MSTK 1.0 — DASA Group) hingga usia lunas 80 tahun (79 thn 11 bln), Reguler <66 thn (10% p.a.) & Reguler Plus ≥66 thn (12% p.a., notice usia ≥69 thn), DSR 99% Gaji Pokok/IDPB.",
     interestRateAnnual: 10.0,
     interestRatePlusAnnual: 12.0,
     interestMethod: "annuity",
-    regulerMaxAgeYears: 65,
+    regulerMaxAgeYears: 66,
     maxEntryAgeYears: 69,
     maxEndAgeYears: 79,
     maxEndAgeMonths: 11,
@@ -173,6 +174,30 @@ export const DEFAULT_PARTNER_PARAMETERS = {
     retentionMultiplier: 3
   }
 };
+
+export const MESTIKA_POLICY_VERSION = "tba-mstk-20261127-v2";
+
+/**
+ * Menormalisasi konfigurasi Bank Mestika secara non-destruktif tanpa menulis ke SQLite saat cold boot.
+ * State lama sebelum revisi 27 Nov 2026 (belum memiliki policyVersion terbaru & regulerMaxAgeYears === 65)
+ * otomatis diselaraskan ke regulerMaxAgeYears = 66 sesuai Excel TBA-MSTK 1.0 (Sheet1!C9) & Calc Official v1.5,
+ * sedangkan perubahan eksplisit Super Admin setelah policyVersion tercatat tetap dipertahankan penuh.
+ */
+export function resolveMestikaConfig(rawCfg) {
+  const defaults = DEFAULT_PARTNER_PARAMETERS.bank_mestika;
+  if (!rawCfg || typeof rawCfg !== "object" || rawCfg.engine !== "mestika_tba") {
+    return structuredClone(defaults);
+  }
+  const isUpgraded = rawCfg.policyVersion === MESTIKA_POLICY_VERSION;
+  const normalized = { ...defaults, ...rawCfg };
+  if (!isUpgraded) {
+    if (rawCfg.regulerMaxAgeYears === undefined || rawCfg.regulerMaxAgeYears === 65) {
+      normalized.regulerMaxAgeYears = 66;
+    }
+    normalized.policyVersion = MESTIKA_POLICY_VERSION;
+  }
+  return normalized;
+}
 
 export const INDONESIA_PROVINCES = [
   "Aceh", "Sumatera Utara", "Sumatera Barat", "Riau", "Kepulauan Riau",

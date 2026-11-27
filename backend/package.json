@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test tests/baseline-regression.test.mjs tests/bsi-pensiun-preview.test.mjs tests/bsi-pensiun-api.test.mjs tests/lead-distribution-and-branch.test.mjs tests/bsi-product-isolation-and-calendar.test.mjs tests/production-readiness.test.mjs tests/operational-features.test.mjs tests/sm-isolation-and-rbac.test.mjs tests/deployment-automation.test.mjs tests/security-hardening-20261122.test.mjs tests/public-landing-leads.test.mjs tests/p0-core-integrity-20261124.test.mjs tests/bni-calculator.test.mjs tests/bni-wave2-security-20261124.test.mjs"
+    "test": "node --test tests/baseline-regression.test.mjs tests/bsi-pensiun-preview.test.mjs tests/bsi-pensiun-api.test.mjs tests/lead-distribution-and-branch.test.mjs tests/bsi-product-isolation-and-calendar.test.mjs tests/production-readiness.test.mjs tests/operational-features.test.mjs tests/sm-isolation-and-rbac.test.mjs tests/deployment-automation.test.mjs tests/security-hardening-20261122.test.mjs tests/public-landing-leads.test.mjs tests/p0-core-integrity-20261124.test.mjs tests/bni-calculator.test.mjs tests/bni-wave2-security-20261124.test.mjs tests/wave3-p1-security-rbac-uupdp-20261124.test.mjs tests/mestika-calculator-multi-role.test.mjs"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",

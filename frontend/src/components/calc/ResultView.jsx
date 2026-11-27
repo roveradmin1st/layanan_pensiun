@@ -56,9 +56,19 @@ function ValidationList({ validations }) {
           data-testid={`validation-${v.key}`}
         >
           <span className="text-slate-600">{v.label}</span>
-          <span className={`flex shrink-0 items-center gap-1 font-semibold ${v.ok ? "text-[#078D67]" : "text-red-600"}`}>
-            {v.ok ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
-            {v.ok ? "Sesuai" : "Tidak Sesuai"}
+          <span
+            className={`flex shrink-0 items-center gap-1 font-semibold ${
+              !v.ok ? "text-red-600" : v.notice ? "text-amber-600" : "text-[#078D67]"
+            }`}
+          >
+            {!v.ok ? (
+              <XCircle className="h-4 w-4" />
+            ) : v.notice ? (
+              <AlertTriangle className="h-4 w-4" />
+            ) : (
+              <CheckCircle2 className="h-4 w-4" />
+            )}
+            {!v.ok ? "Tidak Sesuai" : v.notice ? "Notice Usia" : "Sesuai"}
           </span>
         </div>
       ))}
@@ -1125,6 +1135,22 @@ export function MestikaResultView({ r }) {
         </div>
       </div>
 
+      {Array.isArray(mst.notices) && mst.notices.length > 0 && (
+        <div
+          className="rounded-xl border border-amber-300/80 bg-amber-50 p-3.5 text-xs text-amber-900 space-y-1"
+          data-testid="mestika-result-notice-banner"
+        >
+          <p className="font-bold flex items-center gap-1.5">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" /> Notice Ketentuan Usia (Tidak Ditolak):
+          </p>
+          <ul className="list-disc pl-5 space-y-0.5">
+            {mst.notices.map((n, idx) => (
+              <li key={idx}>{n}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {Array.isArray(mst.warnings) && mst.warnings.length > 0 && (
         <div className="rounded-xl border border-amber-300/70 bg-amber-50 p-3.5 text-xs text-amber-800 space-y-1">
           <p className="font-bold flex items-center gap-1.5">
@@ -1203,6 +1229,12 @@ export function MestikaResultView({ r }) {
               testid="result-retention"
             />
             <Row k="Pelunasan Take Over (TO)" v={rp(r.take_over || 0)} />
+            <Row
+              k="Total Potongan Pencairan"
+              v={rp(mst.total_deductions ?? (r.total_fees + r.retention + (r.take_over || 0)))}
+              strong
+              testid="result-total-deductions"
+            />
           </Block>
 
           <ValidationList validations={r.validations} />
